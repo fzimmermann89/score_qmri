@@ -1,11 +1,10 @@
 """Base dataset class for MRI data with H5 file handling."""
 
+import contextlib
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
 
 import h5py
-import numpy as np
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
@@ -19,15 +18,6 @@ class BaseMRIDataset(Dataset, ABC):
 
     Handles H5 file lifecycle: counts slices in __init__ and closes file,
     then opens lazily in __getitem__ with per-worker caching.
-
-    Parameters
-    ----------
-    h5_path : str
-        Path to H5 file.
-    augmentation_config : AugmentationConfig | None
-        Augmentation configuration. If None, no augmentation applied.
-    kind : int
-        Integer kind value for conditioning (returned with each sample).
     """
 
     def __init__(
@@ -58,8 +48,8 @@ class BaseMRIDataset(Dataset, ABC):
         ...
 
     @abstractmethod
-    def _load_slice(self, h5_file: h5py.File, idx: int) -> np.ndarray:
-        """Load single slice by index."""
+    def _load_slice(self, h5_file: h5py.File, idx: int) -> Tensor:
+        """Load single slice by index as a float Tensor."""
         ...
 
     def _get_h5_file(self) -> h5py.File:
@@ -71,31 +61,21 @@ class BaseMRIDataset(Dataset, ABC):
     def __len__(self) -> int:
         return self.num_slices
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
-        """Get sample by index.
-
-        Returns
-        -------
-        dict[str, Any]
-            Dictionary with 'image' (Tensor), 'mask' (bool Tensor), 'kind' (long Tensor).
-        """
-        data = self._load_slice(self._get_h5_file(), idx)
-        image = torch.from_numpy(data).float()
-        mask = data != 0
+    def __getitem__(self, idx: int) -> dict[str, Tensor]:
+        """Get sample with image, mask, and kind tensors."""
+        image = self._load_slice(self._get_h5_file(), idx)
+        mask = image != 0
 
         if self.augmentation is not None:
-            image, mask_tensor = self.augmentation(image, torch.from_numpy(mask))
-            mask = mask_tensor.numpy() if isinstance(mask_tensor, Tensor) else mask_tensor
+            image, mask = self.augmentation(image, mask)
 
         return {
             "image": image,
-            "mask": torch.from_numpy(mask) if isinstance(mask, np.ndarray) else mask,
+            "mask": mask,
             "kind": torch.tensor(self.kind, dtype=torch.long),
         }
 
     def __del__(self) -> None:
         if self._h5_file is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._h5_file.close()
-            except Exception:
-                pass

@@ -1,8 +1,8 @@
 [project]
-name = "mri-diffusion-datasets"
+name = "mri-diffusion"
 version = "0.1.0"
-description = "MRI diffusion model datasets with H5 file support"
-requires-python = ">=3.9"
+description = "MRI diffusion"
+requires-python = ">=3.10"
 dependencies = [
     "torch>=2.8.0",
     "torchvision>=0.20.0",
@@ -25,8 +25,10 @@ build-backend = "hatchling.build"
 packages = ["datasets"]
 
 [tool.ruff]
-target-version = "py39"
-line-length = 100
+target-version = "py310"
+line-length = 140
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -43,6 +45,7 @@ ignore = [
     "B008",   # do not perform function calls in argument defaults
     "ARG001", # unused function argument (common in abstract methods)
     "ARG002", # unused method argument (common in abstract methods)
+    "ARG005", # unused lambda argument
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -55,7 +58,8 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
+exclude = ["\\.venv/"]
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -72,7 +76,20 @@ show_error_codes = true
 show_error_context = true
 
 [[tool.mypy.overrides]]
-module = ["h5py.*", "pytorch_lightning.*", "einops.*"]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[[tool.mypy.overrides]]
+module = [
+    "h5py.*",
+    "pytorch_lightning.*",
+    "einops.*",
+    "torchvision.*",
+    "pytorch_msssim.*",
+    "pytest.*",
+    "_pytest.*",
+]
 ignore_missing_imports = true
 
 [tool.ruff.lint.isort]

@@ -59,7 +59,7 @@ class DiffusionLightningModule(pl.LightningModule):
         return loss
 
     def on_train_batch_end(
-        self, outputs: Tensor, batch: dict[str, Tensor], batch_idx: int
+        self, outputs: Any, batch: Any, batch_idx: int
     ) -> None:
         """Trigger validation at specified intervals."""
         if self.global_step > 0 and self.global_step % self.config.validation_freq == 0:

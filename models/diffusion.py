@@ -14,20 +14,14 @@ class DiffusionModel(nn.Module):
 
     Wraps a UNet denoiser with linear noise schedule and dataset-kind
     conditioning via FiLM.
-
-    Parameters
-    ----------
-    unet : UNet | None
-        UNet model. If None, creates default with 2 in/out channels.
-    num_kinds : int
-        Number of dataset kinds for FiLM conditioning.
-    num_timesteps : int
-        Number of diffusion timesteps.
-    beta_start : float
-        Starting noise schedule value.
-    beta_end : float
-        Ending noise schedule value.
     """
+
+    # Declare buffer types for mypy
+    betas: Tensor
+    alphas: Tensor
+    alphas_cumprod: Tensor
+    sqrt_alphas_cumprod: Tensor
+    sqrt_one_minus_alphas_cumprod: Tensor
 
     def __init__(
         self,
@@ -40,9 +34,7 @@ class DiffusionModel(nn.Module):
         super().__init__()
         self.num_timesteps = num_timesteps
         self.unet = unet or UNet(in_channels=2, out_channels=2, use_film=True)
-        self.film_conditioning = FilmConditioning(
-            num_kinds=num_kinds, num_blocks=self.unet.num_blocks
-        )
+        self.film_conditioning = FilmConditioning(num_kinds=num_kinds, num_blocks=self.unet.num_blocks)
 
         betas = torch.linspace(beta_start, beta_end, num_timesteps)
         alphas = 1.0 - betas
@@ -57,71 +49,44 @@ class DiffusionModel(nn.Module):
     def prepare_input(self, image: Tensor, kind: Tensor) -> Tensor:
         """Prepare two-channel input from dataset sample.
 
-        For magnitude/mapping data: [data, zeros]
-        For complex data: expects image to already have 2 channels [real, imag]
-
-        Parameters
-        ----------
-        image : Tensor
-            Image tensor of shape (B, H, W) or (B, 2, H, W) for complex.
-        kind : Tensor
-            Kind tensor of shape (B,). 0=complex, 1=magnitude, 2=mapping.
-
-        Returns
-        -------
-        Tensor
-            Two-channel input of shape (B, 2, H, W).
+        For magnitude/mapping: stacks [data, zeros].
+        For complex: passes through if already 2 channels.
         """
         if image.ndim == 4 and image.shape[1] == 2:
             return image
-
         if image.ndim == 4:
             image = image.squeeze(1)
-
-        # Stack image with zeros for second channel
-        zeros = torch.zeros_like(image)
-        return rearrange([image, zeros], "c b h w -> b c h w")
+        return torch.stack([image, torch.zeros_like(image)], dim=1)
 
     def q_sample(self, x0: Tensor, t: Tensor, noise: Tensor | None = None) -> Tensor:
         """Sample from forward diffusion q(x_t | x_0).
 
-        Parameters
-        ----------
-        x0 : Tensor
-            Clean images of shape (B, C, H, W).
-        t : Tensor
-            Timesteps of shape (B,).
-        noise : Tensor | None
-            Optional noise tensor. If None, sampled from N(0, I).
+        Args:
+            x0: Clean images of shape (B, C, H, W).
+            t: Timesteps of shape (B,).
+            noise: Optional noise tensor. If None, sampled from N(0, I).
 
-        Returns
-        -------
-        Tensor
+        Returns:
             Noisy images x_t of shape (B, C, H, W).
         """
         if noise is None:
             noise = torch.randn_like(x0)
 
-        sqrt_alpha = rearrange(self.sqrt_alphas_cumprod[t], "b -> b 1 1 1")
-        sqrt_one_minus = rearrange(self.sqrt_one_minus_alphas_cumprod[t], "b -> b 1 1 1")
+        sqrt_alpha: Tensor = rearrange(self.sqrt_alphas_cumprod[t], "b -> b 1 1 1")
+        sqrt_one_minus: Tensor = rearrange(self.sqrt_one_minus_alphas_cumprod[t], "b -> b 1 1 1")
         return sqrt_alpha * x0 + sqrt_one_minus * noise
 
     def forward(self, x_t: Tensor, t: Tensor, kind: Tensor) -> Tensor:
         """Predict x0 from noisy x_t.
 
-        Parameters
-        ----------
-        x_t : Tensor
-            Noisy images of shape (B, C, H, W).
-        t : Tensor
-            Timesteps of shape (B,).
-        kind : Tensor
-            Dataset kind of shape (B,).
+        Args:
+            x_t: Noisy images of shape (B, C, H, W).
+            t: Timesteps of shape (B,).
+            kind: Dataset kind of shape (B,).
 
-        Returns
-        -------
-        Tensor
+        Returns:
             Predicted x0 of shape (B, C, H, W).
         """
         film_params = self.film_conditioning(kind)
-        return self.unet(x_t, film_params)
+        pred: Tensor = self.unet(x_t, film_params)
+        return pred

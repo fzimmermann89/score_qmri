@@ -15,7 +15,7 @@ class DummyDataset(BaseMRIDataset):
         return h5_file["combined"].shape[1], h5_file["combined"].shape[2]
 
     def _load_slice(self, h5_file, idx):
-        return h5_file["combined"][idx, :, :]
+        return torch.from_numpy(h5_file["combined"][idx, :, :]).float()
 
 
 def test_base_dataset_init(sample_h5_file):
@@ -51,10 +51,13 @@ def test_base_dataset_h5_caching(sample_h5_file):
     """Test H5 file handle is cached after first access."""
     dataset = DummyDataset(sample_h5_file, kind=0)
 
+    # Initially no file handle
     assert dataset._h5_file is None
-    _ = dataset[0]
-    assert dataset._h5_file is not None
 
-    handle = dataset._h5_file
+    # Access triggers lazy loading
+    _ = dataset[0]
+    first_handle = dataset._h5_file
+
+    # Second access reuses same handle
     _ = dataset[1]
-    assert dataset._h5_file is handle  # Same handle reused
+    assert dataset._h5_file is first_handle

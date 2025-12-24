@@ -9,7 +9,7 @@ from datasets.batch_sampler import ScheduledBatchSampler
 def test_batch_sampler_produces_correct_batch_size():
     """Test sampler produces batches of correct size."""
     ds = TensorDataset(torch.randn(20, 3, 32, 32))
-    concat = ConcatDataset([ds])
+    concat: ConcatDataset = ConcatDataset([ds])
 
     sampler = ScheduledBatchSampler(
         concat, [(32, 32)], [lambda s: 1.0], batch_size=4, base_seed=42, rank=0
@@ -23,7 +23,7 @@ def test_batch_sampler_indices_in_valid_range():
     """Test sampler produces valid indices."""
     ds1 = TensorDataset(torch.randn(10, 3, 32, 32))
     ds2 = TensorDataset(torch.randn(15, 3, 32, 32))
-    concat = ConcatDataset([ds1, ds2])
+    concat: ConcatDataset = ConcatDataset([ds1, ds2])
 
     sampler = ScheduledBatchSampler(
         concat, [(32, 32), (32, 32)], [lambda s: 1.0] * 2, batch_size=4, base_seed=42, rank=0
@@ -37,7 +37,7 @@ def test_batch_sampler_respects_zero_weight():
     """Test sampler skips datasets with zero weight."""
     ds1 = TensorDataset(torch.randn(10, 3, 32, 32))
     ds2 = TensorDataset(torch.randn(15, 3, 32, 32))
-    concat = ConcatDataset([ds1, ds2])
+    concat: ConcatDataset = ConcatDataset([ds1, ds2])
 
     # First dataset has weight 0
     sampler = ScheduledBatchSampler(
@@ -53,7 +53,7 @@ def test_batch_sampler_respects_zero_weight():
 def test_batch_sampler_different_ranks_differ():
     """Test different ranks produce different batches."""
     ds = TensorDataset(torch.randn(100, 3, 32, 32))
-    concat = ConcatDataset([ds])
+    concat: ConcatDataset = ConcatDataset([ds])
 
     sampler0 = ScheduledBatchSampler(
         concat, [(32, 32)], [lambda s: 1.0], batch_size=8, base_seed=42, rank=0
@@ -70,7 +70,7 @@ def test_batch_sampler_different_ranks_differ():
 def test_batch_sampler_increments_step():
     """Test sampler increments step counter."""
     ds = TensorDataset(torch.randn(20, 3, 32, 32))
-    concat = ConcatDataset([ds])
+    concat: ConcatDataset = ConcatDataset([ds])
 
     sampler = ScheduledBatchSampler(
         concat, [(32, 32)], [lambda s: 1.0], batch_size=4, base_seed=42, rank=0

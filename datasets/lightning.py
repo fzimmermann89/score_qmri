@@ -6,7 +6,7 @@ from typing import Any
 
 import pytorch_lightning as pl
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 
 from .batch_sampler import ScheduledBatchSampler
 from .complex import ComplexImageDataset
@@ -15,50 +15,41 @@ from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
 
 
-def create_dataset_from_config(config: dict[str, Any]) -> (
-    ComplexImageDataset | MagnitudeImageDataset | MappingDataset
-):
-    """Create a dataset from configuration dictionary.
-
-    Args:
-        config: Dictionary with dataset configuration. Must contain:
-            - 'type': 'complex', 'magnitude', or 'mapping'
-            - 'h5_path': Path to H5 file
-            - Additional type-specific parameters
-
-    Returns:
-        Dataset instance
-    """
+def create_dataset_from_config(
+    config: dict[str, Any],
+) -> ComplexImageDataset | MagnitudeImageDataset | MappingDataset:
+    """Create a dataset from configuration dictionary."""
     dataset_type = config.get("type")
     h5_path = config.get("h5_path")
 
-    if dataset_type == "complex":
-        return ComplexImageDataset(
-            h5_path=h5_path,
-            mode=config.get("mode", "combined"),
-            augmentation_config=config.get("augmentation_config"),
-            kind=config.get("kind", 0),
-        )
-    elif dataset_type == "magnitude":
-        return MagnitudeImageDataset(
-            h5_path=h5_path,
-            dataset_path=config.get("dataset_path", "magnitude"),
-            augmentation_config=config.get("augmentation_config"),
-            kind=config.get("kind", 1),
-        )
-    elif dataset_type == "mapping":
-        return MappingDataset(
-            h5_path=h5_path,
-            dataset_path=config.get("dataset_path", "mapping"),
-            scaling_factor=config.get("scaling_factor", 1.0),
-            augmentation_config=config.get("augmentation_config"),
-            kind=config.get("kind", 2),
-        )
-    else:
-        raise ValueError(
-            f"Unknown dataset type: {dataset_type}. "
-            "Must be 'complex', 'magnitude', or 'mapping'"
-        )
+    if not isinstance(h5_path, str):
+        raise ValueError("h5_path must be a string in dataset configuration")
+
+    match dataset_type:
+        case "complex":
+            return ComplexImageDataset(
+                h5_path=h5_path,
+                mode=config.get("mode", "combined"),
+                augmentation_config=config.get("augmentation_config"),
+                kind=config.get("kind", 0),
+            )
+        case "magnitude":
+            return MagnitudeImageDataset(
+                h5_path=h5_path,
+                dataset_path=config.get("dataset_path", "magnitude"),
+                augmentation_config=config.get("augmentation_config"),
+                kind=config.get("kind", 1),
+            )
+        case "mapping":
+            return MappingDataset(
+                h5_path=h5_path,
+                dataset_path=config.get("dataset_path", "mapping"),
+                scaling_factor=config.get("scaling_factor", 1.0),
+                augmentation_config=config.get("augmentation_config"),
+                kind=config.get("kind", 2),
+            )
+        case _:
+            raise ValueError(f"Unknown dataset type: {dataset_type}. Must be 'complex', 'magnitude', or 'mapping'")
 
 
 class MRIDataModule(pl.LightningDataModule):
@@ -74,17 +65,6 @@ class MRIDataModule(pl.LightningDataModule):
         val_dataset_configs: list[dict[str, Any]] | None = None,
         val_batch_size: int | None = None,
     ):
-        """Initialize MRI DataModule.
-
-        Args:
-            dataset_configs: List of dataset configuration dictionaries
-            schedule_functions: List of schedule functions p_i(step) -> float
-            batch_size: Training batch size
-            num_workers: Number of DataLoader workers
-            base_seed: Base seed for RNG
-            val_dataset_configs: Optional validation dataset configs
-            val_batch_size: Optional validation batch size (defaults to batch_size)
-        """
         super().__init__()
         self.dataset_configs = dataset_configs
         self.schedule_functions = schedule_functions
@@ -94,51 +74,26 @@ class MRIDataModule(pl.LightningDataModule):
         self.val_dataset_configs = val_dataset_configs
         self.val_batch_size = val_batch_size or batch_size
 
-        self.concat_ds: torch.utils.data.ConcatDataset | None = None
+        self.concat_ds: ConcatDataset | None = None
         self.size_labels: list[tuple[int, int]] | None = None
-        self.val_concat_ds: torch.utils.data.ConcatDataset | None = None
+        self.val_concat_ds: ConcatDataset | None = None
 
     def setup(self, stage: str) -> None:
-        """Set up datasets.
-
-        Args:
-            stage: 'fit' or 'test'
-        """
         if stage == "fit" or stage is None:
-            # Create training datasets
-            datasets = [
-                create_dataset_from_config(cfg)
-                for cfg in self.dataset_configs
-            ]
+            datasets = [create_dataset_from_config(cfg) for cfg in self.dataset_configs]
             self.concat_ds = create_concat_dataset(datasets)
             self.size_labels = get_size_labels(datasets)
 
-            # Create validation datasets if provided
             if self.val_dataset_configs is not None:
-                val_datasets = [
-                    create_dataset_from_config(cfg)
-                    for cfg in self.val_dataset_configs
-                ]
+                val_datasets = [create_dataset_from_config(cfg) for cfg in self.val_dataset_configs]
                 self.val_concat_ds = create_concat_dataset(val_datasets)
 
     def train_dataloader(self) -> DataLoader:
-        """Create training DataLoader.
-
-        Returns:
-            DataLoader with ScheduledBatchSampler
-        """
         if self.concat_ds is None or self.size_labels is None:
-            raise RuntimeError(
-                "Must call setup() before train_dataloader()"
-            )
+            raise RuntimeError("Must call setup() before train_dataloader()")
 
-        # Get rank for DDP
-        if self.trainer is not None:
-            rank = self.trainer.global_rank
-        else:
-            rank = int(os.environ.get("LOCAL_RANK", 0))
+        rank = self.trainer.global_rank if self.trainer is not None else int(os.environ.get("LOCAL_RANK", 0))
 
-        # Create batch sampler
         batch_sampler = ScheduledBatchSampler(
             self.concat_ds,
             self.size_labels,
@@ -158,15 +113,9 @@ class MRIDataModule(pl.LightningDataModule):
         )
 
     def val_dataloader(self) -> DataLoader | None:
-        """Create validation DataLoader.
-
-        Returns:
-            DataLoader for validation, or None if no validation datasets
-        """
         if self.val_concat_ds is None:
             return None
 
-        # For validation, use simple sequential sampling
         return DataLoader(
             self.val_concat_ds,
             batch_size=self.val_batch_size,
@@ -176,4 +125,3 @@ class MRIDataModule(pl.LightningDataModule):
             pin_memory=torch.cuda.is_available(),
             prefetch_factor=4 if self.num_workers > 0 else 2,
         )
-

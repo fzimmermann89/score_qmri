@@ -1,37 +1,20 @@
 """Utilities for working with ConcatDataset."""
 
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Sequence
 
 from torch.utils.data import ConcatDataset, Dataset
 
 
-def create_concat_dataset(datasets: list[Dataset]) -> ConcatDataset:
+def create_concat_dataset(datasets: Sequence[Dataset]) -> ConcatDataset:
     """Create a ConcatDataset from a list of datasets."""
     return ConcatDataset(datasets)
 
 
-def get_size_labels(datasets: list[Dataset]) -> list[tuple[int, int]]:
-    """Get size labels (height, width) for each dataset.
-
-    Parameters
-    ----------
-    datasets : list[Dataset]
-        List of dataset instances. Each must have fixed size.
-
-    Returns
-    -------
-    list[tuple[int, int]]
-        List of (height, width) tuples, one per dataset.
-
-    Raises
-    ------
-    ValueError
-        If dataset is empty or has unexpected image shape.
-    """
+def get_size_labels(datasets: Sequence[Dataset]) -> list[tuple[int, int]]:
+    """Get size labels (height, width) for each dataset."""
     size_labels = []
     for dataset in datasets:
-        if len(dataset) == 0:
+        if len(dataset) == 0:  # type: ignore[arg-type]
             raise ValueError("Cannot get size from empty dataset")
 
         sample = dataset[0]
@@ -50,26 +33,38 @@ def get_size_labels(datasets: list[Dataset]) -> list[tuple[int, int]]:
     return size_labels
 
 
+def _make_constant_schedule(weight: float) -> Callable[[int], float]:
+    def schedule(step: int) -> float:
+        return weight
+
+    return schedule
+
+
+def _make_fade_out_schedule(start: int, duration: int) -> Callable[[int], float]:
+    def schedule(step: int) -> float:
+        return max(0.0, 1.0 - (step - start) / duration)
+
+    return schedule
+
+
+def _make_step_schedule(threshold: int) -> Callable[[int], float]:
+    def schedule(step: int) -> float:
+        return 0.0 if step > threshold else 1.0
+
+    return schedule
+
+
 def create_schedule_functions(
-    schedules: list[dict[str, Any] | Callable[[int], float]],
+    schedules: list[dict | Callable[[int], float]],
 ) -> list[Callable[[int], float]]:
     """Create schedule functions from configuration.
 
-    Parameters
-    ----------
-    schedules : list[dict | Callable]
-        List of schedule configurations or callable functions.
-        If dict, must have 'type' key:
-        - 'constant': constant weight (default 1.0)
-        - 'fade_out': fade from 1.0 to 0.0 over fade_steps after start_step
-        - 'step': drop to 0 after threshold
-
-    Returns
-    -------
-    list[Callable[[int], float]]
-        List of callable functions p_i(step) -> float.
+    Supported schedule types:
+    - 'constant': constant weight (default 1.0)
+    - 'fade_out': fade from 1.0 to 0.0 over fade_steps after start_step
+    - 'step': drop to 0 after threshold
     """
-    schedule_funcs = []
+    schedule_funcs: list[Callable[[int], float]] = []
 
     for schedule in schedules:
         if callable(schedule):
@@ -81,22 +76,19 @@ def create_schedule_functions(
 
         schedule_type = schedule.get("type", "constant")
 
-        if schedule_type == "constant":
-            w = schedule.get("weight", 1.0)
-            schedule_funcs.append(lambda step, w=w: w)
-
-        elif schedule_type == "fade_out":
-            start = schedule.get("start_step", 0)
-            duration = schedule.get("fade_steps", 1000)
-            schedule_funcs.append(
-                lambda step, s=start, d=duration: max(0.0, 1.0 - (step - s) / d)
-            )
-
-        elif schedule_type == "step":
-            threshold = schedule.get("threshold", 0)
-            schedule_funcs.append(lambda step, t=threshold: 0.0 if step > t else 1.0)
-
-        else:
-            raise ValueError(f"Unknown schedule type: {schedule_type}")
+        match schedule_type:
+            case "constant":
+                schedule_funcs.append(_make_constant_schedule(float(schedule.get("weight", 1.0))))
+            case "fade_out":
+                schedule_funcs.append(
+                    _make_fade_out_schedule(
+                        int(schedule.get("start_step", 0)),
+                        int(schedule.get("fade_steps", 1000)),
+                    )
+                )
+            case "step":
+                schedule_funcs.append(_make_step_schedule(int(schedule.get("threshold", 0))))
+            case _:
+                raise ValueError(f"Unknown schedule type: {schedule_type}")
 
     return schedule_funcs

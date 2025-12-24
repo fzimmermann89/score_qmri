@@ -13,21 +13,6 @@ class ScheduledBatchSampler(BatchSampler):
     Groups datasets by size, samples buckets proportionally, then samples
     datasets within buckets. Each batch comes from a single dataset to ensure
     size homogeneity.
-
-    Parameters
-    ----------
-    dataset : ConcatDataset
-        ConcatDataset containing all datasets.
-    size_labels : list[tuple[int, int]]
-        List of (height, width) tuples, one per dataset.
-    schedule_functions : list[Callable[[int], float]]
-        List of functions p_i(step) -> float for each dataset.
-    batch_size : int
-        Batch size.
-    base_seed : int
-        Base seed for RNG.
-    rank : int
-        Rank for DDP (used for seeding).
     """
 
     def __init__(
@@ -42,13 +27,9 @@ class ScheduledBatchSampler(BatchSampler):
         if not isinstance(dataset, ConcatDataset):
             raise ValueError("dataset must be a ConcatDataset")
         if len(size_labels) != len(dataset.datasets):
-            raise ValueError(
-                f"size_labels length ({len(size_labels)}) != datasets ({len(dataset.datasets)})"
-            )
+            raise ValueError(f"size_labels length ({len(size_labels)}) != datasets ({len(dataset.datasets)})")
         if len(schedule_functions) != len(dataset.datasets):
-            raise ValueError(
-                f"schedule_functions length ({len(schedule_functions)}) != datasets ({len(dataset.datasets)})"
-            )
+            raise ValueError(f"schedule_functions length ({len(schedule_functions)}) != datasets ({len(dataset.datasets)})")
 
         self.dataset = dataset
         self.size_labels = size_labels
@@ -61,12 +42,9 @@ class ScheduledBatchSampler(BatchSampler):
         self.rng.manual_seed(base_seed + rank)
 
         # Precompute dataset offsets and lengths
-        lengths = [len(ds) for ds in dataset.datasets]
+        lengths = [len(ds) for ds in dataset.datasets]  # type: ignore[arg-type]
         self.dataset_lengths = torch.tensor(lengths)
-        self.dataset_offsets = torch.cat([
-            torch.tensor([0]),
-            torch.cumsum(self.dataset_lengths, dim=0)[:-1]
-        ])
+        self.dataset_offsets = torch.cat([torch.tensor([0]), torch.cumsum(self.dataset_lengths, dim=0)[:-1]])
 
         # Group datasets by size
         self.size_buckets: dict[tuple[int, int], list[int]] = defaultdict(list)
@@ -91,21 +69,21 @@ class ScheduledBatchSampler(BatchSampler):
             raise StopIteration("All dataset weights are zero")
 
         bucket_weights = torch.tensor([b[2] for b in bucket_data])
-        bucket_idx = torch.multinomial(bucket_weights, 1, generator=self.rng).item()
+        bucket_idx = int(torch.multinomial(bucket_weights, 1, generator=self.rng).item())
         _, dataset_indices, _ = bucket_data[bucket_idx]
 
         # Sample dataset within bucket
         ds_weights = weights[dataset_indices]
-        ds_idx_local = torch.multinomial(ds_weights, 1, generator=self.rng).item()
+        ds_idx_local = int(torch.multinomial(ds_weights, 1, generator=self.rng).item())
         ds_idx = dataset_indices[ds_idx_local]
 
         # Sample batch indices (with replacement)
-        ds_len = self.dataset_lengths[ds_idx].item()
+        ds_len = int(self.dataset_lengths[ds_idx].item())
         if ds_len == 0:
             raise ValueError(f"Dataset {ds_idx} is empty")
 
         local_indices = torch.randint(0, ds_len, (self.batch_size,), generator=self.rng)
-        offset = self.dataset_offsets[ds_idx].item()
+        offset = int(self.dataset_offsets[ds_idx].item())
         batch = (local_indices + offset).tolist()
 
         self.step += 1
@@ -113,7 +91,7 @@ class ScheduledBatchSampler(BatchSampler):
 
     def __len__(self) -> int:
         """Estimate number of batches."""
-        return max(1, self.dataset_lengths.sum().item() // self.batch_size)
+        return max(1, int(self.dataset_lengths.sum().item()) // self.batch_size)
 
     def reset_step(self, step: int = 0) -> None:
         """Reset step counter."""
