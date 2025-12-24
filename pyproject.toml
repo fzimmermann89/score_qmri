@@ -4,8 +4,8 @@ version = "0.1.0"
 description = "MRI diffusion model datasets with H5 file support"
 requires-python = ">=3.9"
 dependencies = [
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
+    "torch>=2.8.0",
+    "torchvision>=0.20.0",
     "pytorch-lightning>=2.0.0",
     "h5py>=3.8.0",
     "numpy>=1.24.0",
