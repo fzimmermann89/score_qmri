@@ -3,28 +3,26 @@
 import pytest
 import torch
 
-from models.diffusion import DiffusionModel
 from training.lightning_module import DiffusionLightningModule
-from training.losses import LossScheduler, MSELoss, SSIML1Loss
-
-
-class MockConfig:
-    learning_rate = 1e-4
-    validation_freq = 10
 
 
 @pytest.fixture
 def lightning_module():
     """Create Lightning module for testing."""
-    model = DiffusionModel(num_kinds=3, num_timesteps=100)
-    mse = MSELoss()
     try:
-        ssim_l1 = SSIML1Loss()
+        from training.losses import SSIML1Loss
+
+        SSIML1Loss()
     except ImportError:
         pytest.skip("pytorch-msssim not available")
 
-    scheduler = LossScheduler(mse, ssim_l1, lambda s: 0.0)
-    return DiffusionLightningModule(model, scheduler, MockConfig())
+    return DiffusionLightningModule(
+        unet_base_channels=32,
+        unet_num_blocks=2,
+        num_kinds=3,
+        num_timesteps=100,
+        learning_rate=1e-4,
+    )
 
 
 def test_lightning_module_training_step(lightning_module):
@@ -45,3 +43,28 @@ def test_lightning_module_configure_optimizers(lightning_module):
     opt = lightning_module.configure_optimizers()
     assert isinstance(opt, torch.optim.Adam)
     assert opt.defaults["lr"] == 1e-4
+
+
+def test_lightning_module_hparams_saved(lightning_module):
+    """Test hyperparameters are saved correctly."""
+    assert lightning_module.hparams.unet_base_channels == 32
+    assert lightning_module.hparams.unet_num_blocks == 2
+    assert lightning_module.hparams.num_kinds == 3
+    assert lightning_module.hparams.num_timesteps == 100
+    assert lightning_module.hparams.learning_rate == 1e-4
+
+
+def test_lightning_module_default_params():
+    """Test default hyperparameters."""
+    try:
+        from training.losses import SSIML1Loss
+
+        SSIML1Loss()
+    except ImportError:
+        pytest.skip("pytorch-msssim not available")
+
+    module = DiffusionLightningModule()
+    assert module.hparams.unet_base_channels == 64  # type: ignore[attr-defined]
+    assert module.hparams.unet_num_blocks == 4  # type: ignore[attr-defined]
+    assert module.hparams.num_kinds == 3  # type: ignore[attr-defined]
+    assert module.hparams.num_timesteps == 1000  # type: ignore[attr-defined]

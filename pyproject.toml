@@ -6,7 +6,8 @@ requires-python = ">=3.10"
 dependencies = [
     "torch>=2.8.0",
     "torchvision>=0.20.0",
-    "pytorch-lightning>=2.0.0",
+    "lightning>=2.0.0",
+    "jsonargparse[signatures]>=4.27.0",
     "h5py>=3.8.0",
     "numpy>=1.24.0",
     "wandb>=0.15.0",
@@ -84,11 +85,14 @@ disallow_incomplete_defs = false
 module = [
     "h5py.*",
     "pytorch_lightning.*",
+    "lightning.*",
+    "jsonargparse.*",
     "einops.*",
     "torchvision.*",
     "pytorch_msssim.*",
     "pytest.*",
     "_pytest.*",
+    "wandb.*",
 ]
 ignore_missing_imports = true
 
