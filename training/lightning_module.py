@@ -100,7 +100,7 @@ class DiffusionLightningModule(LightningModule):
         hp = self.hparams
         losses = compute_loss(
             output.x0, x0, output.noise, noise, mask,
-            hp.noise_weight, hp.x0_weight, hp.ssim_weight, hp.l1_weight,  # type: ignore[attr-defined]
+            hp.noise_weight, hp.x0_weight, hp.ssim_weight, hp.l1_weight,
         )
 
         self.log_dict({
@@ -119,7 +119,7 @@ class DiffusionLightningModule(LightningModule):
     ) -> None:
         """Log validation samples at specified intervals."""
         hp = self.hparams
-        if self.global_step > 0 and self.global_step % hp.validation_interval == 0:  # type: ignore[attr-defined]
+        if self.global_step > 0 and self.global_step % hp.validation_interval == 0:
             self._log_samples()
 
     def _log_samples(self) -> None:
@@ -131,13 +131,13 @@ class DiffusionLightningModule(LightningModule):
 
         self.model.eval()
         hp = self.hparams
-        size = hp.validation_size  # type: ignore[attr-defined]
+        size = hp.validation_size
 
         if self._fixed_noise is None:
-            self._fixed_noise = create_fixed_noise(hp.num_kinds, (size, size))  # type: ignore[attr-defined]
+            self._fixed_noise = create_fixed_noise(hp.num_kinds, (size, size))
 
         images = []
-        for k in range(hp.num_kinds):  # type: ignore[attr-defined]
+        for k in range(hp.num_kinds):
             kind = torch.tensor([k], device=self.device)
             sample = self.sampler.sample((1, 2, size, size), self.device, kind, self._fixed_noise[k])
             images.append(wandb.Image(sample[0, 0].cpu().numpy(), caption=f"kind_{k}"))
@@ -147,4 +147,4 @@ class DiffusionLightningModule(LightningModule):
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         """Configure AdamW optimizer."""
-        return torch.optim.AdamW(self.model.parameters(), lr=self.hparams.learning_rate)  # type: ignore[attr-defined]
+        return torch.optim.AdamW(self.model.parameters(), lr=self.hparams.learning_rate)

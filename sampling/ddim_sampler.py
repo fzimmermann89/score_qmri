@@ -50,8 +50,7 @@ class DDIMSampler:
 
         Returns
         -------
-        Tensor
-            Samples of shape (B, 2, H, W).
+        Samples of shape (B, 2, H, W).
         """
         B = shape[0]
         x = initial_noise.to(device) if initial_noise is not None else torch.randn(shape, device=device)
@@ -99,8 +98,7 @@ def create_fixed_noise(num_kinds: int, image_shape: tuple[int, int], seed: int =
 
     Returns
     -------
-    dict
-        Mapping from kind index to noise tensor of shape (1, 2, H, W).
+    Mapping from kind index to noise tensor of shape (1, 2, H, W).
     """
     gen = torch.Generator().manual_seed(seed)
     return {k: torch.randn(1, 2, *image_shape, generator=gen) for k in range(num_kinds)}

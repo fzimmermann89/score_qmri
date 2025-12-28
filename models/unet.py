@@ -1,12 +1,10 @@
 """UNet architecture with conditioning for diffusion models."""
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
 
 
-class ResBlock(nn.Module):
+class ResBlock(torch.nn.Module):
     """Residual block with FiLM conditioning."""
 
     def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128) -> None:
@@ -23,12 +21,18 @@ class ResBlock(nn.Module):
             Conditioning vector dimension.
         """
         super().__init__()
-        self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
-        self.norm1 = nn.GroupNorm(min(8, out_ch), out_ch)
-        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
-        self.norm2 = nn.GroupNorm(min(8, out_ch), out_ch)
-        self.cond_proj = nn.Linear(cond_dim, out_ch * 2)
-        self.skip = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
+        self.block1 = torch.nn.Sequential(
+            torch.nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            torch.nn.GroupNorm(min(8, out_ch), out_ch),
+            torch.nn.SiLU(),
+        )
+        self.block2 = torch.nn.Sequential(
+            torch.nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            torch.nn.GroupNorm(min(8, out_ch), out_ch),
+            torch.nn.SiLU(),
+        )
+        self.cond_proj = torch.nn.Linear(cond_dim, out_ch * 2)
+        self.skip = torch.nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else torch.nn.Identity()
 
     def forward(self, x: Tensor, cond: Tensor) -> Tensor:
         """
@@ -43,19 +47,17 @@ class ResBlock(nn.Module):
 
         Returns
         -------
-        Tensor
-            Output of shape (B, out_ch, H, W).
+        Output of shape (B, out_ch, H, W).
         """
-        h = F.silu(self.norm1(self.conv1(x)))
-        scale_shift = self.cond_proj(cond)[:, :, None, None]
-        scale, shift = scale_shift.chunk(2, dim=1)
+        h = self.block1(x)
+        scale, shift = self.cond_proj(cond)[:, :, None, None].chunk(2, dim=1)
         h = h * (1 + scale) + shift
-        h = self.norm2(self.conv2(h))
-        return F.silu(h + self.skip(x))
+        h = self.block2(h)
+        return h + self.skip(x)
 
 
-class DownBlock(nn.Module):
-    """Downsampling block: ResBlock + MaxPool."""
+class DownBlock(torch.nn.Module):
+    """Downsampling block: ResBlock + strided Conv."""
 
     def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128) -> None:
         """
@@ -72,7 +74,7 @@ class DownBlock(nn.Module):
         """
         super().__init__()
         self.res = ResBlock(in_ch, out_ch, cond_dim)
-        self.pool = nn.MaxPool2d(2)
+        self.down = torch.nn.Conv2d(out_ch, out_ch, kernel_size=3, stride=2, padding=1)
 
     def forward(self, x: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
         """
@@ -81,14 +83,14 @@ class DownBlock(nn.Module):
         Returns
         -------
         tuple
-            (pooled output, skip connection).
+            (downsampled output, skip connection).
         """
         h = self.res(x, cond)
-        return self.pool(h), h
+        return self.down(h), h
 
 
-class UpBlock(nn.Module):
-    """Upsampling block: ConvTranspose + concat skip + ResBlock."""
+class UpBlock(torch.nn.Module):
+    """Upsampling block: PixelShuffle + concat skip + ResBlock."""
 
     def __init__(self, in_ch: int, out_ch: int, skip_ch: int, cond_dim: int = 128) -> None:
         """
@@ -106,16 +108,18 @@ class UpBlock(nn.Module):
             Conditioning vector dimension.
         """
         super().__init__()
-        self.up = nn.ConvTranspose2d(in_ch, in_ch // 2, kernel_size=2, stride=2)
-        self.res = ResBlock(in_ch // 2 + skip_ch, out_ch, cond_dim)
+        self.up_conv = torch.nn.Conv2d(in_ch, in_ch * 4, kernel_size=3, padding=1)
+        self.pixel_shuffle = torch.nn.PixelShuffle(2)
+        self.res = ResBlock(in_ch + skip_ch, out_ch, cond_dim)
 
     def forward(self, x: Tensor, skip: Tensor, cond: Tensor) -> Tensor:
-        """Forward pass concatenating skip connection."""
-        out: Tensor = self.res(torch.cat([self.up(x), skip], dim=1), cond)
+        """Forward pass concatenating skip connection after pixelshuffle upsampling."""
+        x_up = self.pixel_shuffle(self.up_conv(x))
+        out = self.res(torch.cat([x_up, skip], dim=1), cond)
         return out
 
 
-class OutputHead(nn.Module):
+class OutputHead(torch.nn.Module):
     """ResNet output head for predictions."""
 
     def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128) -> None:
@@ -133,15 +137,15 @@ class OutputHead(nn.Module):
         """
         super().__init__()
         self.res = ResBlock(in_ch, in_ch, cond_dim)
-        self.conv = nn.Conv2d(in_ch, out_ch, 3, padding=1)
+        self.conv = torch.nn.Conv2d(in_ch, out_ch, 3, padding=1)
 
     def forward(self, x: Tensor, cond: Tensor) -> Tensor:
         """Forward pass through ResBlock and final conv."""
-        out: Tensor = self.conv(self.res(x, cond))
+        out = self.conv(self.res(x, cond))
         return out
 
 
-class UNet(nn.Module):
+class UNet(torch.nn.Module):
     """UNet with dual output heads and conditioning.
 
     Input: 2 channels (real/imag or data/zeros)
@@ -173,20 +177,20 @@ class UNet(nn.Module):
         self.num_blocks = num_blocks
         self.cond_dim = cond_dim
 
-        self.input_conv = nn.Conv2d(in_channels, base_channels, 3, padding=1)
+        self.input_conv = torch.nn.Conv2d(in_channels, base_channels, 3, padding=1)
 
         # Encoder
-        self.down_blocks = nn.ModuleList()
+        self.down_blocks = torch.nn.ModuleList()
         ch = base_channels
         for _ in range(num_blocks):
             self.down_blocks.append(DownBlock(ch, ch * 2, cond_dim))
             ch *= 2
 
-        self.bottleneck = ResBlock(ch, ch, cond_dim)
+        self.middle = ResBlock(ch, ch, cond_dim)
 
         # Decoder
         skip_chs = [base_channels * (2 ** (i + 1)) for i in range(num_blocks)][::-1]
-        self.up_blocks = nn.ModuleList()
+        self.up_blocks = torch.nn.ModuleList()
         for skip_ch in skip_chs:
             self.up_blocks.append(UpBlock(ch, ch // 2, skip_ch, cond_dim))
             ch //= 2
@@ -207,8 +211,7 @@ class UNet(nn.Module):
 
         Returns
         -------
-        tuple
-            (x0_pred, noise_pred), each of shape (B, 2, H, W).
+        (x0_pred, noise_pred), each of shape (B, 2, H, W).
         """
         x = self.input_conv(x)
 
@@ -217,7 +220,7 @@ class UNet(nn.Module):
             x, skip = down(x, cond)
             skips.append(skip)
 
-        x = self.bottleneck(x, cond)
+        x = self.middle(x, cond)
 
         for up in self.up_blocks:
             x = up(x, skips.pop(), cond)
