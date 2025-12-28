@@ -7,15 +7,21 @@ from models.diffusion import DiffusionModel
 
 
 class DDIMSampler:
-    """DDIM (Denoising Diffusion Implicit Models) sampler.
-
-    Args:
-        model: Diffusion model.
-        num_steps: Sampling steps (fewer = faster).
-        eta: Stochasticity (0 = deterministic, 1 = DDPM).
-    """
+    """DDIM (Denoising Diffusion Implicit Models) sampler."""
 
     def __init__(self, model: DiffusionModel, num_steps: int = 100, eta: float = 0.0) -> None:
+        """
+        Initialize DDIM sampler.
+
+        Parameters
+        ----------
+        model
+            Diffusion model instance.
+        num_steps
+            Number of sampling steps.
+        eta
+            Stochasticity parameter (0 = deterministic, 1 = DDPM).
+        """
         self.model = model
         self.num_steps = num_steps
         self.eta = eta
@@ -28,15 +34,23 @@ class DDIMSampler:
         kind: Tensor,
         initial_noise: Tensor | None = None,
     ) -> Tensor:
-        """Sample from model using DDIM.
+        """
+        Sample from model using DDIM.
 
-        Args:
-            shape: Output shape (B, 2, H, W).
-            device: Computation device.
-            kind: Dataset kind indices (B,).
-            initial_noise: Optional fixed noise for reproducibility.
+        Parameters
+        ----------
+        shape
+            Output shape (B, 2, H, W).
+        device
+            Computation device.
+        kind
+            Dataset kind indices of shape (B,).
+        initial_noise
+            Optional fixed noise for reproducibility.
 
-        Returns:
+        Returns
+        -------
+        Tensor
             Samples of shape (B, 2, H, W).
         """
         B = shape[0]
@@ -51,7 +65,7 @@ class DDIMSampler:
         return x
 
     def _step(self, x: Tensor, t: Tensor, t_prev: int, kind: Tensor) -> Tensor:
-        """Single DDIM step."""
+        """Execute single DDIM reverse step."""
         t_val = int(t[0].item())
         output = self.model(x, t, kind)
 
@@ -71,6 +85,22 @@ class DDIMSampler:
 
 
 def create_fixed_noise(num_kinds: int, image_shape: tuple[int, int], seed: int = 42) -> dict[int, Tensor]:
-    """Create reproducible noise for each dataset kind."""
+    """
+    Create reproducible noise for each dataset kind.
+
+    Parameters
+    ----------
+    num_kinds
+        Number of dataset types.
+    image_shape
+        (H, W) shape of images.
+    seed
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    dict
+        Mapping from kind index to noise tensor of shape (1, 2, H, W).
+    """
     gen = torch.Generator().manual_seed(seed)
     return {k: torch.randn(1, 2, *image_shape, generator=gen) for k in range(num_kinds)}

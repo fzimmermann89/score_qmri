@@ -7,27 +7,44 @@ from models.diffusion import DiffusionModel
 
 
 class DDPMSampler:
-    """DDPM reverse diffusion sampler.
-
-    Args:
-        model: Diffusion model.
-        num_steps: Sampling steps.
-    """
+    """DDPM reverse diffusion sampler."""
 
     def __init__(self, model: DiffusionModel, num_steps: int | None = None) -> None:
+        """
+        Initialize DDPM sampler.
+
+        Parameters
+        ----------
+        model
+            Diffusion model instance.
+        num_steps
+            Number of sampling steps. Defaults to model's num_timesteps.
+        """
         self.model = model
         self.num_steps = num_steps or model.num_timesteps
 
     @torch.no_grad()
-    def sample(self, shape: tuple[int, ...], device: torch.device, kind: Tensor | None = None) -> Tensor:
-        """Sample from model using DDPM.
+    def sample(
+        self,
+        shape: tuple[int, ...],
+        device: torch.device,
+        kind: Tensor | None = None,
+    ) -> Tensor:
+        """
+        Sample from model using DDPM.
 
-        Args:
-            shape: Output shape (B, 2, H, W).
-            device: Computation device.
-            kind: Dataset kind indices (B,). Defaults to zeros.
+        Parameters
+        ----------
+        shape
+            Output shape (B, 2, H, W).
+        device
+            Computation device.
+        kind
+            Dataset kind indices of shape (B,). Defaults to zeros.
 
-        Returns:
+        Returns
+        -------
+        Tensor
             Samples of shape (B, 2, H, W).
         """
         B = shape[0]
@@ -43,7 +60,7 @@ class DDPMSampler:
         return x
 
     def _step(self, x: Tensor, t: Tensor, kind: Tensor) -> Tensor:
-        """Single DDPM step."""
+        """Execute single DDPM reverse step."""
         t_val = int(t[0].item())
         output = self.model(x, t, kind)
 

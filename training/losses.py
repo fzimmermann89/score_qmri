@@ -16,13 +16,29 @@ class LossOutput:
     """Combined loss output."""
 
     total: Tensor
-    noise_mse: Tensor  # L_simple
+    noise_mse: Tensor
     x0_l1: Tensor
     x0_ssim: Tensor
 
 
 def noise_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tensor:
-    """MSE loss on noise prediction (L_simple)."""
+    """
+    MSE loss on noise prediction (L_simple).
+
+    Parameters
+    ----------
+    pred
+        Predicted noise of shape (B, C, H, W).
+    target
+        Target noise of shape (B, C, H, W).
+    mask
+        Optional mask of shape (B, 1, H, W).
+
+    Returns
+    -------
+    Tensor
+        Scalar loss value.
+    """
     if mask is None:
         return F.mse_loss(pred, target)
     mask = mask.float()
@@ -30,7 +46,23 @@ def noise_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tens
 
 
 def l1_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tensor:
-    """L1 loss with optional masking."""
+    """
+    L1 loss with optional masking.
+
+    Parameters
+    ----------
+    pred
+        Predicted tensor of shape (B, C, H, W).
+    target
+        Target tensor of shape (B, C, H, W).
+    mask
+        Optional mask of shape (B, 1, H, W).
+
+    Returns
+    -------
+    Tensor
+        Scalar loss value.
+    """
     if mask is None:
         return F.l1_loss(pred, target)
     mask = mask.float()
@@ -38,7 +70,28 @@ def l1_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tensor:
 
 
 def ssim_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tensor:
-    """SSIM loss (1 - SSIM)."""
+    """
+    SSIM loss (1 - SSIM).
+
+    Parameters
+    ----------
+    pred
+        Predicted tensor of shape (B, C, H, W).
+    target
+        Target tensor of shape (B, C, H, W).
+    mask
+        Optional mask of shape (B, 1, H, W).
+
+    Returns
+    -------
+    Tensor
+        Scalar loss value.
+
+    Raises
+    ------
+    ImportError
+        If pytorch-msssim is not installed.
+    """
     if ssim is None:
         raise ImportError("pytorch-msssim required")
     if mask is not None:
@@ -59,7 +112,35 @@ def compute_loss(
     ssim_weight: float = 0.5,
     l1_weight: float = 0.5,
 ) -> LossOutput:
-    """Compute combined diffusion loss."""
+    """
+    Compute combined diffusion training loss.
+
+    Parameters
+    ----------
+    x0_pred
+        Predicted clean image of shape (B, 2, H, W).
+    x0_target
+        Target clean image of shape (B, 2, H, W).
+    noise_pred
+        Predicted noise of shape (B, 2, H, W).
+    noise_target
+        Target noise of shape (B, 2, H, W).
+    mask
+        Optional mask of shape (B, 1, H, W).
+    noise_weight
+        Weight for noise prediction loss.
+    x0_weight
+        Weight for clean image prediction loss.
+    ssim_weight
+        SSIM weight within x0 loss.
+    l1_weight
+        L1 weight within x0 loss.
+
+    Returns
+    -------
+    LossOutput
+        Contains total loss and individual components.
+    """
     loss_noise = noise_loss(noise_pred, noise_target, mask)
     loss_l1 = l1_loss(x0_pred, x0_target, mask)
     loss_ssim = ssim_loss(x0_pred, x0_target, mask)

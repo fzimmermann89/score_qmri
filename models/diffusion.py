@@ -15,22 +15,12 @@ from .unet import UNet
 class DiffusionOutput:
     """Output from diffusion model forward pass."""
 
-    x0: Tensor  # Clean image prediction (B, 2, H, W)
-    noise: Tensor  # Noise prediction (B, 2, H, W)
+    x0: Tensor
+    noise: Tensor
 
 
 class DiffusionModel(nn.Module):
-    """Diffusion model predicting both x0 and noise.
-
-    Args:
-        num_kinds: Number of dataset types for conditioning.
-        num_timesteps: Total diffusion timesteps.
-        beta_start: Starting noise schedule value.
-        beta_end: Ending noise schedule value.
-        base_channels: UNet base channel count.
-        num_blocks: UNet encoder/decoder depth.
-        cond_dim: Conditioning embedding dimension.
-    """
+    """Diffusion model predicting both clean image (x0) and noise."""
 
     betas: Tensor
     alphas: Tensor
@@ -48,19 +38,33 @@ class DiffusionModel(nn.Module):
         num_blocks: int = 4,
         cond_dim: int = 128,
     ) -> None:
+        """
+        Initialize diffusion model.
+
+        Parameters
+        ----------
+        num_kinds
+            Number of dataset types for conditioning.
+        num_timesteps
+            Total diffusion timesteps.
+        beta_start
+            Starting noise schedule value.
+        beta_end
+            Ending noise schedule value.
+        base_channels
+            UNet base channel count.
+        num_blocks
+            UNet encoder/decoder depth.
+        cond_dim
+            Conditioning embedding dimension.
+        """
         super().__init__()
         self.num_timesteps = num_timesteps
         self.num_kinds = num_kinds
 
         self.cond_mlp = ConditioningMLP(num_kinds, cond_dim)
-        self.unet = UNet(
-            in_channels=2,
-            base_channels=base_channels,
-            num_blocks=num_blocks,
-            cond_dim=cond_dim,
-        )
+        self.unet = UNet(in_channels=2, base_channels=base_channels, num_blocks=num_blocks, cond_dim=cond_dim)
 
-        # Noise schedule
         betas = torch.linspace(beta_start, beta_end, num_timesteps)
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
@@ -72,22 +76,45 @@ class DiffusionModel(nn.Module):
         self.register_buffer("sqrt_one_minus_alphas_cumprod", (1.0 - alphas_cumprod).sqrt())
 
     def forward(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput:
-        """Predict x0 and noise from noisy input.
+        """
+        Predict x0 and noise from noisy input.
 
-        Args:
-            x_t: Noisy input (B, 2, H, W).
-            t: Timesteps (B,).
-            kind: Dataset kind indices (B,).
+        Parameters
+        ----------
+        x_t
+            Noisy input of shape (B, 2, H, W).
+        t
+            Timesteps of shape (B,).
+        kind
+            Dataset kind indices of shape (B,).
 
-        Returns:
-            DiffusionOutput with x0 and noise predictions.
+        Returns
+        -------
+        DiffusionOutput
+            Contains x0 and noise predictions.
         """
         cond = self.cond_mlp(t, kind)
         x0, noise = self.unet(x_t, cond)
         return DiffusionOutput(x0=x0, noise=noise)
 
     def q_sample(self, x0: Tensor, t: Tensor, noise: Tensor | None = None) -> Tensor:
-        """Forward diffusion: q(x_t | x_0)."""
+        """
+        Forward diffusion process q(x_t | x_0).
+
+        Parameters
+        ----------
+        x0
+            Clean images of shape (B, 2, H, W).
+        t
+            Timesteps of shape (B,).
+        noise
+            Optional noise tensor. Sampled if None.
+
+        Returns
+        -------
+        Tensor
+            Noisy images x_t.
+        """
         if noise is None:
             noise = torch.randn_like(x0)
         sqrt_alpha = rearrange(self.sqrt_alphas_cumprod[t], "b -> b 1 1 1")
@@ -95,15 +122,46 @@ class DiffusionModel(nn.Module):
         return sqrt_alpha * x0 + sqrt_one_minus * noise
 
     def predict_x0(self, x_t: Tensor, t: Tensor, noise: Tensor) -> Tensor:
-        """Compute x0 from x_t and noise prediction."""
+        """
+        Compute x0 from x_t and predicted noise.
+
+        Parameters
+        ----------
+        x_t
+            Noisy images of shape (B, 2, H, W).
+        t
+            Timesteps of shape (B,).
+        noise
+            Predicted noise of shape (B, 2, H, W).
+
+        Returns
+        -------
+        Tensor
+            Predicted x0.
+        """
         sqrt_alpha = rearrange(self.sqrt_alphas_cumprod[t], "b -> b 1 1 1")
         sqrt_one_minus = rearrange(self.sqrt_one_minus_alphas_cumprod[t], "b -> b 1 1 1")
         return (x_t - sqrt_one_minus * noise) / sqrt_alpha.clamp(min=1e-8)
 
     def score(self, x_t: Tensor, t: Tensor, kind: Tensor) -> Tensor:
-        """Compute score function: -noise / sqrt(1 - alpha_bar).
+        """
+        Compute score function (gradient of log probability).
 
-        The score is the gradient of log p(x_t).
+        The score is defined as -noise / sqrt(1 - alpha_bar).
+
+        Parameters
+        ----------
+        x_t
+            Noisy images of shape (B, 2, H, W).
+        t
+            Timesteps of shape (B,).
+        kind
+            Dataset kind indices of shape (B,).
+
+        Returns
+        -------
+        Tensor
+            Score of shape (B, 2, H, W).
         """
         output = self.forward(x_t, t, kind)
         sqrt_one_minus = rearrange(self.sqrt_one_minus_alphas_cumprod[t], "b -> b 1 1 1")
@@ -111,10 +169,20 @@ class DiffusionModel(nn.Module):
 
     @staticmethod
     def prepare_input(image: Tensor) -> Tensor:
-        """Prepare 2-channel input from image.
+        """
+        Prepare 2-channel input from image.
 
-        Complex: already (B, 2, H, W) -> pass through
-        Magnitude: (B, H, W) -> stack with zeros
+        Complex data passes through unchanged. Magnitude data is stacked with zeros.
+
+        Parameters
+        ----------
+        image
+            Input image of shape (B, 2, H, W) or (B, H, W).
+
+        Returns
+        -------
+        Tensor
+            Two-channel tensor of shape (B, 2, H, W).
         """
         if image.ndim == 4 and image.shape[1] == 2:
             return image
