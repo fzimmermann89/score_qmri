@@ -6,38 +6,32 @@ from models.diffusion import DiffusionModel
 from sampling.ddpm_sampler import DDPMSampler
 
 
-def test_ddpm_sampler_produces_correct_shape():
-    """Test DDPM sampler produces output of requested shape."""
-    model = DiffusionModel(num_kinds=3, num_timesteps=100)
-    sampler = DDPMSampler(model, num_steps=5)
-
-    samples = sampler.sample((2, 2, 32, 32), torch.device("cpu"))
-    assert samples.shape == (2, 2, 32, 32)
-
-
-def test_ddpm_sampler_accepts_conditioning():
-    """Test DDPM sampler accepts conditioning tensor."""
-    model = DiffusionModel(num_kinds=3, num_timesteps=100)
-    sampler = DDPMSampler(model, num_steps=5)
-
-    kind = torch.tensor([0, 1])
-    samples = sampler.sample((2, 2, 32, 32), torch.device("cpu"), kind)
-    assert samples.shape == (2, 2, 32, 32)
-
-
-def test_ddpm_sampler_conditional_alias():
-    """Test sample_conditional is alias for sample."""
-    model = DiffusionModel(num_kinds=3, num_timesteps=100)
-    sampler = DDPMSampler(model, num_steps=5)
-
-    kind = torch.tensor([0, 1])
-    samples = sampler.sample_conditional((2, 2, 32, 32), torch.device("cpu"), kind)
-    assert samples.shape == (2, 2, 32, 32)
-
-
-def test_ddpm_sampler_respects_num_steps():
-    """Test sampler uses specified number of steps."""
-    model = DiffusionModel(num_kinds=3, num_timesteps=1000)
+def test_ddpm_sampler_shape():
+    """Test DDPM sampler output shape."""
+    model = DiffusionModel(num_kinds=3, num_timesteps=100, base_channels=16, num_blocks=2)
     sampler = DDPMSampler(model, num_steps=10)
 
-    assert sampler.num_steps == 10
+    shape = (2, 2, 32, 32)
+    kind = torch.tensor([0, 1])
+    samples = sampler.sample(shape, torch.device("cpu"), kind)
+    assert samples.shape == shape
+
+
+def test_ddpm_sampler_default_kind():
+    """Test DDPM sampler with default kind."""
+    model = DiffusionModel(num_kinds=3, num_timesteps=100, base_channels=16, num_blocks=2)
+    sampler = DDPMSampler(model, num_steps=10)
+
+    shape = (2, 2, 32, 32)
+    samples = sampler.sample(shape, torch.device("cpu"))
+    assert samples.shape == shape
+
+
+def test_ddpm_sampler_num_steps():
+    """Test DDPM sampler respects num_steps."""
+    model = DiffusionModel(num_kinds=3, num_timesteps=100, base_channels=16, num_blocks=2)
+    sampler = DDPMSampler(model, num_steps=5)
+    assert sampler.num_steps == 5
+
+    sampler_default = DDPMSampler(model)
+    assert sampler_default.num_steps == 100

@@ -5,37 +5,29 @@ import torch
 from models.diffusion import DiffusionModel, DiffusionOutput
 
 
-def test_diffusion_init_creates_schedule():
-    """Test diffusion model initializes noise schedule buffers."""
-    model = DiffusionModel(num_timesteps=100)
-    assert hasattr(model, "betas")
-    assert hasattr(model, "alphas_cumprod")
+def test_diffusion_init():
+    """Test diffusion model initialization."""
+    model = DiffusionModel(num_timesteps=100, base_channels=16, num_blocks=2)
     assert model.betas.shape == (100,)
+    assert model.alphas_cumprod.shape == (100,)
 
 
-def test_diffusion_prepare_input_creates_two_channels():
-    """Test prepare_input stacks magnitude data with zeros."""
-    model = DiffusionModel()
-    image = torch.randn(4, 64, 64)
-    kind = torch.zeros(4, dtype=torch.long)
-    prepared = model.prepare_input(image, kind)
-    assert prepared.shape == (4, 2, 64, 64)
-    assert torch.allclose(prepared[:, 1], torch.zeros_like(prepared[:, 1]))
+def test_diffusion_forward():
+    """Test forward returns DiffusionOutput."""
+    model = DiffusionModel(num_kinds=3, num_timesteps=100, base_channels=16, num_blocks=2)
+    x_t = torch.randn(2, 2, 32, 32)
+    t = torch.tensor([10, 20])
+    kind = torch.tensor([0, 1])
+
+    output = model(x_t, t, kind)
+    assert isinstance(output, DiffusionOutput)
+    assert output.x0.shape == (2, 2, 32, 32)
+    assert output.noise.shape == (2, 2, 32, 32)
 
 
-def test_diffusion_prepare_input_passes_complex():
-    """Test prepare_input passes through 2-channel complex data."""
-    model = DiffusionModel()
-    image = torch.randn(4, 2, 64, 64)
-    kind = torch.zeros(4, dtype=torch.long)
-    prepared = model.prepare_input(image, kind)
-    assert prepared.shape == (4, 2, 64, 64)
-    assert torch.allclose(prepared, image)
-
-
-def test_diffusion_q_sample_adds_noise():
+def test_diffusion_q_sample():
     """Test forward diffusion adds noise."""
-    model = DiffusionModel(num_timesteps=100)
+    model = DiffusionModel(num_timesteps=100, base_channels=16, num_blocks=2)
     x0 = torch.randn(2, 2, 32, 32)
     t = torch.tensor([50, 50])
     noise = torch.randn_like(x0)
@@ -45,25 +37,38 @@ def test_diffusion_q_sample_adds_noise():
     assert not torch.allclose(x_t, x0)
 
 
-def test_diffusion_forward_returns_output():
-    """Test forward returns DiffusionOutput with both predictions."""
-    model = DiffusionModel(num_kinds=3, num_timesteps=100)
-    x_t = torch.randn(2, 2, 32, 32)
-    t = torch.tensor([10, 20])
-    kind = torch.tensor([0, 1])
-
-    output = model(x_t, t, kind)
-    assert isinstance(output, DiffusionOutput)
-    assert output.x0_pred.shape == (2, 2, 32, 32)
-    assert output.noise_pred.shape == (2, 2, 32, 32)
-
-
-def test_diffusion_predict_x0_from_noise():
-    """Test x0 prediction from noise prediction."""
-    model = DiffusionModel(num_timesteps=100)
+def test_diffusion_predict_x0():
+    """Test x0 prediction from noise."""
+    model = DiffusionModel(num_timesteps=100, base_channels=16, num_blocks=2)
     x_t = torch.randn(2, 2, 32, 32)
     t = torch.tensor([50, 50])
-    noise_pred = torch.randn_like(x_t)
+    noise = torch.randn_like(x_t)
 
-    x0_pred = model.predict_x0_from_noise(x_t, t, noise_pred)
+    x0_pred = model.predict_x0(x_t, t, noise)
     assert x0_pred.shape == x_t.shape
+
+
+def test_diffusion_score():
+    """Test score function computation."""
+    model = DiffusionModel(num_kinds=3, num_timesteps=100, base_channels=16, num_blocks=2)
+    x_t = torch.randn(2, 2, 32, 32)
+    t = torch.tensor([50, 50])
+    kind = torch.tensor([0, 1])
+
+    score = model.score(x_t, t, kind)
+    assert score.shape == x_t.shape
+
+
+def test_diffusion_prepare_input_magnitude():
+    """Test prepare_input stacks magnitude with zeros."""
+    image = torch.randn(4, 64, 64)
+    prepared = DiffusionModel.prepare_input(image)
+    assert prepared.shape == (4, 2, 64, 64)
+    assert torch.allclose(prepared[:, 1], torch.zeros_like(prepared[:, 1]))
+
+
+def test_diffusion_prepare_input_complex():
+    """Test prepare_input passes through complex data."""
+    image = torch.randn(4, 2, 64, 64)
+    prepared = DiffusionModel.prepare_input(image)
+    assert torch.allclose(prepared, image)

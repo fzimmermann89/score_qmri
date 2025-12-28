@@ -1,85 +1,101 @@
-"""Simple UNet architecture for diffusion models."""
+"""UNet architecture with conditioning for diffusion models."""
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .film_conditioning import apply_film
 
+class ResBlock(nn.Module):
+    """Residual block with FiLM conditioning via linear projection.
 
-class ConvBlock(nn.Module):
-    """Double convolution block with GroupNorm and optional FiLM conditioning."""
+    Args:
+        in_ch: Input channels.
+        out_ch: Output channels.
+        cond_dim: Conditioning vector dimension.
+    """
 
-    def __init__(self, in_ch: int, out_ch: int, use_film: bool = False) -> None:
+    def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128) -> None:
         super().__init__()
-        self.use_film = use_film
         self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
         self.norm1 = nn.GroupNorm(min(8, out_ch), out_ch)
         self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
         self.norm2 = nn.GroupNorm(min(8, out_ch), out_ch)
 
-    def forward(
-        self,
-        x: Tensor,
-        film_scale: Tensor | None = None,
-        film_shift: Tensor | None = None,
-    ) -> Tensor:
-        out: Tensor = F.relu(self.norm1(self.conv1(x)))
-        if self.use_film and film_scale is not None and film_shift is not None:
-            out = apply_film(out, film_scale, film_shift)
+        # Single projection for scale and shift
+        self.cond_proj = nn.Linear(cond_dim, out_ch * 2)
 
-        out = F.relu(self.norm2(self.conv2(out)))
-        if self.use_film and film_scale is not None and film_shift is not None:
-            out = apply_film(out, film_scale, film_shift)
-        return out
+        # Skip connection projection if dimensions differ
+        self.skip = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
+
+    def forward(self, x: Tensor, cond: Tensor) -> Tensor:
+        """Forward with conditioning.
+
+        Args:
+            x: Input of shape (B, C, H, W).
+            cond: Conditioning vector of shape (B, cond_dim).
+        """
+        h = F.silu(self.norm1(self.conv1(x)))
+
+        # Apply FiLM: scale and shift from conditioning
+        scale_shift = self.cond_proj(cond)[:, :, None, None]
+        scale, shift = scale_shift.chunk(2, dim=1)
+        h = h * (1 + scale) + shift
+
+        h = self.norm2(self.conv2(h))
+        return F.silu(h + self.skip(x))
 
 
 class DownBlock(nn.Module):
-    """Downsampling block: conv block followed by max pool."""
+    """Downsampling: ResBlock + MaxPool."""
 
-    def __init__(self, in_ch: int, out_ch: int, use_film: bool = False) -> None:
+    def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128) -> None:
         super().__init__()
-        self.block = ConvBlock(in_ch, out_ch, use_film)
+        self.res = ResBlock(in_ch, out_ch, cond_dim)
         self.pool = nn.MaxPool2d(2)
 
-    def forward(
-        self,
-        x: Tensor,
-        film_scale: Tensor | None = None,
-        film_shift: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor]:
-        skip: Tensor = self.block(x, film_scale, film_shift)
-        pooled: Tensor = self.pool(skip)
-        return pooled, skip
+    def forward(self, x: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
+        h = self.res(x, cond)
+        return self.pool(h), h
 
 
 class UpBlock(nn.Module):
-    """Upsampling block with skip connection concatenation."""
+    """Upsampling: Upsample + concat skip + ResBlock."""
 
-    def __init__(self, in_ch: int, out_ch: int, skip_ch: int, use_film: bool = False) -> None:
+    def __init__(self, in_ch: int, out_ch: int, skip_ch: int, cond_dim: int = 128) -> None:
         super().__init__()
-        self.upsample = nn.ConvTranspose2d(in_ch, in_ch // 2, kernel_size=2, stride=2)
-        self.block = ConvBlock(in_ch // 2 + skip_ch, out_ch, use_film)
+        self.up = nn.ConvTranspose2d(in_ch, in_ch // 2, kernel_size=2, stride=2)
+        self.res = ResBlock(in_ch // 2 + skip_ch, out_ch, cond_dim)
 
-    def forward(
-        self,
-        x: Tensor,
-        skip: Tensor,
-        film_scale: Tensor | None = None,
-        film_shift: Tensor | None = None,
-    ) -> Tensor:
-        upsampled: Tensor = self.upsample(x)
-        concatenated = torch.cat([upsampled, skip], dim=1)
-        out: Tensor = self.block(concatenated, film_scale, film_shift)
+    def forward(self, x: Tensor, skip: Tensor, cond: Tensor) -> Tensor:
+        out: Tensor = self.res(torch.cat([self.up(x), skip], dim=1), cond)
+        return out
+
+
+class OutputHead(nn.Module):
+    """ResNet output head for predictions."""
+
+    def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128) -> None:
+        super().__init__()
+        self.res = ResBlock(in_ch, in_ch, cond_dim)
+        self.conv = nn.Conv2d(in_ch, out_ch, 3, padding=1)
+
+    def forward(self, x: Tensor, cond: Tensor) -> Tensor:
+        out: Tensor = self.conv(self.res(x, cond))
         return out
 
 
 class UNet(nn.Module):
-    """UNet for diffusion with dual output heads (x0 and noise prediction).
+    """UNet with dual output heads and conditioning.
 
-    Input: 2 channels (real/imag for complex, data/zeros for magnitude)
-    Output: 4 channels (2 for x0 prediction, 2 for noise prediction)
+    Input: 2 channels (real/imag or data/zeros)
+    Output: (x0_pred, noise_pred), each (B, 2, H, W)
+
+    Args:
+        in_channels: Input channels.
+        base_channels: Base channel count (doubled at each level).
+        num_blocks: Number of down/up block pairs.
+        cond_dim: Conditioning vector dimension.
     """
 
     def __init__(
@@ -87,68 +103,55 @@ class UNet(nn.Module):
         in_channels: int = 2,
         base_channels: int = 64,
         num_blocks: int = 4,
-        use_film: bool = True,
+        cond_dim: int = 128,
     ) -> None:
         super().__init__()
         self.num_blocks = num_blocks
-        self.use_film = use_film
+        self.cond_dim = cond_dim
 
-        self.initial_conv = nn.Conv2d(in_channels, base_channels, 3, padding=1)
+        self.input_conv = nn.Conv2d(in_channels, base_channels, 3, padding=1)
 
+        # Encoder
         self.down_blocks = nn.ModuleList()
         ch = base_channels
         for _ in range(num_blocks):
-            self.down_blocks.append(DownBlock(ch, ch * 2, use_film))
+            self.down_blocks.append(DownBlock(ch, ch * 2, cond_dim))
             ch *= 2
 
-        self.bottleneck = ConvBlock(ch, ch, use_film)
+        # Bottleneck
+        self.bottleneck = ResBlock(ch, ch, cond_dim)
 
-        skip_channels = [base_channels * (2 ** (i + 1)) for i in range(num_blocks)]
-        skip_channels.reverse()
-
+        # Decoder
+        skip_chs = [base_channels * (2 ** (i + 1)) for i in range(num_blocks)][::-1]
         self.up_blocks = nn.ModuleList()
-        for skip_ch in skip_channels:
-            self.up_blocks.append(UpBlock(ch, ch // 2, skip_ch, use_film))
+        for skip_ch in skip_chs:
+            self.up_blocks.append(UpBlock(ch, ch // 2, skip_ch, cond_dim))
             ch //= 2
 
-        # Dual output heads: x0 prediction and noise prediction
-        self.x0_head = nn.Conv2d(base_channels, 2, 3, padding=1)
-        self.noise_head = nn.Conv2d(base_channels, 2, 3, padding=1)
+        # Output heads (ResNet blocks)
+        self.x0_head = OutputHead(base_channels, 2, cond_dim)
+        self.noise_head = OutputHead(base_channels, 2, cond_dim)
 
-    def _get_film(self, film_params: dict[str, Tensor] | None, idx: int) -> tuple[Tensor | None, Tensor | None]:
-        """Extract FiLM scale/shift for a specific block index."""
-        if not self.use_film or film_params is None:
-            return None, None
-        scales = film_params.get("scales")
-        if scales is None:
-            return None, None
-        return scales[:, idx : idx + 1], film_params["shifts"][:, idx : idx + 1]
-
-    def forward(self, x: Tensor, film_params: dict[str, Tensor] | None = None) -> tuple[Tensor, Tensor]:
-        """Forward pass through UNet.
+    def forward(self, x: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
+        """Forward pass.
 
         Args:
-            x: Input tensor of shape (B, 2, H, W).
-            film_params: Optional dict with 'scales' and 'shifts' tensors for FiLM.
+            x: Input of shape (B, 2, H, W).
+            cond: Conditioning vector of shape (B, cond_dim).
 
         Returns:
-            Tuple of (x0_pred, noise_pred), each of shape (B, 2, H, W).
+            (x0_pred, noise_pred), each of shape (B, 2, H, W).
         """
-        x = self.initial_conv(x)
+        x = self.input_conv(x)
 
-        skips: list[Tensor] = []
-        for i, down in enumerate(self.down_blocks):
-            scale, shift = self._get_film(film_params, i)
-            x, skip = down(x, scale, shift)
+        skips = []
+        for down in self.down_blocks:
+            x, skip = down(x, cond)
             skips.append(skip)
 
-        scale, shift = self._get_film(film_params, self.num_blocks - 1)
-        x = self.bottleneck(x, scale, shift)
+        x = self.bottleneck(x, cond)
 
-        for i, up in enumerate(self.up_blocks):
-            scale, shift = self._get_film(film_params, self.num_blocks - 1 - i)
-            x = up(x, skips.pop(), scale, shift)
+        for up in self.up_blocks:
+            x = up(x, skips.pop(), cond)
 
-        x0_pred: Tensor = self.x0_head(x)
-        noise_pred: Tensor = self.noise_head(x)
-        return x0_pred, noise_pred
+        return self.x0_head(x, cond), self.noise_head(x, cond)
