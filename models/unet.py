@@ -9,10 +9,7 @@ from .film_conditioning import apply_film
 
 
 class ConvBlock(nn.Module):
-    """Double convolution block with GroupNorm and optional FiLM conditioning.
-
-    Applies two conv-norm-relu sequences with optional FiLM modulation after each.
-    """
+    """Double convolution block with GroupNorm and optional FiLM conditioning."""
 
     def __init__(self, in_ch: int, out_ch: int, use_film: bool = False) -> None:
         super().__init__()
@@ -79,16 +76,15 @@ class UpBlock(nn.Module):
 
 
 class UNet(nn.Module):
-    """Simple UNet for diffusion models with optional FiLM conditioning.
+    """UNet for diffusion with dual output heads (x0 and noise prediction).
 
-    Encoder-decoder architecture with skip connections. Each encoder level
-    doubles channels, each decoder level halves them.
+    Input: 2 channels (real/imag for complex, data/zeros for magnitude)
+    Output: 4 channels (2 for x0 prediction, 2 for noise prediction)
     """
 
     def __init__(
         self,
         in_channels: int = 2,
-        out_channels: int = 2,
         base_channels: int = 64,
         num_blocks: int = 4,
         use_film: bool = True,
@@ -115,7 +111,9 @@ class UNet(nn.Module):
             self.up_blocks.append(UpBlock(ch, ch // 2, skip_ch, use_film))
             ch //= 2
 
-        self.final_conv = nn.Conv2d(base_channels, out_channels, 3, padding=1)
+        # Dual output heads: x0 prediction and noise prediction
+        self.x0_head = nn.Conv2d(base_channels, 2, 3, padding=1)
+        self.noise_head = nn.Conv2d(base_channels, 2, 3, padding=1)
 
     def _get_film(self, film_params: dict[str, Tensor] | None, idx: int) -> tuple[Tensor | None, Tensor | None]:
         """Extract FiLM scale/shift for a specific block index."""
@@ -126,15 +124,15 @@ class UNet(nn.Module):
             return None, None
         return scales[:, idx : idx + 1], film_params["shifts"][:, idx : idx + 1]
 
-    def forward(self, x: Tensor, film_params: dict[str, Tensor] | None = None) -> Tensor:
+    def forward(self, x: Tensor, film_params: dict[str, Tensor] | None = None) -> tuple[Tensor, Tensor]:
         """Forward pass through UNet.
 
         Args:
-            x: Input tensor of shape (B, C, H, W).
+            x: Input tensor of shape (B, 2, H, W).
             film_params: Optional dict with 'scales' and 'shifts' tensors for FiLM.
 
         Returns:
-            Output tensor of shape (B, out_channels, H, W).
+            Tuple of (x0_pred, noise_pred), each of shape (B, 2, H, W).
         """
         x = self.initial_conv(x)
 
@@ -151,5 +149,6 @@ class UNet(nn.Module):
             scale, shift = self._get_film(film_params, self.num_blocks - 1 - i)
             x = up(x, skips.pop(), scale, shift)
 
-        out: Tensor = self.final_conv(x)
-        return out
+        x0_pred: Tensor = self.x0_head(x)
+        noise_pred: Tensor = self.noise_head(x)
+        return x0_pred, noise_pred

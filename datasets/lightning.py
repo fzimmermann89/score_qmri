@@ -62,9 +62,10 @@ def _linear_schedule(target_step: int) -> Callable[[int], float]:
 
 
 class MRIDataModule(LightningDataModule):
-    """PyTorch Lightning DataModule for MRI datasets with scheduled sampling.
+    """PyTorch Lightning DataModule for MRI training datasets.
 
-    All parameters are CLI-configurable via jsonargparse.
+    Supports scheduled sampling across multiple dataset types.
+    No validation/test datasets - validation is done via sampling.
     """
 
     def __init__(
@@ -74,8 +75,6 @@ class MRIDataModule(LightningDataModule):
         batch_size: int = 8,
         num_workers: int = 4,
         base_seed: int = 42,
-        val_dataset_configs: list[dict[str, Any]] | None = None,
-        val_batch_size: int | None = None,
     ):
         """Initialize the DataModule.
 
@@ -89,8 +88,6 @@ class MRIDataModule(LightningDataModule):
             batch_size: Training batch size.
             num_workers: DataLoader workers.
             base_seed: Random seed for reproducibility.
-            val_dataset_configs: Validation dataset configs (same format as above).
-            val_batch_size: Validation batch size (defaults to batch_size).
         """
         super().__init__()
         self.save_hyperparameters()
@@ -100,12 +97,9 @@ class MRIDataModule(LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.base_seed = base_seed
-        self.val_dataset_configs = val_dataset_configs
-        self.val_batch_size = val_batch_size or batch_size
 
         self.concat_ds: ConcatDataset | None = None
         self.size_labels: list[tuple[int, int]] | None = None
-        self.val_concat_ds: ConcatDataset | None = None
 
     def setup(self, stage: str) -> None:
         if stage == "fit" or stage is None:
@@ -116,14 +110,9 @@ class MRIDataModule(LightningDataModule):
             self.concat_ds = create_concat_dataset(datasets)
             self.size_labels = get_size_labels(datasets)
 
-            if self.val_dataset_configs is not None:
-                val_datasets = [create_dataset_from_config(cfg) for cfg in self.val_dataset_configs]
-                self.val_concat_ds = create_concat_dataset(val_datasets)
-
     def _create_schedule_functions(self) -> list[Callable[[int], float]]:
         """Create schedule functions from ramp steps."""
         if self.schedule_ramp_steps is None:
-            # Equal weighting for all datasets
             n_datasets = len(self.dataset_configs)
             return [lambda _: 1.0 / n_datasets] * n_datasets
         return [_linear_schedule(steps) for steps in self.schedule_ramp_steps]
@@ -147,20 +136,6 @@ class MRIDataModule(LightningDataModule):
         return DataLoader(
             self.concat_ds,
             batch_sampler=batch_sampler,
-            num_workers=self.num_workers,
-            persistent_workers=self.num_workers > 0,
-            pin_memory=torch.cuda.is_available(),
-            prefetch_factor=4 if self.num_workers > 0 else 2,
-        )
-
-    def val_dataloader(self) -> DataLoader | None:
-        if self.val_concat_ds is None:
-            return None
-
-        return DataLoader(
-            self.val_concat_ds,
-            batch_size=self.val_batch_size,
-            shuffle=False,
             num_workers=self.num_workers,
             persistent_workers=self.num_workers > 0,
             pin_memory=torch.cuda.is_available(),

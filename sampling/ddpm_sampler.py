@@ -26,12 +26,12 @@ class DDPMSampler:
         """Sample from the diffusion model.
 
         Args:
-            shape: Output shape (B, C, H, W).
+            shape: Output shape (B, 2, H, W).
             device: Device for computation.
             kind: Conditioning tensor of shape (B,). Defaults to zeros.
 
         Returns:
-            Generated samples of shape (B, C, H, W).
+            Generated samples of shape (B, 2, H, W).
         """
         with torch.no_grad():
             B = shape[0]
@@ -47,21 +47,25 @@ class DDPMSampler:
             return x
 
     def _ddpm_step(self, x: Tensor, t: Tensor, kind: Tensor) -> Tensor:
-        """Execute single DDPM reverse step."""
+        """Execute single DDPM reverse step using noise prediction."""
         t_val = int(t[0].item())
-        pred_x0: Tensor = self.model(x, t, kind)
+        output = self.model(x, t, kind)
+        noise_pred = output.noise_pred
 
         if t_val == 0:
-            return pred_x0
+            return self.model.predict_x0_from_noise(x, t, noise_pred)
 
         alpha_t = self.model.alphas_cumprod[t_val]
         alpha_prev = self.model.alphas_cumprod[t_val - 1]
         beta_t = self.model.betas[t_val]
 
+        # Predict x0 from noise
+        x0_pred = self.model.predict_x0_from_noise(x, t, noise_pred)
+
         # Posterior mean coefficients
         coef_x0 = alpha_prev.sqrt() * beta_t / (1.0 - alpha_t)
         coef_xt = self.model.alphas[t_val].sqrt() * (1.0 - alpha_prev) / (1.0 - alpha_t)
-        mean = coef_x0 * pred_x0 + coef_xt * x
+        mean = coef_x0 * x0_pred + coef_xt * x
 
         var = beta_t * (1.0 - alpha_prev) / (1.0 - alpha_t)
         result: Tensor = mean + var.sqrt() * torch.randn_like(x)
