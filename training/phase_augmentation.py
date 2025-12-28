@@ -15,11 +15,11 @@ class PhaseAugmentation:
 
     Parameters
     ----------
-    mean_phase_range : tuple[float, float]
+    mean_phase_range
         Range for random mean phase offset in radians (default: [0, 2π]).
-    poly_coeff_range : tuple[float, float]
+    poly_coeff_range
         Range for polynomial coefficients controlling spatial variation.
-    prob : float
+    prob
         Probability of applying augmentation.
     """
 
@@ -38,14 +38,14 @@ class PhaseAugmentation:
 
         Parameters
         ----------
-        real : Tensor
+        real
             Real part of shape (H, W) or (B, H, W).
-        imag : Tensor
+        imag
             Imaginary part of shape (H, W) or (B, H, W).
 
         Returns
         -------
-        tuple[Tensor, Tensor]
+        tuple
             Augmented (real, imag) with same shapes.
         """
         if torch.rand(1).item() > self.prob:

@@ -3,11 +3,10 @@
 import math
 
 import torch
-import torch.nn as nn
 from torch import Tensor
 
 
-class SinusoidalEmbedding(nn.Module):
+class SinusoidalEmbedding(torch.nn.Module):
     """Sinusoidal positional embedding for timesteps."""
 
     def __init__(self, dim: int) -> None:
@@ -33,8 +32,7 @@ class SinusoidalEmbedding(nn.Module):
 
         Returns
         -------
-        Tensor
-            Embeddings of shape (B, dim).
+        Embeddings of shape (B, dim).
         """
         device = t.device
         half_dim = self.dim // 2
@@ -44,7 +42,7 @@ class SinusoidalEmbedding(nn.Module):
         return emb
 
 
-class ConditioningMLP(nn.Module):
+class ConditioningMLP(torch.nn.Module):
     """MLP combining timestep and dataset kind into conditioning vector."""
 
     def __init__(
@@ -67,11 +65,11 @@ class ConditioningMLP(nn.Module):
         """
         super().__init__()
         self.time_embed = SinusoidalEmbedding(time_embed_dim)
-        self.kind_embed = nn.Embedding(num_kinds, cond_dim // 2)
-        self.mlp = nn.Sequential(
-            nn.Linear(time_embed_dim + cond_dim // 2, cond_dim),
-            nn.SiLU(),
-            nn.Linear(cond_dim, cond_dim),
+        self.kind_embed = torch.nn.Embedding(num_kinds, cond_dim // 2)
+        self.mlp = torch.nn.Sequential(
+            torch.nn.Linear(time_embed_dim + cond_dim // 2, cond_dim),
+            torch.nn.SiLU(),
+            torch.nn.Linear(cond_dim, cond_dim),
         )
 
     def forward(self, t: Tensor, kind: Tensor) -> Tensor:
@@ -87,8 +85,7 @@ class ConditioningMLP(nn.Module):
 
         Returns
         -------
-        Tensor
-            Conditioning vector of shape (B, cond_dim).
+        Conditioning vector of shape (B, cond_dim).
         """
         t_emb = self.time_embed(t)
         k_emb = self.kind_embed(kind)

@@ -44,8 +44,7 @@ class DDPMSampler:
 
         Returns
         -------
-        Tensor
-            Samples of shape (B, 2, H, W).
+        Samples of shape (B, 2, H, W).
         """
         B = shape[0]
         if kind is None:

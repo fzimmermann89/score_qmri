@@ -3,7 +3,7 @@
 import math
 
 import torch
-import torchvision.transforms.functional as TF
+import torchvision.transforms.functional
 from torch import Tensor
 
 from .config import AugmentationConfig
@@ -17,7 +17,7 @@ class AugmentationPipeline:
 
     Parameters
     ----------
-    config : AugmentationConfig
+    config
         Augmentation configuration.
     """
 
@@ -29,19 +29,19 @@ class AugmentationPipeline:
 
         Parameters
         ----------
-        image : Tensor
+        image
             Image tensor of shape (H, W).
-        mask : Tensor
+        mask
             Mask tensor of shape (H, W).
 
         Returns
         -------
-        tuple[Tensor, Tensor]
+        tuple
             Augmented (image, mask).
         """
         if torch.rand(1).item() < self.config.flip_prob:
-            image = TF.hflip(image)
-            mask = TF.hflip(mask)
+            image = torchvision.transforms.functional.hflip(image)
+            mask = torchvision.transforms.functional.hflip(mask)
 
         if torch.rand(1).item() < self.config.geometric_prob:
             image, mask = self._geometric_transform(image, mask)
@@ -51,9 +51,7 @@ class AugmentationPipeline:
 
         return image, mask
 
-    def _geometric_transform(
-        self, image: Tensor, mask: Tensor
-    ) -> tuple[Tensor, Tensor]:
+    def _geometric_transform(self, image: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
         """Apply random affine transformation (scale, rotate, shear)."""
         cfg = self.config
 
@@ -66,14 +64,22 @@ class AugmentationPipeline:
         img_3d = image.unsqueeze(0)
         mask_3d = mask.float().unsqueeze(0)
 
-        img_out = TF.affine(
-            img_3d, angle=angle, translate=[0, 0], scale=scale,
-            shear=[shear_x, shear_y], interpolation=TF.InterpolationMode.BILINEAR,
+        img_out = torchvision.transforms.functional.affine(
+            img_3d,
+            angle=angle,
+            translate=[0, 0],
+            scale=scale,
+            shear=[shear_x, shear_y],
+            interpolation=torchvision.transforms.functional.InterpolationMode.BILINEAR,
             fill=0.0,
         )
-        mask_out = TF.affine(
-            mask_3d, angle=angle, translate=[0, 0], scale=scale,
-            shear=[shear_x, shear_y], interpolation=TF.InterpolationMode.NEAREST,
+        mask_out = torchvision.transforms.functional.affine(
+            mask_3d,
+            angle=angle,
+            translate=[0, 0],
+            scale=scale,
+            shear=[shear_x, shear_y],
+            interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST,
             fill=0.0,
         )
 
@@ -86,9 +92,13 @@ class AugmentationPipeline:
             return image
 
         img_norm = (image - img_min) / (img_max - img_min)
-        gamma = torch.empty(1).uniform_(
-            1.0 - self.config.contrast_strength,
-            1.0 + self.config.contrast_strength,
-        ).item()
+        gamma = (
+            torch.empty(1)
+            .uniform_(
+                1.0 - self.config.contrast_strength,
+                1.0 + self.config.contrast_strength,
+            )
+            .item()
+        )
 
         return img_norm.pow(gamma) * (img_max - img_min) + img_min

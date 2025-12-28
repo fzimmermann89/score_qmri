@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 import torch
-import torch.nn as nn
 from einops import rearrange
 from torch import Tensor
 
@@ -19,7 +18,7 @@ class DiffusionOutput:
     noise: Tensor
 
 
-class DiffusionModel(nn.Module):
+class DiffusionModel(torch.nn.Module):
     """Diffusion model predicting both clean image (x0) and noise."""
 
     betas: Tensor
@@ -90,8 +89,7 @@ class DiffusionModel(nn.Module):
 
         Returns
         -------
-        DiffusionOutput
-            Contains x0 and noise predictions.
+        Contains x0 and noise predictions.
         """
         cond = self.cond_mlp(t, kind)
         x0, noise = self.unet(x_t, cond)
@@ -112,8 +110,7 @@ class DiffusionModel(nn.Module):
 
         Returns
         -------
-        Tensor
-            Noisy images x_t.
+        Noisy images x_t.
         """
         if noise is None:
             noise = torch.randn_like(x0)
@@ -136,8 +133,7 @@ class DiffusionModel(nn.Module):
 
         Returns
         -------
-        Tensor
-            Predicted x0.
+        Predicted x0.
         """
         sqrt_alpha = rearrange(self.sqrt_alphas_cumprod[t], "b -> b 1 1 1")
         sqrt_one_minus = rearrange(self.sqrt_one_minus_alphas_cumprod[t], "b -> b 1 1 1")
@@ -160,8 +156,7 @@ class DiffusionModel(nn.Module):
 
         Returns
         -------
-        Tensor
-            Score of shape (B, 2, H, W).
+        Score of shape (B, 2, H, W).
         """
         output = self.forward(x_t, t, kind)
         sqrt_one_minus = rearrange(self.sqrt_one_minus_alphas_cumprod[t], "b -> b 1 1 1")
@@ -181,8 +176,7 @@ class DiffusionModel(nn.Module):
 
         Returns
         -------
-        Tensor
-            Two-channel tensor of shape (B, 2, H, W).
+        Two-channel tensor of shape (B, 2, H, W).
         """
         if image.ndim == 4 and image.shape[1] == 2:
             return image

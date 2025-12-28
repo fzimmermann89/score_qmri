@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-import torch.nn.functional as F
+import torch
 from torch import Tensor
 
 try:
@@ -36,11 +36,10 @@ def noise_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tens
 
     Returns
     -------
-    Tensor
-        Scalar loss value.
+    Scalar loss value.
     """
     if mask is None:
-        return F.mse_loss(pred, target)
+        return torch.nn.functional.mse_loss(pred, target)
     mask = mask.float()
     return ((pred - target).pow(2) * mask).sum() / mask.sum().clamp(min=1)
 
@@ -60,11 +59,10 @@ def l1_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tensor:
 
     Returns
     -------
-    Tensor
-        Scalar loss value.
+    Scalar loss value.
     """
     if mask is None:
-        return F.l1_loss(pred, target)
+        return torch.nn.functional.l1_loss(pred, target)
     mask = mask.float()
     return ((pred - target).abs() * mask).sum() / mask.sum().clamp(min=1)
 
@@ -84,8 +82,7 @@ def ssim_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tenso
 
     Returns
     -------
-    Tensor
-        Scalar loss value.
+    Scalar loss value.
 
     Raises
     ------
@@ -138,8 +135,7 @@ def compute_loss(
 
     Returns
     -------
-    LossOutput
-        Contains total loss and individual components.
+    Contains total loss and individual components.
     """
     loss_noise = noise_loss(noise_pred, noise_target, mask)
     loss_l1 = l1_loss(x0_pred, x0_target, mask)

@@ -46,10 +46,10 @@ def test_datamodule_hparams_saved():
         base_seed=123,
     )
 
-    assert dm.hparams.batch_size == 8  # type: ignore[attr-defined]
-    assert dm.hparams.num_workers == 2  # type: ignore[attr-defined]
-    assert dm.hparams.base_seed == 123  # type: ignore[attr-defined]
-    assert dm.hparams.schedule_ramp_steps == [5000]  # type: ignore[attr-defined]
+    assert dm.hparams.batch_size == 8
+    assert dm.hparams.num_workers == 2
+    assert dm.hparams.base_seed == 123
+    assert dm.hparams.schedule_ramp_steps == [5000]
 
 
 def test_datamodule_empty_configs():
