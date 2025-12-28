@@ -50,3 +50,10 @@ def test_datamodule_hparams_saved():
     assert dm.hparams.num_workers == 2  # type: ignore[attr-defined]
     assert dm.hparams.base_seed == 123  # type: ignore[attr-defined]
     assert dm.hparams.schedule_ramp_steps == [5000]  # type: ignore[attr-defined]
+
+
+def test_datamodule_empty_configs():
+    """Test MRIDataModule handles empty configs."""
+    dm = MRIDataModule(dataset_configs=[])
+    dm.setup("fit")
+    assert dm.concat_ds is None

@@ -35,7 +35,6 @@ class DiffusionLightningCLI(LightningCLI):
             return
 
         config = getattr(self.config, self.subcommand)
-
         experiment_name = config.experiment
 
         logger = WandbLogger(
@@ -49,12 +48,13 @@ class DiffusionLightningCLI(LightningCLI):
         config.trainer.logger = logger
 
         checkpoint_callback = ModelCheckpoint(
-            monitor="val/mse",
+            monitor="train/loss",
             mode="min",
             save_top_k=3,
             save_last=True,
             dirpath=f"{config.checkpoint_dir}/{experiment_name}",
-            filename="{epoch:02d}-{val_mse:.4f}",
+            filename="{step:06d}-{train_loss:.4f}",
+            every_n_train_steps=1000,
         )
 
         config.trainer.callbacks = [
@@ -63,7 +63,7 @@ class DiffusionLightningCLI(LightningCLI):
         ]
 
     def after_instantiate_classes(self) -> None:
-        """Log model summary after the model and logger are instantiated."""
+        """Log config to W&B after instantiation."""
         if self.subcommand is None:
             return
         if self.trainer.logger is not None and hasattr(self.trainer.logger, "experiment"):
@@ -74,9 +74,7 @@ class DiffusionLightningCLI(LightningCLI):
     def subcommands() -> dict[str, set[str]]:
         """Define trainer functions to use as subcommands of the CLI."""
         return {
-            "fit": {"model", "train_dataloaders", "val_dataloaders", "datamodule"},
-            "validate": {"model", "dataloaders", "datamodule"},
-            "test": {"model", "dataloaders", "datamodule"},
+            "fit": {"model", "train_dataloaders", "datamodule"},
             "predict": {"model", "dataloaders", "datamodule"},
         }
 
@@ -97,8 +95,9 @@ def main() -> None:
             "devices": "auto",
             "precision": "16-mixed",
             "log_every_n_steps": 10,
-            "val_check_interval": 1000,
             "gradient_clip_val": 1.0,
+            "enable_checkpointing": True,
+            "enable_progress_bar": True,
         },
     )
 

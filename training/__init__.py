@@ -1,14 +1,15 @@
 """Training components for diffusion models."""
 
 from .lightning_module import DiffusionLightningModule
-from .losses import LossScheduler, MSELoss, SSIML1Loss
+from .losses import compute_diffusion_loss, l1_loss, l_simple, ssim_l1_loss, ssim_loss
 from .phase_augmentation import PhaseAugmentation
 
 __all__ = [
-    "MSELoss",
-    "SSIML1Loss",
-    "LossScheduler",
+    "l_simple",
+    "l1_loss",
+    "ssim_loss",
+    "ssim_l1_loss",
+    "compute_diffusion_loss",
     "PhaseAugmentation",
     "DiffusionLightningModule",
 ]
-

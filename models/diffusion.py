@@ -1,4 +1,6 @@
-"""Diffusion model wrapper around UNet."""
+"""Diffusion model wrapper around UNet with dual prediction heads."""
+
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
@@ -9,14 +11,21 @@ from .film_conditioning import FilmConditioning
 from .unet import UNet
 
 
+@dataclass
+class DiffusionOutput:
+    """Output from diffusion model forward pass."""
+
+    x0_pred: Tensor  # Clean image prediction (B, 2, H, W)
+    noise_pred: Tensor  # Noise prediction (B, 2, H, W)
+
+
 class DiffusionModel(nn.Module):
     """Diffusion model with noise scheduling and FiLM conditioning.
 
-    Wraps a UNet denoiser with linear noise schedule and dataset-kind
-    conditioning via FiLM.
+    Predicts both clean image (x0) and noise (epsilon) from noisy input.
+    Uses dataset-kind conditioning via FiLM.
     """
 
-    # Declare buffer types for mypy
     betas: Tensor
     alphas: Tensor
     alphas_cumprod: Tensor
@@ -33,7 +42,8 @@ class DiffusionModel(nn.Module):
     ) -> None:
         super().__init__()
         self.num_timesteps = num_timesteps
-        self.unet = unet or UNet(in_channels=2, out_channels=2, use_film=True)
+        self.num_kinds = num_kinds
+        self.unet = unet or UNet(in_channels=2, base_channels=64, use_film=True)
         self.film_conditioning = FilmConditioning(num_kinds=num_kinds, num_blocks=self.unet.num_blocks)
 
         betas = torch.linspace(beta_start, beta_end, num_timesteps)
@@ -51,6 +61,13 @@ class DiffusionModel(nn.Module):
 
         For magnitude/mapping: stacks [data, zeros].
         For complex: passes through if already 2 channels.
+
+        Args:
+            image: Input image (B, H, W) or (B, 2, H, W).
+            kind: Dataset kind tensor (unused, kept for API compatibility).
+
+        Returns:
+            Two-channel tensor of shape (B, 2, H, W).
         """
         if image.ndim == 4 and image.shape[1] == 2:
             return image
@@ -62,12 +79,12 @@ class DiffusionModel(nn.Module):
         """Sample from forward diffusion q(x_t | x_0).
 
         Args:
-            x0: Clean images of shape (B, C, H, W).
+            x0: Clean images of shape (B, 2, H, W).
             t: Timesteps of shape (B,).
             noise: Optional noise tensor. If None, sampled from N(0, I).
 
         Returns:
-            Noisy images x_t of shape (B, C, H, W).
+            Noisy images x_t of shape (B, 2, H, W).
         """
         if noise is None:
             noise = torch.randn_like(x0)
@@ -76,17 +93,27 @@ class DiffusionModel(nn.Module):
         sqrt_one_minus: Tensor = rearrange(self.sqrt_one_minus_alphas_cumprod[t], "b -> b 1 1 1")
         return sqrt_alpha * x0 + sqrt_one_minus * noise
 
-    def forward(self, x_t: Tensor, t: Tensor, kind: Tensor) -> Tensor:
-        """Predict x0 from noisy x_t.
+    def forward(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput:
+        """Predict x0 and noise from noisy x_t.
 
         Args:
-            x_t: Noisy images of shape (B, C, H, W).
+            x_t: Noisy images of shape (B, 2, H, W).
             t: Timesteps of shape (B,).
             kind: Dataset kind of shape (B,).
 
         Returns:
-            Predicted x0 of shape (B, C, H, W).
+            DiffusionOutput with x0_pred and noise_pred.
         """
         film_params = self.film_conditioning(kind)
-        pred: Tensor = self.unet(x_t, film_params)
-        return pred
+        x0_pred, noise_pred = self.unet(x_t, film_params)
+        return DiffusionOutput(x0_pred=x0_pred, noise_pred=noise_pred)
+
+    def predict_x0_from_noise(self, x_t: Tensor, t: Tensor, noise_pred: Tensor) -> Tensor:
+        """Compute x0 prediction from noise prediction using diffusion formula.
+
+        x0 = (x_t - sqrt(1-alpha_bar) * noise) / sqrt(alpha_bar)
+        """
+        sqrt_alpha = rearrange(self.sqrt_alphas_cumprod[t], "b -> b 1 1 1")
+        sqrt_one_minus = rearrange(self.sqrt_one_minus_alphas_cumprod[t], "b -> b 1 1 1")
+        x0: Tensor = (x_t - sqrt_one_minus * noise_pred) / sqrt_alpha.clamp(min=1e-8)
+        return x0

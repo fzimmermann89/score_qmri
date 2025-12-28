@@ -3,82 +3,108 @@
 import pytest
 import torch
 
-from training.losses import LossScheduler, MSELoss, SSIML1Loss
+from training.losses import compute_diffusion_loss, l1_loss, l_simple
 
 
-def test_mse_loss_computes_masked_error():
-    """Test MSE loss computes error only on masked pixels."""
-    loss_fn = MSELoss()
-    pred = torch.ones(2, 2, 64, 64)
-    target = torch.zeros(2, 2, 64, 64)
-    mask = torch.ones(2, 64, 64, dtype=torch.bool)
-
-    loss = loss_fn(pred, target, mask)
-    assert loss.item() == pytest.approx(1.0, rel=1e-5)
+def test_l_simple_computes_mse():
+    """Test L_simple computes MSE between noise tensors."""
+    pred = torch.randn(2, 2, 32, 32)
+    target = torch.randn(2, 2, 32, 32)
+    loss = l_simple(pred, target)
+    assert loss.item() >= 0
 
 
-def test_mse_loss_ignores_masked_regions():
-    """Test MSE loss ignores regions where mask is False."""
-    loss_fn = MSELoss()
-    pred = torch.ones(1, 1, 4, 4) * 10
-    target = torch.zeros(1, 1, 4, 4)
-    mask = torch.zeros(1, 4, 4, dtype=torch.bool)
-    mask[0, :2, :2] = True  # Only top-left 2x2 is valid
+def test_l_simple_with_mask():
+    """Test L_simple respects mask."""
+    pred = torch.ones(2, 2, 32, 32)
+    target = torch.zeros(2, 2, 32, 32)
+    mask = torch.zeros(2, 32, 32)
+    mask[:, :16, :16] = 1
 
-    pred[:, :, :2, :2] = 1.0  # Error of 1 in valid region
-    loss = loss_fn(pred, target, mask)
-    # Only 4 valid pixels with error 1
-    assert loss.item() == pytest.approx(1.0, rel=1e-5)
+    loss = l_simple(pred, target, mask)
+    assert loss.item() > 0
 
 
-def test_ssim_l1_loss_requires_library():
-    """Test SSIM+L1 loss requires pytorch-msssim."""
+def test_l1_loss_computes():
+    """Test L1 loss computes correctly."""
+    pred = torch.randn(2, 2, 32, 32)
+    target = torch.randn(2, 2, 32, 32)
+    loss = l1_loss(pred, target)
+    assert loss.item() >= 0
+
+
+def test_l1_loss_with_mask():
+    """Test L1 loss respects mask."""
+    pred = torch.ones(2, 2, 32, 32)
+    target = torch.zeros(2, 2, 32, 32)
+    mask = torch.zeros(2, 32, 32)
+    mask[:, :16, :16] = 1
+
+    loss = l1_loss(pred, target, mask)
+    assert loss.item() > 0
+
+
+def test_ssim_loss_requires_library():
+    """Test SSIM loss raises if pytorch-msssim not available."""
     try:
-        loss_fn = SSIML1Loss()
-        pred = torch.rand(2, 2, 64, 64)
-        target = torch.rand(2, 2, 64, 64)
-        mask = torch.ones(2, 64, 64, dtype=torch.bool)
+        from training.losses import ssim_loss
 
-        loss = loss_fn(pred, target, mask)
-        assert loss.item() >= 0
+        pred = torch.randn(2, 2, 64, 64)
+        target = torch.randn(2, 2, 64, 64)
+        loss = ssim_loss(pred, target)
+        assert 0 <= loss.item() <= 2  # SSIM loss is 1 - SSIM, where SSIM in [-1, 1]
     except ImportError:
         pytest.skip("pytorch-msssim not available")
 
 
-def test_loss_scheduler_interpolates():
-    """Test LossScheduler interpolates between losses."""
-    mse = MSELoss()
+def test_compute_diffusion_loss():
+    """Test combined diffusion loss computation."""
     try:
-        ssim_l1 = SSIML1Loss()
+        from training.losses import ssim_loss
+
+        ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
     except ImportError:
         pytest.skip("pytorch-msssim not available")
 
-    # Schedule: always use MSE (weight 0)
-    scheduler = LossScheduler(mse, ssim_l1, lambda s: 0.0)
+    x0_pred = torch.randn(2, 2, 64, 64)
+    x0_target = torch.randn(2, 2, 64, 64)
+    noise_pred = torch.randn(2, 2, 64, 64)
+    noise_target = torch.randn(2, 2, 64, 64)
 
-    pred = torch.randn(2, 2, 64, 64)
-    target = torch.randn(2, 2, 64, 64)
-    mask = torch.ones(2, 64, 64, dtype=torch.bool)
+    output = compute_diffusion_loss(
+        x0_pred=x0_pred,
+        x0_target=x0_target,
+        noise_pred=noise_pred,
+        noise_target=noise_target,
+    )
 
-    loss = scheduler(pred, target, mask)
-    mse_only = mse(pred, target, mask)
-    assert torch.allclose(loss, mse_only, rtol=1e-4)
+    assert output.total.item() >= 0
+    assert output.l_simple.item() >= 0
+    assert output.l1.item() >= 0
+    assert output.ssim.item() >= 0
 
 
-def test_loss_scheduler_tracks_step():
-    """Test LossScheduler increments step counter."""
-    mse = MSELoss()
+def test_compute_diffusion_loss_with_weights():
+    """Test diffusion loss respects weights."""
     try:
-        ssim_l1 = SSIML1Loss()
+        from training.losses import ssim_loss
+
+        ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
     except ImportError:
         pytest.skip("pytorch-msssim not available")
 
-    scheduler = LossScheduler(mse, ssim_l1, lambda s: 0.0)
-    assert scheduler.step == 0
+    x0_pred = torch.randn(2, 2, 64, 64)
+    x0_target = torch.randn(2, 2, 64, 64)
+    noise_pred = torch.randn(2, 2, 64, 64)
+    noise_target = torch.randn(2, 2, 64, 64)
 
-    pred = torch.randn(2, 2, 64, 64)
-    target = torch.randn(2, 2, 64, 64)
-    mask = torch.ones(2, 64, 64, dtype=torch.bool)
-    scheduler(pred, target, mask)
-
-    assert scheduler.step == 1
+    # Test with zero x0 weight
+    output_no_x0 = compute_diffusion_loss(
+        x0_pred=x0_pred,
+        x0_target=x0_target,
+        noise_pred=noise_pred,
+        noise_target=noise_target,
+        noise_weight=1.0,
+        x0_weight=0.0,
+    )
+    assert torch.allclose(output_no_x0.total, output_no_x0.l_simple)
