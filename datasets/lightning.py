@@ -18,7 +18,24 @@ from .mapping import MappingDataset
 def create_dataset_from_config(
     config: dict[str, Any],
 ) -> ComplexImageDataset | MagnitudeImageDataset | MappingDataset:
-    """Create a dataset from configuration dictionary."""
+    """
+    Create a dataset from configuration dictionary.
+
+    Parameters
+    ----------
+    config
+        Configuration dict with keys: type, h5_path, and dataset-specific params.
+
+    Returns
+    -------
+    Dataset
+        Created dataset instance.
+
+    Raises
+    ------
+    ValueError
+        If h5_path is missing or type is unknown.
+    """
     dataset_type = config.get("type")
     h5_path = config.get("h5_path")
 
@@ -49,24 +66,18 @@ def create_dataset_from_config(
                 kind=config.get("kind", 2),
             )
         case _:
-            raise ValueError(f"Unknown dataset type: {dataset_type}. Must be 'complex', 'magnitude', or 'mapping'")
+            raise ValueError(f"Unknown dataset type: {dataset_type}")
 
 
 def _linear_schedule(target_step: int) -> Callable[[int], float]:
-    """Create a linear schedule that goes from 0 to 1 at target_step."""
+    """Create linear schedule from 0 to 1 at target_step."""
     def schedule(step: int) -> float:
-        if target_step <= 0:
-            return 1.0
-        return min(1.0, step / target_step)
+        return 1.0 if target_step <= 0 else min(1.0, step / target_step)
     return schedule
 
 
 class MRIDataModule(LightningDataModule):
-    """PyTorch Lightning DataModule for MRI training datasets.
-
-    Supports scheduled sampling across multiple dataset types.
-    No validation/test datasets - validation is done via sampling.
-    """
+    """DataModule for MRI training datasets with scheduled sampling."""
 
     def __init__(
         self,
@@ -75,19 +86,22 @@ class MRIDataModule(LightningDataModule):
         batch_size: int = 8,
         num_workers: int = 4,
         base_seed: int = 42,
-    ):
-        """Initialize the DataModule.
+    ) -> None:
+        """
+        Initialize MRI data module.
 
-        Args:
-            dataset_configs: List of dataset configuration dicts with keys:
-                - type: 'complex', 'magnitude', or 'mapping'
-                - h5_path: Path to HDF5 file
-                - Additional dataset-specific params
-            schedule_ramp_steps: Steps at which each dataset reaches full weight.
-                If None, all datasets are weighted equally.
-            batch_size: Training batch size.
-            num_workers: DataLoader workers.
-            base_seed: Random seed for reproducibility.
+        Parameters
+        ----------
+        dataset_configs
+            List of dataset configuration dicts with keys: type, h5_path, etc.
+        schedule_ramp_steps
+            Steps at which each dataset reaches full weight.
+        batch_size
+            Training batch size.
+        num_workers
+            DataLoader workers.
+        base_seed
+            Random seed for reproducibility.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -102,10 +116,8 @@ class MRIDataModule(LightningDataModule):
         self.size_labels: list[tuple[int, int]] | None = None
 
     def setup(self, stage: str) -> None:
-        if stage == "fit" or stage is None:
-            if not self.dataset_configs:
-                return
-
+        """Set up datasets for training."""
+        if (stage == "fit" or stage is None) and self.dataset_configs:
             datasets = [create_dataset_from_config(cfg) for cfg in self.dataset_configs]
             self.concat_ds = create_concat_dataset(datasets)
             self.size_labels = get_size_labels(datasets)
@@ -113,21 +125,21 @@ class MRIDataModule(LightningDataModule):
     def _create_schedule_functions(self) -> list[Callable[[int], float]]:
         """Create schedule functions from ramp steps."""
         if self.schedule_ramp_steps is None:
-            n_datasets = len(self.dataset_configs)
-            return [lambda _: 1.0 / n_datasets] * n_datasets
+            n = len(self.dataset_configs)
+            return [lambda _: 1.0 / n] * n
         return [_linear_schedule(steps) for steps in self.schedule_ramp_steps]
 
     def train_dataloader(self) -> DataLoader:
+        """Create training dataloader with scheduled batch sampler."""
         if self.concat_ds is None or self.size_labels is None:
             raise RuntimeError("Must call setup() before train_dataloader()")
 
         rank = self.trainer.global_rank if self.trainer is not None else int(os.environ.get("LOCAL_RANK", 0))
-        schedule_functions = self._create_schedule_functions()
 
         batch_sampler = ScheduledBatchSampler(
             self.concat_ds,
             self.size_labels,
-            schedule_functions,
+            self._create_schedule_functions(),
             batch_size=self.batch_size,
             base_seed=self.base_seed,
             rank=rank,

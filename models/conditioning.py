@@ -11,10 +11,31 @@ class SinusoidalEmbedding(nn.Module):
     """Sinusoidal positional embedding for timesteps."""
 
     def __init__(self, dim: int) -> None:
+        """
+        Initialize sinusoidal embedding.
+
+        Parameters
+        ----------
+        dim
+            Output embedding dimension.
+        """
         super().__init__()
         self.dim = dim
 
     def forward(self, t: Tensor) -> Tensor:
+        """
+        Embed timesteps.
+
+        Parameters
+        ----------
+        t
+            Timesteps of shape (B,).
+
+        Returns
+        -------
+        Tensor
+            Embeddings of shape (B, dim).
+        """
         device = t.device
         half_dim = self.dim // 2
         freqs = torch.exp(torch.arange(half_dim, device=device) * -(math.log(10000) / (half_dim - 1)))
@@ -24,13 +45,7 @@ class SinusoidalEmbedding(nn.Module):
 
 
 class ConditioningMLP(nn.Module):
-    """MLP that combines timestep and dataset kind into conditioning vector.
-
-    Args:
-        num_kinds: Number of dataset types.
-        cond_dim: Output conditioning dimension.
-        time_embed_dim: Intermediate timestep embedding dimension.
-    """
+    """MLP combining timestep and dataset kind into conditioning vector."""
 
     def __init__(
         self,
@@ -38,10 +53,21 @@ class ConditioningMLP(nn.Module):
         cond_dim: int = 128,
         time_embed_dim: int = 64,
     ) -> None:
+        """
+        Initialize conditioning MLP.
+
+        Parameters
+        ----------
+        num_kinds
+            Number of dataset types.
+        cond_dim
+            Output conditioning dimension.
+        time_embed_dim
+            Intermediate timestep embedding dimension.
+        """
         super().__init__()
         self.time_embed = SinusoidalEmbedding(time_embed_dim)
         self.kind_embed = nn.Embedding(num_kinds, cond_dim // 2)
-
         self.mlp = nn.Sequential(
             nn.Linear(time_embed_dim + cond_dim // 2, cond_dim),
             nn.SiLU(),
@@ -49,13 +75,19 @@ class ConditioningMLP(nn.Module):
         )
 
     def forward(self, t: Tensor, kind: Tensor) -> Tensor:
-        """Embed timestep and kind into conditioning vector.
+        """
+        Embed timestep and kind into conditioning vector.
 
-        Args:
-            t: Timesteps of shape (B,).
-            kind: Dataset kind indices of shape (B,).
+        Parameters
+        ----------
+        t
+            Timesteps of shape (B,).
+        kind
+            Dataset kind indices of shape (B,).
 
-        Returns:
+        Returns
+        -------
+        Tensor
             Conditioning vector of shape (B, cond_dim).
         """
         t_emb = self.time_embed(t)

@@ -15,34 +15,62 @@ from training.losses import compute_loss
 
 
 class DiffusionLightningModule(LightningModule):
-    """Lightning module for diffusion training.
-
-    All parameters are CLI-configurable.
-    """
+    """Lightning module for diffusion training with dual prediction heads."""
 
     def __init__(
         self,
-        # Model architecture
         base_channels: int = 64,
         num_blocks: int = 4,
         cond_dim: int = 128,
-        # Diffusion settings
         num_kinds: int = 3,
         num_timesteps: int = 1000,
         beta_start: float = 0.0001,
         beta_end: float = 0.02,
-        # Training
         learning_rate: float = 1e-4,
-        # Loss weights
         noise_weight: float = 1.0,
         x0_weight: float = 0.1,
         ssim_weight: float = 0.5,
         l1_weight: float = 0.5,
-        # Validation
         validation_size: int = 128,
         validation_steps: int = 100,
         validation_interval: int = 1000,
     ) -> None:
+        """
+        Initialize diffusion training module.
+
+        Parameters
+        ----------
+        base_channels
+            UNet base channel count.
+        num_blocks
+            UNet encoder/decoder depth.
+        cond_dim
+            Conditioning embedding dimension.
+        num_kinds
+            Number of dataset types for conditioning.
+        num_timesteps
+            Total diffusion timesteps.
+        beta_start
+            Starting noise schedule value.
+        beta_end
+            Ending noise schedule value.
+        learning_rate
+            Optimizer learning rate.
+        noise_weight
+            Weight for noise prediction loss.
+        x0_weight
+            Weight for clean image prediction loss.
+        ssim_weight
+            SSIM weight within x0 loss.
+        l1_weight
+            L1 weight within x0 loss.
+        validation_size
+            Image size for validation sampling.
+        validation_steps
+            DDIM sampling steps for validation.
+        validation_interval
+            Steps between validation samples.
+        """
         super().__init__()
         self.save_hyperparameters()
 
@@ -59,7 +87,7 @@ class DiffusionLightningModule(LightningModule):
         self._fixed_noise: dict[int, Tensor] | None = None
 
     def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:
-        """Training step: compute and log losses."""
+        """Compute training loss and log metrics."""
         x0 = DiffusionModel.prepare_input(batch["image"])
         mask = rearrange(batch["mask"], "b h w -> b 1 h w").expand_as(x0)
         kind = batch["kind"]
@@ -83,14 +111,19 @@ class DiffusionLightningModule(LightningModule):
         }, prog_bar=True)
         return losses.total
 
-    def on_train_batch_end(self, outputs: Tensor | Mapping[str, Any] | None, batch: Any, batch_idx: int) -> None:
-        """Log validation samples at intervals."""
+    def on_train_batch_end(
+        self,
+        outputs: Tensor | Mapping[str, Any] | None,
+        batch: Any,
+        batch_idx: int,
+    ) -> None:
+        """Log validation samples at specified intervals."""
         hp = self.hparams
         if self.global_step > 0 and self.global_step % hp.validation_interval == 0:  # type: ignore[attr-defined]
             self._log_samples()
 
     def _log_samples(self) -> None:
-        """Generate and log samples for each dataset kind."""
+        """Generate and log samples for each dataset kind to W&B."""
         if not isinstance(self.logger, WandbLogger):
             return
 
@@ -113,4 +146,5 @@ class DiffusionLightningModule(LightningModule):
         self.model.train()
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
+        """Configure AdamW optimizer."""
         return torch.optim.AdamW(self.model.parameters(), lr=self.hparams.learning_rate)  # type: ignore[attr-defined]
