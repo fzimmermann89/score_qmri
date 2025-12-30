@@ -6,6 +6,7 @@ from torch import Tensor
 
 from .base import BaseMRIDataset
 from .config import AugmentationConfig
+from .kind import DatasetKind
 
 
 class MappingDataset(BaseMRIDataset):
@@ -17,7 +18,7 @@ class MappingDataset(BaseMRIDataset):
         dataset_path: str,
         scaling_factor: float,
         augmentation_config: AugmentationConfig | None = None,
-        kind: int = 2,
+        kind: DatasetKind = DatasetKind.T1MAP,
     ):
         self.dataset_path = dataset_path
         self.scaling_factor = scaling_factor

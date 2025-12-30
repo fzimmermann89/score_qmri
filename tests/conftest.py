@@ -71,7 +71,6 @@ def sample_mapping_data():
 def augmentation_config():
     """Create augmentation config for testing."""
     return AugmentationConfig(
-        flip_prob=0.5,
         geometric_prob=0.3,
         contrast_prob=0.3,
         scale_range=(0.9, 1.2),

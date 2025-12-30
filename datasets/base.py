@@ -3,6 +3,7 @@
 import contextlib
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 
 import h5py
 import torch
@@ -11,9 +12,10 @@ from torch.utils.data import Dataset
 
 from .augmentation import AugmentationPipeline
 from .config import AugmentationConfig
+from .kind import DatasetKind
 
 
-class BaseMRIDataset(Dataset, ABC):
+class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
     """Base class for MRI datasets with H5 file handling.
 
     Handles H5 file lifecycle: counts slices in __init__ and closes file,
@@ -24,13 +26,11 @@ class BaseMRIDataset(Dataset, ABC):
         self,
         h5_path: str,
         augmentation_config: AugmentationConfig | None = None,
-        kind: int = 0,
+        kind: DatasetKind = DatasetKind.COMPLEX_T1W_COILWISE,
     ) -> None:
         self.h5_path = str(Path(h5_path).resolve())
         self.kind = kind
-        self.augmentation = (
-            AugmentationPipeline(augmentation_config) if augmentation_config else None
-        )
+        self.augmentation = AugmentationPipeline(augmentation_config) if augmentation_config else None
         self._h5_file: h5py.File | None = None
 
         with h5py.File(self.h5_path, "r") as f:
@@ -61,7 +61,7 @@ class BaseMRIDataset(Dataset, ABC):
     def __len__(self) -> int:
         return self.num_slices
 
-    def __getitem__(self, idx: int) -> dict[str, Tensor]:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         """Get sample with image, mask, and kind tensors."""
         image = self._load_slice(self._get_h5_file(), idx)
         mask = image != 0
@@ -72,7 +72,7 @@ class BaseMRIDataset(Dataset, ABC):
         return {
             "image": image,
             "mask": mask,
-            "kind": torch.tensor(self.kind, dtype=torch.long),
+            "kind": torch.tensor(self.kind.value, dtype=torch.long),
         }
 
     def __del__(self) -> None:

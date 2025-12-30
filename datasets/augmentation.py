@@ -1,96 +1,68 @@
 """Augmentation pipeline for MRI data."""
 
-import math
-
+import kornia.augmentation as K
 import torch
-import torchvision.transforms.functional
 from torch import Tensor
 
 from .config import AugmentationConfig
 
 
 class AugmentationPipeline:
-    """Pipeline for spatial and intensity augmentations.
-
-    Applies flip, geometric (scale/rotate/shear), and contrast augmentations
-    with configurable probabilities.
-
-    Parameters
-    ----------
-    config
-        Augmentation configuration.
-    """
+    """Spatial and intensity augmentations for MRI images."""
 
     def __init__(self, config: AugmentationConfig) -> None:
         self.config = config
+        self._affine_img = K.RandomAffine(
+            degrees=config.rotation_range,
+            translate=(0.02, 0.02),
+            scale=config.scale_range,
+            shear=config.shear_range,
+            resample="bilinear",
+            p=1.0,
+        )
+        self._affine_mask = K.RandomAffine(
+            degrees=config.rotation_range,
+            translate=(0.02, 0.02),
+            scale=config.scale_range,
+            shear=config.shear_range,
+            resample="nearest",
+            p=1.0,
+        )
+        self._hflip = K.RandomHorizontalFlip(p=0.5)
 
     def __call__(self, image: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
-        """Apply augmentations to image and mask.
+        """Apply augmentations to image (H, W) and mask (H, W)."""
+        shift_x = torch.randint(-10, 11, (1,)).item()
+        shift_y = torch.randint(-10, 11, (1,)).item()
+        image = torch.roll(image, shifts=(shift_y, shift_x), dims=(0, 1))
+        mask = torch.roll(mask, shifts=(shift_y, shift_x), dims=(0, 1))
 
-        Parameters
-        ----------
-        image
-            Image tensor of shape (H, W).
-        mask
-            Mask tensor of shape (H, W).
-
-        Returns
-        -------
-        tuple
-            Augmented (image, mask).
-        """
-        if torch.rand(1).item() < self.config.flip_prob:
-            image = torchvision.transforms.functional.hflip(image)
-            mask = torchvision.transforms.functional.hflip(mask)
+        img_4d = image[None, None]
+        mask_4d = mask[None, None].float()
+        image = self._hflip(img_4d)[0, 0]
+        mask = self._hflip(mask_4d, params=self._hflip._params)[0, 0].bool()
 
         if torch.rand(1).item() < self.config.geometric_prob:
-            image, mask = self._geometric_transform(image, mask)
+            image, mask = self._apply_affine(image, mask)
 
         if torch.rand(1).item() < self.config.contrast_prob:
-            image = self._contrast_transform(image)
+            image = self._apply_gamma(image)
 
         return image, mask
 
-    def _geometric_transform(self, image: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
-        """Apply random affine transformation (scale, rotate, shear)."""
-        cfg = self.config
+    def _apply_affine(self, image: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
+        """Random affine (scale, rotate, shear, translate)."""
+        img_4d = image[None, None]
+        mask_4d = mask[None, None].float()
+        img_out = self._affine_img(img_4d)
+        mask_out = self._affine_mask(mask_4d, params=self._affine_img._params)
+        return img_out[0, 0], mask_out[0, 0].bool()
 
-        angle = torch.empty(1).uniform_(*cfg.rotation_range).item()
-        scale = torch.empty(1).uniform_(*cfg.scale_range).item()
-        shear_x = torch.empty(1).uniform_(*cfg.shear_range).item() * (180 / math.pi)
-        shear_y = torch.empty(1).uniform_(*cfg.shear_range).item() * (180 / math.pi)
-
-        # torchvision expects (C, H, W) input
-        img_3d = image.unsqueeze(0)
-        mask_3d = mask.float().unsqueeze(0)
-
-        img_out = torchvision.transforms.functional.affine(
-            img_3d,
-            angle=angle,
-            translate=[0, 0],
-            scale=scale,
-            shear=[shear_x, shear_y],
-            interpolation=torchvision.transforms.functional.InterpolationMode.BILINEAR,
-            fill=0.0,
-        )
-        mask_out = torchvision.transforms.functional.affine(
-            mask_3d,
-            angle=angle,
-            translate=[0, 0],
-            scale=scale,
-            shear=[shear_x, shear_y],
-            interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST,
-            fill=0.0,
-        )
-
-        return img_out.squeeze(0), mask_out.squeeze(0).bool()
-
-    def _contrast_transform(self, image: Tensor) -> Tensor:
-        """Apply random gamma correction."""
+    def _apply_gamma(self, image: Tensor) -> Tensor:
+        """Random gamma correction."""
         img_min, img_max = image.min(), image.max()
         if img_max <= img_min:
             return image
-
         img_norm = (image - img_min) / (img_max - img_min)
         gamma = (
             torch.empty(1)
@@ -100,5 +72,4 @@ class AugmentationPipeline:
             )
             .item()
         )
-
         return img_norm.pow(gamma) * (img_max - img_min) + img_min

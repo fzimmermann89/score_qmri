@@ -32,7 +32,8 @@ class SinusoidalEmbedding(torch.nn.Module):
 
         Returns
         -------
-        Embeddings of shape (B, dim).
+        Tensor
+            Embeddings of shape (B, dim).
         """
         device = t.device
         half_dim = self.dim // 2
@@ -85,7 +86,8 @@ class ConditioningMLP(torch.nn.Module):
 
         Returns
         -------
-        Conditioning vector of shape (B, cond_dim).
+        Tensor
+            Conditioning vector of shape (B, cond_dim).
         """
         t_emb = self.time_embed(t)
         k_emb = self.kind_embed(kind)

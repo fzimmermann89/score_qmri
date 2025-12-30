@@ -13,6 +13,7 @@ dependencies = [
     "wandb>=0.15.0",
     "pytorch-msssim>=1.0.0",
     "einops>=0.7.0",
+    "kornia>=0.7.0",
 ]
 
 [project.optional-dependencies]

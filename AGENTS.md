@@ -170,4 +170,3 @@ prefer moveaxis instead of permute (and einops.rearrange over permute)
 
 ## Imports
 - do not impofr torch.nn as nn, or torch.nn.functional as F. Just use full path in the code.
-

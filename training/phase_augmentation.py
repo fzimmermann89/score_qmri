@@ -67,9 +67,7 @@ class PhaseAugmentation:
             return aug_real.squeeze(0), aug_imag.squeeze(0)
         return aug_real, aug_imag
 
-    def _generate_phase_field(
-        self, B: int, H: int, W: int, device: torch.device, dtype: torch.dtype
-    ) -> Tensor:
+    def _generate_phase_field(self, B: int, H: int, W: int, device: torch.device, dtype: torch.dtype) -> Tensor:
         """Generate polynomial phase fields: a + bx + cy + dxy + ex² + fy².
 
         Coordinates are normalized to [-1, 1] for numerical stability.

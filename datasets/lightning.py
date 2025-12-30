@@ -11,6 +11,7 @@ from torch.utils.data import ConcatDataset, DataLoader
 from .batch_sampler import ScheduledBatchSampler
 from .complex import ComplexImageDataset
 from .concat import create_concat_dataset, get_size_labels
+from .kind import DatasetKind
 from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
 
@@ -42,20 +43,30 @@ def create_dataset_from_config(
     if not isinstance(h5_path, str):
         raise ValueError("h5_path must be a string in dataset configuration")
 
+    def _get_kind(kind_value: int | DatasetKind | None, default: DatasetKind) -> DatasetKind:
+        """Convert kind value to DatasetKind enum."""
+        if kind_value is None:
+            return default
+        if isinstance(kind_value, DatasetKind):
+            return kind_value
+        if isinstance(kind_value, int):
+            return DatasetKind(kind_value)
+        raise ValueError(f"kind must be int or DatasetKind, got {type(kind_value)}")
+
     match dataset_type:
         case "complex":
             return ComplexImageDataset(
                 h5_path=h5_path,
                 mode=config.get("mode", "combined"),
                 augmentation_config=config.get("augmentation_config"),
-                kind=config.get("kind", 0),
+                kind=_get_kind(config.get("kind"), DatasetKind.COMPLEX_T1W_COILWISE),
             )
         case "magnitude":
             return MagnitudeImageDataset(
                 h5_path=h5_path,
                 dataset_path=config.get("dataset_path", "magnitude"),
                 augmentation_config=config.get("augmentation_config"),
-                kind=config.get("kind", 1),
+                kind=_get_kind(config.get("kind"), DatasetKind.T1W_MAGNITUDE),
             )
         case "mapping":
             return MappingDataset(
@@ -63,7 +74,7 @@ def create_dataset_from_config(
                 dataset_path=config.get("dataset_path", "mapping"),
                 scaling_factor=config.get("scaling_factor", 1.0),
                 augmentation_config=config.get("augmentation_config"),
-                kind=config.get("kind", 2),
+                kind=_get_kind(config.get("kind"), DatasetKind.T1MAP),
             )
         case _:
             raise ValueError(f"Unknown dataset type: {dataset_type}")
@@ -71,8 +82,19 @@ def create_dataset_from_config(
 
 def _linear_schedule(target_step: int) -> Callable[[int], float]:
     """Create linear schedule from 0 to 1 at target_step."""
+
     def schedule(step: int) -> float:
         return 1.0 if target_step <= 0 else min(1.0, step / target_step)
+
+    return schedule
+
+
+def _constant_schedule(weight: float) -> Callable[[int], float]:
+    """Create constant schedule returning fixed weight."""
+
+    def schedule(_: int) -> float:
+        return weight
+
     return schedule
 
 
@@ -126,7 +148,8 @@ class MRIDataModule(LightningDataModule):
         """Create schedule functions from ramp steps."""
         if self.schedule_ramp_steps is None:
             n = len(self.dataset_configs)
-            return [lambda _: 1.0 / n] * n
+            weight = 1.0 / n
+            return [_constant_schedule(weight) for _ in range(n)]
         return [_linear_schedule(steps) for steps in self.schedule_ramp_steps]
 
     def train_dataloader(self) -> DataLoader:

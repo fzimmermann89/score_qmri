@@ -9,6 +9,7 @@ from lightning import LightningModule
 from lightning.pytorch.loggers import WandbLogger
 from torch import Tensor
 
+from datasets.kind import NUM_DATASET_KINDS
 from models.diffusion import DiffusionModel
 from sampling.ddim_sampler import DDIMSampler, create_fixed_noise
 from training.losses import compute_loss
@@ -22,10 +23,8 @@ class DiffusionLightningModule(LightningModule):
         base_channels: int = 64,
         num_blocks: int = 4,
         cond_dim: int = 128,
-        num_kinds: int = 3,
-        num_timesteps: int = 1000,
-        beta_start: float = 0.0001,
-        beta_end: float = 0.02,
+        beta_min: float = 0.1,
+        beta_max: float = 20.0,
         learning_rate: float = 1e-4,
         noise_weight: float = 1.0,
         x0_weight: float = 0.1,
@@ -36,8 +35,6 @@ class DiffusionLightningModule(LightningModule):
         validation_interval: int = 1000,
     ) -> None:
         """
-        Initialize diffusion training module.
-
         Parameters
         ----------
         base_channels
@@ -46,14 +43,10 @@ class DiffusionLightningModule(LightningModule):
             UNet encoder/decoder depth.
         cond_dim
             Conditioning embedding dimension.
-        num_kinds
-            Number of dataset types for conditioning.
-        num_timesteps
-            Total diffusion timesteps.
-        beta_start
-            Starting noise schedule value.
-        beta_end
-            Ending noise schedule value.
+        beta_min
+            Minimum noise rate at t=0.
+        beta_max
+            Maximum noise rate at t=1.
         learning_rate
             Optimizer learning rate.
         noise_weight
@@ -75,15 +68,14 @@ class DiffusionLightningModule(LightningModule):
         self.save_hyperparameters()
 
         self.model = DiffusionModel(
-            num_kinds=num_kinds,
-            num_timesteps=num_timesteps,
-            beta_start=beta_start,
-            beta_end=beta_end,
+            num_kinds=NUM_DATASET_KINDS,
+            beta_min=beta_min,
+            beta_max=beta_max,
             base_channels=base_channels,
             num_blocks=num_blocks,
             cond_dim=cond_dim,
         )
-        self.sampler = DDIMSampler(self.model, num_steps=validation_steps)
+        self.sampler: DDIMSampler = DDIMSampler(self.model, num_steps=validation_steps)
         self._fixed_noise: dict[int, Tensor] | None = None
 
     def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:
@@ -92,23 +84,32 @@ class DiffusionLightningModule(LightningModule):
         mask = rearrange(batch["mask"], "b h w -> b 1 h w").expand_as(x0)
         kind = batch["kind"]
 
-        t = torch.randint(0, self.model.num_timesteps, (x0.shape[0],), device=self.device)
+        t = torch.rand(x0.shape[0], device=self.device)
         noise = torch.randn_like(x0)
         x_t = self.model.q_sample(x0, t, noise)
 
         output = self.model(x_t, t, kind)
-        hp = self.hparams
         losses = compute_loss(
-            output.x0, x0, output.noise, noise, mask,
-            hp.noise_weight, hp.x0_weight, hp.ssim_weight, hp.l1_weight,
+            output.x0,
+            x0,
+            output.noise,
+            noise,
+            mask,
+            self.hparams.noise_weight,
+            self.hparams.x0_weight,
+            self.hparams.ssim_weight,
+            self.hparams.l1_weight,
         )
 
-        self.log_dict({
-            "train/loss": losses.total,
-            "train/noise_mse": losses.noise_mse,
-            "train/x0_l1": losses.x0_l1,
-            "train/x0_ssim": losses.x0_ssim,
-        }, prog_bar=True)
+        self.log_dict(
+            {
+                "train/loss": losses.total,
+                "train/noise_mse": losses.noise_mse,
+                "train/x0_l1": losses.x0_l1,
+                "train/x0_ssim": losses.x0_ssim,
+            },
+            prog_bar=True,
+        )
         return losses.total
 
     def on_train_batch_end(
@@ -118,8 +119,7 @@ class DiffusionLightningModule(LightningModule):
         batch_idx: int,
     ) -> None:
         """Log validation samples at specified intervals."""
-        hp = self.hparams
-        if self.global_step > 0 and self.global_step % hp.validation_interval == 0:
+        if self.global_step > 0 and self.global_step % self.hparams.validation_interval == 0:
             self._log_samples()
 
     def _log_samples(self) -> None:
@@ -130,14 +130,13 @@ class DiffusionLightningModule(LightningModule):
         import wandb
 
         self.model.eval()
-        hp = self.hparams
-        size = hp.validation_size
+        size = self.hparams.validation_size
 
         if self._fixed_noise is None:
-            self._fixed_noise = create_fixed_noise(hp.num_kinds, (size, size))
+            self._fixed_noise = create_fixed_noise((size, size))
 
         images = []
-        for k in range(hp.num_kinds):
+        for k in range(self.model.num_kinds):
             kind = torch.tensor([k], device=self.device)
             sample = self.sampler.sample((1, 2, size, size), self.device, kind, self._fixed_noise[k])
             images.append(wandb.Image(sample[0, 0].cpu().numpy(), caption=f"kind_{k}"))

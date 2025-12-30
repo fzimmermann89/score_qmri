@@ -68,7 +68,9 @@ class DiffusionLightningCLI(LightningCLI):
             return
         if self.trainer.logger is not None and hasattr(self.trainer.logger, "experiment"):
             config = getattr(self.config, self.subcommand)
-            self.trainer.logger.experiment.config.update({"cli_config": config.as_dict()})
+            experiment = self.trainer.logger.experiment
+            if hasattr(experiment, "config") and hasattr(experiment.config, "update"):
+                experiment.config.update({"cli_config": config.as_dict()})
 
     @staticmethod
     def subcommands() -> dict[str, set[str]]:

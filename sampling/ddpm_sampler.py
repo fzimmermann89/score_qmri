@@ -1,29 +1,27 @@
 """DDPM sampler for diffusion models."""
 
 import torch
+from einops import rearrange
 from torch import Tensor
 
 from models.diffusion import DiffusionModel
 
 
 class DDPMSampler:
-    """DDPM reverse diffusion sampler."""
+    """DDPM sampler with continuous time."""
 
-    def __init__(self, model: DiffusionModel, num_steps: int | None = None) -> None:
+    def __init__(self, model: DiffusionModel, num_steps: int = 1000) -> None:
         """
-        Initialize DDPM sampler.
-
         Parameters
         ----------
         model
             Diffusion model instance.
         num_steps
-            Number of sampling steps. Defaults to model's num_timesteps.
+            Number of sampling steps.
         """
         self.model = model
-        self.num_steps = num_steps or model.num_timesteps
+        self.num_steps = num_steps
 
-    @torch.no_grad()
     def sample(
         self,
         shape: tuple[int, ...],
@@ -31,7 +29,7 @@ class DDPMSampler:
         kind: Tensor | None = None,
     ) -> Tensor:
         """
-        Sample from model using DDPM.
+        Sample from model using DDPM reverse process.
 
         Parameters
         ----------
@@ -41,40 +39,40 @@ class DDPMSampler:
             Computation device.
         kind
             Dataset kind indices of shape (B,). Defaults to zeros.
-
-        Returns
-        -------
-        Samples of shape (B, 2, H, W).
         """
-        B = shape[0]
-        if kind is None:
-            kind = torch.zeros(B, dtype=torch.long, device=device)
+        with torch.no_grad():
+            B = shape[0]
+            if kind is None:
+                kind = torch.zeros(B, dtype=torch.long, device=device)
 
-        x = torch.randn(shape, device=device)
-        timesteps = torch.linspace(self.model.num_timesteps - 1, 0, self.num_steps, device=device).long()
+            x = torch.randn(shape, device=device)
+            timesteps = torch.linspace(1.0, 0.0, self.num_steps + 1, device=device)
 
-        for t in timesteps:
-            x = self._step(x, t.expand(B), kind)
+            for i in range(self.num_steps):
+                t = timesteps[i].expand(B)
+                t_prev = timesteps[i + 1].expand(B)
+                x = self._step(x, t, t_prev, kind)
 
-        return x
+            return x
 
-    def _step(self, x: Tensor, t: Tensor, kind: Tensor) -> Tensor:
+    def _step(self, x: Tensor, t: Tensor, t_prev: Tensor, kind: Tensor) -> Tensor:
         """Execute single DDPM reverse step."""
-        t_val = int(t[0].item())
         output = self.model(x, t, kind)
-
-        if t_val == 0:
-            return self.model.predict_x0(x, t, output.noise)
-
-        alpha_t = self.model.alphas_cumprod[t_val]
-        alpha_prev = self.model.alphas_cumprod[t_val - 1]
-        beta_t = self.model.betas[t_val]
-
         x0_pred = self.model.predict_x0(x, t, output.noise)
 
-        coef_x0 = alpha_prev.sqrt() * beta_t / (1.0 - alpha_t)
-        coef_xt = self.model.alphas[t_val].sqrt() * (1.0 - alpha_prev) / (1.0 - alpha_t)
+        if t_prev[0].item() <= 0.0:
+            return x0_pred
+
+        ab_t = rearrange(self.model.alpha_bar(t), "b -> b 1 1 1")
+        ab_prev = rearrange(self.model.alpha_bar(t_prev), "b -> b 1 1 1")
+
+        # α_t = ᾱ_t / ᾱ_{t-1}, β_t = 1 - α_t
+        alpha_t = ab_t / ab_prev.clamp(min=1e-8)
+        beta_t = 1.0 - alpha_t
+
+        coef_x0 = ab_prev.sqrt() * beta_t / (1.0 - ab_t).clamp(min=1e-8)
+        coef_xt = alpha_t.sqrt() * (1.0 - ab_prev) / (1.0 - ab_t).clamp(min=1e-8)
         mean = coef_x0 * x0_pred + coef_xt * x
 
-        var = beta_t * (1.0 - alpha_prev) / (1.0 - alpha_t)
+        var = beta_t * (1.0 - ab_prev) / (1.0 - ab_t).clamp(min=1e-8)
         return mean + var.sqrt() * torch.randn_like(x)

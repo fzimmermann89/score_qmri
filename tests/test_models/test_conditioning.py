@@ -23,7 +23,7 @@ def test_sinusoidal_embedding_different_timesteps():
 
 def test_conditioning_mlp():
     """Test conditioning MLP output shape."""
-    mlp = ConditioningMLP(num_kinds=3, cond_dim=128)
+    mlp = ConditioningMLP(cond_dim=128)
     t = torch.tensor([10, 50])
     kind = torch.tensor([0, 1])
     cond = mlp(t, kind)
@@ -32,7 +32,7 @@ def test_conditioning_mlp():
 
 def test_conditioning_mlp_different_kinds():
     """Test different kinds produce different conditioning."""
-    mlp = ConditioningMLP(num_kinds=3, cond_dim=128)
+    mlp = ConditioningMLP(cond_dim=128)
     t = torch.tensor([50, 50])
     kind1 = torch.tensor([0, 0])
     kind2 = torch.tensor([1, 1])
@@ -43,7 +43,7 @@ def test_conditioning_mlp_different_kinds():
 
 def test_conditioning_mlp_different_timesteps():
     """Test different timesteps produce different conditioning."""
-    mlp = ConditioningMLP(num_kinds=3, cond_dim=128)
+    mlp = ConditioningMLP(cond_dim=128)
     t1 = torch.tensor([10, 10])
     t2 = torch.tensor([500, 500])
     kind = torch.tensor([0, 0])
