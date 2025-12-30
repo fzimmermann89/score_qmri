@@ -70,4 +70,3 @@ def test_sde_sampler_num_steps():
     model = DiffusionModel(base_channels=16, num_blocks=2)
     sampler = SDESampler(model, num_steps=50)
     assert sampler.num_steps == 50
-
