@@ -1,7 +1,8 @@
 """Custom BatchSampler with step-based probability scheduling."""
 
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Sized
+from typing import cast
 
 import torch
 from torch.utils.data import BatchSampler, ConcatDataset
@@ -42,7 +43,7 @@ class ScheduledBatchSampler(BatchSampler):
         self.rng.manual_seed(base_seed + rank)
 
         # Precompute dataset offsets and lengths
-        lengths = [len(ds) for ds in dataset.datasets]  # type: ignore[arg-type]
+        lengths = [len(cast(Sized, ds)) for ds in dataset.datasets]
         self.dataset_lengths = torch.tensor(lengths)
         self.dataset_offsets = torch.cat([torch.tensor([0]), torch.cumsum(self.dataset_lengths, dim=0)[:-1]])
 
@@ -84,7 +85,7 @@ class ScheduledBatchSampler(BatchSampler):
 
         local_indices = torch.randint(0, ds_len, (self.batch_size,), generator=self.rng)
         offset = int(self.dataset_offsets[ds_idx].item())
-        batch = (local_indices + offset).tolist()
+        batch: list[int] = (local_indices + offset).tolist()
 
         self.step += 1
         return batch

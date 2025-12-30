@@ -53,7 +53,8 @@ class ResBlock(torch.nn.Module):
         scale, shift = self.cond_proj(cond)[:, :, None, None].chunk(2, dim=1)
         h = h * (1 + scale) + shift
         h = self.block2(h)
-        return h + self.skip(x)
+        result: Tensor = h + self.skip(x)
+        return result
 
 
 class DownBlock(torch.nn.Module):
@@ -115,8 +116,8 @@ class UpBlock(torch.nn.Module):
     def forward(self, x: Tensor, skip: Tensor, cond: Tensor) -> Tensor:
         """Forward pass concatenating skip connection after pixelshuffle upsampling."""
         x_up = self.pixel_shuffle(self.up_conv(x))
-        out = self.res(torch.cat([x_up, skip], dim=1), cond)
-        return out
+        result: Tensor = self.res(torch.cat([x_up, skip], dim=1), cond)
+        return result
 
 
 class OutputHead(torch.nn.Module):
@@ -141,14 +142,20 @@ class OutputHead(torch.nn.Module):
 
     def forward(self, x: Tensor, cond: Tensor) -> Tensor:
         """Forward pass through ResBlock and final conv."""
-        out = self.conv(self.res(x, cond))
-        return out
+        result: Tensor = self.conv(self.res(x, cond))
+        return result
 
 
 class UNet(torch.nn.Module):
-    """UNet with dual output heads and conditioning.
+    """UNet with dual prediction heads and FiLM conditioning.
 
-    Input: 2 channels (real/imag or data/zeros)
+    Predicts both clean image (x₀) and noise (ε) through separate output heads.
+    This enables:
+    - Standard diffusion training via noise prediction (L_simple)
+    - Auxiliary denoising task via x₀ prediction (SSIM + L1)
+    - Reuse as standalone denoiser outside diffusion sampling
+
+    Input: 2 channels (real/imag for complex MRI)
     Output: (x0_pred, noise_pred), each (B, 2, H, W)
     """
 
@@ -174,12 +181,11 @@ class UNet(torch.nn.Module):
             Conditioning vector dimension.
         """
         super().__init__()
-        self.num_blocks = num_blocks
-        self.cond_dim = cond_dim
+        self.num_blocks: int = num_blocks
+        self.cond_dim: int = cond_dim
 
         self.input_conv = torch.nn.Conv2d(in_channels, base_channels, 3, padding=1)
 
-        # Encoder
         self.down_blocks = torch.nn.ModuleList()
         ch = base_channels
         for _ in range(num_blocks):
@@ -188,7 +194,6 @@ class UNet(torch.nn.Module):
 
         self.middle = ResBlock(ch, ch, cond_dim)
 
-        # Decoder
         skip_chs = [base_channels * (2 ** (i + 1)) for i in range(num_blocks)][::-1]
         self.up_blocks = torch.nn.ModuleList()
         for skip_ch in skip_chs:

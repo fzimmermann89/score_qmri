@@ -15,6 +15,7 @@ from .config import (
     MAPPING_CONFIG,
     AugmentationConfig,
 )
+from .kind import NUM_DATASET_KINDS, DatasetKind
 from .lightning import MRIDataModule, create_dataset_from_config
 from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
@@ -24,6 +25,8 @@ __all__ = [
     "AugmentationPipeline",
     "BaseMRIDataset",
     "ComplexImageDataset",
+    "DatasetKind",
+    "NUM_DATASET_KINDS",
     "MagnitudeImageDataset",
     "MappingDataset",
     "ScheduledBatchSampler",
@@ -36,4 +39,3 @@ __all__ = [
     "MAPPING_CONFIG",
     "COMPLEX_CONFIG",
 ]
-

@@ -36,6 +36,7 @@ def test_ssim_loss():
     """Test SSIM loss."""
     try:
         from training.losses import ssim_loss
+
         pred = torch.randn(2, 2, 64, 64)
         target = torch.randn(2, 2, 64, 64)
         loss = ssim_loss(pred, target)
@@ -48,6 +49,7 @@ def test_compute_loss():
     """Test combined loss computation."""
     try:
         from training.losses import ssim_loss
+
         ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
     except ImportError:
         pytest.skip("pytorch-msssim not available")
@@ -68,10 +70,14 @@ def test_compute_loss_weights():
     """Test loss weights affect output."""
     try:
         from training.losses import ssim_loss
+
         ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
     except ImportError:
         pytest.skip("pytorch-msssim not available")
 
-    args = (torch.randn(2, 2, 64, 64),) * 4
-    output_no_x0 = compute_loss(*args, noise_weight=1.0, x0_weight=0.0)
+    x0_pred = torch.randn(2, 2, 64, 64)
+    x0_target = torch.randn(2, 2, 64, 64)
+    noise_pred = torch.randn(2, 2, 64, 64)
+    noise_target = torch.randn(2, 2, 64, 64)
+    output_no_x0 = compute_loss(x0_pred, x0_target, noise_pred, noise_target, noise_weight=1.0, x0_weight=0.0)
     assert torch.allclose(output_no_x0.total, output_no_x0.noise_mse)

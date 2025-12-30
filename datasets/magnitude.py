@@ -6,6 +6,7 @@ from torch import Tensor
 
 from .base import BaseMRIDataset
 from .config import AugmentationConfig
+from .kind import DatasetKind
 
 
 class MagnitudeImageDataset(BaseMRIDataset):
@@ -16,7 +17,7 @@ class MagnitudeImageDataset(BaseMRIDataset):
         h5_path: str,
         dataset_path: str,
         augmentation_config: AugmentationConfig | None = None,
-        kind: int = 1,
+        kind: DatasetKind = DatasetKind.T1W_MAGNITUDE,
     ):
         self.dataset_path = dataset_path
         super().__init__(h5_path, augmentation_config, kind)

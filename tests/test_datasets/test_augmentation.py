@@ -17,22 +17,24 @@ def test_augmentation_preserves_shape(augmentation_config):
     assert aug_mask.shape == mask.shape
 
 
-def test_flip_augmentation_flips_last_axis():
-    """Test flip augmentation flips along last axis."""
-    config = AugmentationConfig(flip_prob=1.0, geometric_prob=0.0, contrast_prob=0.0)
+def test_flip_augmentation_applied():
+    """Test flip augmentation is applied (shape preserved, values change)."""
+    config = AugmentationConfig(geometric_prob=0.0, contrast_prob=0.0)
     pipeline = AugmentationPipeline(config)
 
     image = torch.arange(16).float().reshape(4, 4)
     mask = torch.ones(4, 4, dtype=torch.bool)
 
-    aug_image, _ = pipeline(image, mask)
-    expected = torch.flip(image, dims=[-1])
-    assert torch.allclose(aug_image, expected)
+    aug_image, aug_mask = pipeline(image, mask)
+    assert aug_image.shape == image.shape
+    assert aug_mask.shape == mask.shape
+    # Values should be rearranged (roll + flip applied)
+    assert not torch.allclose(aug_image, image)
 
 
 def test_geometric_augmentation_transforms_both():
     """Test geometric augmentation transforms both image and mask."""
-    config = AugmentationConfig(flip_prob=0.0, geometric_prob=1.0, contrast_prob=0.0)
+    config = AugmentationConfig(geometric_prob=1.0, contrast_prob=0.0)
     pipeline = AugmentationPipeline(config)
 
     image = torch.randn(64, 64)
@@ -45,7 +47,7 @@ def test_geometric_augmentation_transforms_both():
 
 def test_contrast_augmentation_preserves_range():
     """Test contrast augmentation keeps values in reasonable range."""
-    config = AugmentationConfig(flip_prob=0.0, geometric_prob=0.0, contrast_prob=1.0)
+    config = AugmentationConfig(geometric_prob=0.0, contrast_prob=1.0)
     pipeline = AugmentationPipeline(config)
 
     image = torch.rand(64, 64)  # [0, 1] range
@@ -58,7 +60,7 @@ def test_contrast_augmentation_preserves_range():
 
 def test_all_augmentations_can_stack():
     """Test all augmentations can be applied together."""
-    config = AugmentationConfig(flip_prob=1.0, geometric_prob=1.0, contrast_prob=1.0)
+    config = AugmentationConfig(geometric_prob=1.0, contrast_prob=1.0)
     pipeline = AugmentationPipeline(config)
 
     image = torch.randn(64, 64)

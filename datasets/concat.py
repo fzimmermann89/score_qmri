@@ -1,6 +1,7 @@
 """Utilities for working with ConcatDataset."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence, Sized
+from typing import cast
 
 from torch.utils.data import ConcatDataset, Dataset
 
@@ -14,7 +15,7 @@ def get_size_labels(datasets: Sequence[Dataset]) -> list[tuple[int, int]]:
     """Get size labels (height, width) for each dataset."""
     size_labels = []
     for dataset in datasets:
-        if len(dataset) == 0:  # type: ignore[arg-type]
+        if len(cast(Sized, dataset)) == 0:
             raise ValueError("Cannot get size from empty dataset")
 
         sample = dataset[0]
@@ -67,27 +68,31 @@ def create_schedule_functions(
     schedule_funcs: list[Callable[[int], float]] = []
 
     for schedule in schedules:
-        if callable(schedule):
+        if callable(schedule) and not isinstance(schedule, dict):
             schedule_funcs.append(schedule)
             continue
 
         if not isinstance(schedule, dict):
             raise ValueError(f"Schedule must be callable or dict, got {type(schedule)}")
 
-        schedule_type = schedule.get("type", "constant")
+        schedule_type: str = schedule.get("type", "constant")
 
         match schedule_type:
             case "constant":
-                schedule_funcs.append(_make_constant_schedule(float(schedule.get("weight", 1.0))))
+                weight_value = schedule.get("weight", 1.0)
+                schedule_funcs.append(_make_constant_schedule(float(weight_value)))
             case "fade_out":
+                start_step_value = schedule.get("start_step", 0)
+                fade_steps_value = schedule.get("fade_steps", 1000)
                 schedule_funcs.append(
                     _make_fade_out_schedule(
-                        int(schedule.get("start_step", 0)),
-                        int(schedule.get("fade_steps", 1000)),
+                        int(start_step_value),
+                        int(fade_steps_value),
                     )
                 )
             case "step":
-                schedule_funcs.append(_make_step_schedule(int(schedule.get("threshold", 0))))
+                threshold_value = schedule.get("threshold", 0)
+                schedule_funcs.append(_make_step_schedule(int(threshold_value)))
             case _:
                 raise ValueError(f"Unknown schedule type: {schedule_type}")
 

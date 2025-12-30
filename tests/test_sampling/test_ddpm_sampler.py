@@ -8,7 +8,7 @@ from sampling.ddpm_sampler import DDPMSampler
 
 def test_ddpm_sampler_shape():
     """Test DDPM sampler output shape."""
-    model = DiffusionModel(num_kinds=3, num_timesteps=100, base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_blocks=2)
     sampler = DDPMSampler(model, num_steps=10)
 
     shape = (2, 2, 32, 32)
@@ -19,7 +19,7 @@ def test_ddpm_sampler_shape():
 
 def test_ddpm_sampler_default_kind():
     """Test DDPM sampler with default kind."""
-    model = DiffusionModel(num_kinds=3, num_timesteps=100, base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_blocks=2)
     sampler = DDPMSampler(model, num_steps=10)
 
     shape = (2, 2, 32, 32)
@@ -29,9 +29,9 @@ def test_ddpm_sampler_default_kind():
 
 def test_ddpm_sampler_num_steps():
     """Test DDPM sampler respects num_steps."""
-    model = DiffusionModel(num_kinds=3, num_timesteps=100, base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_blocks=2)
     sampler = DDPMSampler(model, num_steps=5)
     assert sampler.num_steps == 5
 
-    sampler_default = DDPMSampler(model)
+    sampler_default = DDPMSampler(model, num_steps=100)
     assert sampler_default.num_steps == 100

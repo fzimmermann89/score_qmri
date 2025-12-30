@@ -8,6 +8,7 @@ from torch import Tensor
 
 from .base import BaseMRIDataset
 from .config import AugmentationConfig
+from .kind import DatasetKind
 
 
 class ComplexImageDataset(BaseMRIDataset):
@@ -18,7 +19,7 @@ class ComplexImageDataset(BaseMRIDataset):
         h5_path: str,
         mode: Literal["combined", "coilwise"],
         augmentation_config: AugmentationConfig | None = None,
-        kind: int = 0,
+        kind: DatasetKind = DatasetKind.COMPLEX_T1W_COILWISE,
     ):
         self.mode = mode
         super().__init__(h5_path, augmentation_config, kind)

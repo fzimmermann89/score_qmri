@@ -1,4 +1,13 @@
-"""Diffusion model with dual prediction heads."""
+"""Continuous-time VP-SDE diffusion model with dual prediction heads.
+
+This module implements a diffusion model using the Variance Preserving SDE (VP-SDE)
+framework (Song et al., ICLR 2021). Time is continuous t ∈ [0, 1], allowing flexible
+inference with any number of discretization steps.
+
+The model predicts both:
+- Noise ε (trained with L_simple MSE, used for score/sampling)
+- Clean image x0 (trained with SSIM + L1, auxiliary denoising task)
+"""
 
 from dataclasses import dataclass
 
@@ -14,169 +23,133 @@ from .unet import UNet
 class DiffusionOutput:
     """Output from diffusion model forward pass."""
 
-    x0: Tensor
-    noise: Tensor
+    x0: Tensor  # (B, 2, H, W)
+    noise: Tensor  # (B, 2, H, W)
 
 
 class DiffusionModel(torch.nn.Module):
-    """Diffusion model predicting both clean image (x0) and noise."""
+    """VP-SDE diffusion model with continuous time t ∈ [0, 1].
 
-    betas: Tensor
-    alphas: Tensor
-    alphas_cumprod: Tensor
-    sqrt_alphas_cumprod: Tensor
-    sqrt_one_minus_alphas_cumprod: Tensor
+    The forward SDE is: dx = -½β(t)x dt + √β(t) dw
+    with linear noise schedule: β(t) = β_min + t(β_max - β_min)
+
+    Key quantities:
+        ᾱ(t) = exp(-∫₀ᵗ β(s)ds) = exp(-β_min·t - ½(β_max - β_min)·t²)
+        σ(t) = √(1 - ᾱ(t))
+        SNR(t) = ᾱ(t) / (1 - ᾱ(t))
+
+    At t=0: ᾱ=1, σ=0 (clean image)
+    At t=1: ᾱ≈0, σ≈1 (pure noise)
+    """
 
     def __init__(
         self,
         num_kinds: int = 3,
-        num_timesteps: int = 1000,
-        beta_start: float = 0.0001,
-        beta_end: float = 0.02,
+        beta_min: float = 0.1,
+        beta_max: float = 20.0,
         base_channels: int = 64,
         num_blocks: int = 4,
         cond_dim: int = 128,
     ) -> None:
         """
-        Initialize diffusion model.
-
         Parameters
         ----------
         num_kinds
-            Number of dataset types for conditioning.
-        num_timesteps
-            Total diffusion timesteps.
-        beta_start
-            Starting noise schedule value.
-        beta_end
-            Ending noise schedule value.
+            Number of dataset types for conditioning embedding.
+        beta_min
+            Minimum noise rate β(0).
+        beta_max
+            Maximum noise rate β(1).
         base_channels
-            UNet base channel count.
+            UNet base channel count (doubled at each level).
         num_blocks
             UNet encoder/decoder depth.
         cond_dim
             Conditioning embedding dimension.
         """
         super().__init__()
-        self.num_timesteps = num_timesteps
         self.num_kinds = num_kinds
+        self.beta_min = beta_min
+        self.beta_max = beta_max
 
         self.cond_mlp = ConditioningMLP(num_kinds, cond_dim)
-        self.unet = UNet(in_channels=2, base_channels=base_channels, num_blocks=num_blocks, cond_dim=cond_dim)
+        self.unet = UNet(
+            in_channels=2,
+            base_channels=base_channels,
+            num_blocks=num_blocks,
+            cond_dim=cond_dim,
+        )
 
-        betas = torch.linspace(beta_start, beta_end, num_timesteps)
-        alphas = 1.0 - betas
-        alphas_cumprod = torch.cumprod(alphas, dim=0)
+    def beta(self, t: Tensor) -> Tensor:
+        """Instantaneous noise rate β(t) = β_min + t(β_max - β_min)."""
+        return self.beta_min + t * (self.beta_max - self.beta_min)
 
-        self.register_buffer("betas", betas)
-        self.register_buffer("alphas", alphas)
-        self.register_buffer("alphas_cumprod", alphas_cumprod)
-        self.register_buffer("sqrt_alphas_cumprod", alphas_cumprod.sqrt())
-        self.register_buffer("sqrt_one_minus_alphas_cumprod", (1.0 - alphas_cumprod).sqrt())
+    def alpha_bar(self, t: Tensor) -> Tensor:
+        """Cumulative signal variance ᾱ(t) = exp(-∫₀ᵗ β(s)ds)."""
+        return torch.exp(-self.beta_min * t - 0.5 * (self.beta_max - self.beta_min) * t**2)
 
-    def forward(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput:
-        """
-        Predict x0 and noise from noisy input.
+    def sigma(self, t: Tensor) -> Tensor:
+        """Noise standard deviation σ(t) = √(1 - ᾱ(t))."""
+        return (1.0 - self.alpha_bar(t)).sqrt()
 
-        Parameters
-        ----------
-        x_t
-            Noisy input of shape (B, 2, H, W).
-        t
-            Timesteps of shape (B,).
-        kind
-            Dataset kind indices of shape (B,).
-
-        Returns
-        -------
-        Contains x0 and noise predictions.
-        """
-        cond = self.cond_mlp(t, kind)
-        x0, noise = self.unet(x_t, cond)
-        return DiffusionOutput(x0=x0, noise=noise)
+    def snr(self, t: Tensor) -> Tensor:
+        """Signal-to-noise ratio SNR(t) = ᾱ(t) / (1 - ᾱ(t))."""
+        ab = self.alpha_bar(t)
+        return ab / (1.0 - ab).clamp(min=1e-8)
 
     def q_sample(self, x0: Tensor, t: Tensor, noise: Tensor | None = None) -> Tensor:
         """
-        Forward diffusion process q(x_t | x_0).
+        Sample from q(xₜ | x₀): xₜ = √ᾱ(t)·x₀ + √(1-ᾱ(t))·ε.
 
         Parameters
         ----------
         x0
-            Clean images of shape (B, 2, H, W).
+            Clean images (B, 2, H, W).
         t
-            Timesteps of shape (B,).
+            Continuous time in [0, 1] of shape (B,).
         noise
-            Optional noise tensor. Sampled if None.
-
-        Returns
-        -------
-        Noisy images x_t.
+            Optional pre-sampled noise. Defaults to N(0, I).
         """
         if noise is None:
             noise = torch.randn_like(x0)
-        sqrt_alpha = rearrange(self.sqrt_alphas_cumprod[t], "b -> b 1 1 1")
-        sqrt_one_minus = rearrange(self.sqrt_one_minus_alphas_cumprod[t], "b -> b 1 1 1")
-        return sqrt_alpha * x0 + sqrt_one_minus * noise
+        ab = rearrange(self.alpha_bar(t), "b -> b 1 1 1")
+        return ab.sqrt() * x0 + (1.0 - ab).sqrt() * noise
+
+    def forward(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput:
+        """
+        Predict x₀ and noise from noisy input.
+
+        Parameters
+        ----------
+        x_t
+            Noisy input (B, 2, H, W).
+        t
+            Continuous time in [0, 1] of shape (B,).
+        kind
+            Dataset kind indices (B,).
+        """
+        cond = self.cond_mlp(t, kind)
+        x0_pred, noise_pred = self.unet(x_t, cond)
+        return DiffusionOutput(x0=x0_pred, noise=noise_pred)
 
     def predict_x0(self, x_t: Tensor, t: Tensor, noise: Tensor) -> Tensor:
-        """
-        Compute x0 from x_t and predicted noise.
-
-        Parameters
-        ----------
-        x_t
-            Noisy images of shape (B, 2, H, W).
-        t
-            Timesteps of shape (B,).
-        noise
-            Predicted noise of shape (B, 2, H, W).
-
-        Returns
-        -------
-        Predicted x0.
-        """
-        sqrt_alpha = rearrange(self.sqrt_alphas_cumprod[t], "b -> b 1 1 1")
-        sqrt_one_minus = rearrange(self.sqrt_one_minus_alphas_cumprod[t], "b -> b 1 1 1")
-        return (x_t - sqrt_one_minus * noise) / sqrt_alpha.clamp(min=1e-8)
+        """Recover x₀ = (xₜ - σ(t)·ε) / √ᾱ(t)."""
+        ab = rearrange(self.alpha_bar(t), "b -> b 1 1 1")
+        return (x_t - (1.0 - ab).sqrt() * noise) / ab.sqrt().clamp(min=1e-8)
 
     def score(self, x_t: Tensor, t: Tensor, kind: Tensor) -> Tensor:
-        """
-        Compute score function (gradient of log probability).
-
-        The score is defined as -noise / sqrt(1 - alpha_bar).
-
-        Parameters
-        ----------
-        x_t
-            Noisy images of shape (B, 2, H, W).
-        t
-            Timesteps of shape (B,).
-        kind
-            Dataset kind indices of shape (B,).
-
-        Returns
-        -------
-        Score of shape (B, 2, H, W).
-        """
+        """Compute score ∇ₓ log p(xₜ) = -ε / σ(t)."""
         output = self.forward(x_t, t, kind)
-        sqrt_one_minus = rearrange(self.sqrt_one_minus_alphas_cumprod[t], "b -> b 1 1 1")
-        return -output.noise / sqrt_one_minus.clamp(min=1e-8)
+        sigma_t = rearrange(self.sigma(t), "b -> b 1 1 1")
+        return -output.noise / sigma_t.clamp(min=1e-8)
 
     @staticmethod
     def prepare_input(image: Tensor) -> Tensor:
         """
-        Prepare 2-channel input from image.
+        Prepare 2-channel input from image tensor.
 
-        Complex data passes through unchanged. Magnitude data is stacked with zeros.
-
-        Parameters
-        ----------
-        image
-            Input image of shape (B, 2, H, W) or (B, H, W).
-
-        Returns
-        -------
-        Two-channel tensor of shape (B, 2, H, W).
+        Complex data (B, 2, H, W) passes through unchanged.
+        Magnitude data (B, H, W) is stacked with zeros for imaginary part.
         """
         if image.ndim == 4 and image.shape[1] == 2:
             return image

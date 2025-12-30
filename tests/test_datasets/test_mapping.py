@@ -3,22 +3,21 @@
 import h5py
 import numpy as np
 
+from datasets.kind import DatasetKind
 from datasets.mapping import MappingDataset
 
 
 def test_mapping_dataset_applies_scaling(sample_h5_file):
     """Test MappingDataset applies scaling factor correctly."""
     scaling_factor = 2.5
-    dataset = MappingDataset(
-        sample_h5_file, dataset_path="mapping", scaling_factor=scaling_factor, kind=2
-    )
+    dataset = MappingDataset(sample_h5_file, dataset_path="mapping", scaling_factor=scaling_factor, kind=DatasetKind.T1MAP)
 
     assert len(dataset) == 5
     assert dataset.slice_shape == (64, 64)
 
     sample = dataset[0]
     assert sample["image"].shape == (64, 64)
-    assert sample["kind"].item() == 2
+    assert sample["kind"].item() == DatasetKind.T1MAP.value
 
 
 def test_mapping_scaling_factor_applied_to_data(sample_h5_file):
@@ -27,9 +26,7 @@ def test_mapping_scaling_factor_applied_to_data(sample_h5_file):
         original = f["mapping"][0, :, :]
 
     scaling_factor = 3.0
-    dataset = MappingDataset(
-        sample_h5_file, dataset_path="mapping", scaling_factor=scaling_factor, kind=2
-    )
+    dataset = MappingDataset(sample_h5_file, dataset_path="mapping", scaling_factor=scaling_factor, kind=DatasetKind.T1MAP)
 
     sample = dataset[0]
     expected = original * scaling_factor

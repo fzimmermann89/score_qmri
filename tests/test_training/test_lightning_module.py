@@ -11,6 +11,7 @@ def module():
     """Create small module for testing."""
     try:
         from training.losses import ssim_loss
+
         ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
     except ImportError:
         pytest.skip("pytorch-msssim not available")
@@ -19,8 +20,6 @@ def module():
         base_channels=16,
         num_blocks=2,
         cond_dim=64,
-        num_kinds=3,
-        num_timesteps=100,
         validation_size=32,
     )
 
@@ -47,7 +46,7 @@ def test_hparams_saved(module):
     """Test hyperparameters are saved."""
     assert module.hparams.base_channels == 16
     assert module.hparams.num_blocks == 2
-    assert module.hparams.num_kinds == 3
+    assert module.model.num_kinds > 0
 
 
 def test_fixed_noise_creation(module):
@@ -56,7 +55,8 @@ def test_fixed_noise_creation(module):
     module._log_samples()  # This won't log (no WandB) but creates noise
     # Manually trigger noise creation
     from sampling.ddim_sampler import create_fixed_noise
-    noise = create_fixed_noise(3, (32, 32))
-    assert len(noise) == 3
-    for k in range(3):
+
+    noise = create_fixed_noise((32, 32))
+    assert len(noise) == module.model.num_kinds
+    for k in range(module.model.num_kinds):
         assert noise[k].shape == (1, 2, 32, 32)
