@@ -60,18 +60,17 @@ def create_dataset_from_config(
                 mode=config.get("mode", "combined"),
                 augmentation_config=config.get("augmentation_config"),
                 kind=_get_kind(config.get("kind"), DatasetKind.COMPLEX_T1W_COILWISE),
+                random_coil=config.get("random_coil", True),
             )
         case "magnitude":
             return MagnitudeImageDataset(
                 h5_path=h5_path,
-                dataset_path=config.get("dataset_path", "magnitude"),
                 augmentation_config=config.get("augmentation_config"),
                 kind=_get_kind(config.get("kind"), DatasetKind.T1W_MAGNITUDE),
             )
         case "mapping":
             return MappingDataset(
                 h5_path=h5_path,
-                dataset_path=config.get("dataset_path", "mapping"),
                 scaling_factor=config.get("scaling_factor", 1.0),
                 augmentation_config=config.get("augmentation_config"),
                 kind=_get_kind(config.get("kind"), DatasetKind.T1MAP),
