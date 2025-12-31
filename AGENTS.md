@@ -1,3 +1,112 @@
+# Score-Based Posterior Sampling for Quantitative MRI
+
+## Project Goal
+
+This project implements a score-based posterior sampling algorithm for quantitative MRI to solve the inverse problem:
+
+```
+k-data = Fourier(signal(parameters))
+```
+
+using a learned prior (diffusion model). The goal is to reconstruct quantitative parameter maps (T1, T2, etc.) from undersampled k-space data.
+
+## Current State
+
+The project currently implements:
+- **Training the denoising score model** (VP-SDE diffusion)
+- **Basic image generation for validation** (DDIM sampling with fixed noise per dataset kind)
+
+Posterior sampling for the inverse problem will be added in a future phase.
+
+## Architecture Design Decisions
+
+### VP-SDE Diffusion Model
+
+We use the Variance Preserving SDE framework (Song et al., ICLR 2021) with **continuous time** t ∈ [0, 1]:
+- Forward SDE: `dx = -½β(t)x dt + √β(t) dw`
+- Linear noise schedule: `β(t) = β_min + t(β_max - β_min)`
+- Score: `∇_x log p(x_t) = -ε / σ(t)`
+
+
+### Dual-Head UNet Architecture
+
+The UNet has **two output heads**:
+
+1. **Noise prediction head (ε)**: Trained with MSE loss (L_simple), used for score computation and sampling
+2. **Clean image prediction head (x₀)**: Trained with SSIM + L1 loss as an auxiliary objective
+
+The x₀ head serves two purposes:
+- Helps the network learn better internal representations of true images
+- Can be used as a standalone denoiser (no diffusion sampling needed)
+
+### FiLM Conditioning
+
+Conditioning is applied via Feature-wise Linear Modulation (FiLM) in each ResBlock:
+```python
+h = h * (1 + scale) + shift
+```
+
+The conditioning vector combines:
+- **Sinusoidal timestep embedding**: Encodes diffusion time t
+- **Dataset kind embedding**: Tells the network what type of MRI image it's denoising
+
+### Dataset Kinds (14 types)
+
+The `DatasetKind` enum defines all supported MRI data types:
+
+| Category | Types | Input Channels |
+|----------|-------|----------------|
+| Complex (coilwise) | T1W, T2W, FLAIR | 2 (real/imag) |
+| Complex (combined) | T1W, T2W, FLAIR | 2 (real/imag) |
+| Magnitude | T1W, T2W, FLAIR | 2 (zeros in imag) |
+| Quantitative Maps | T1MAP, T2MAP, T2STARMAP | 2 (zeros in imag) |
+| M0/PD | Complex, Magnitude | 2 |
+
+### Input Format Convention
+
+All inputs are 2-channel tensors `(B, 2, H, W)`:
+- **Complex data**: Channel 0 = real, Channel 1 = imaginary
+- **Magnitude data**: Channel 0 = magnitude, Channel 1 = zeros
+
+This unified format simplifies the architecture while supporting both data types.
+
+### Data Storage
+
+Data is stored in HDF5 files with two formats:
+
+**Format A: Complex data** (grouped structure):
+```
+file.h5
+├── coilwise/
+│   ├── subject_001: (N_z, N_coils, H, W) complex64
+│   └── subject_002: ...
+└── combined/
+    ├── subject_001: (N_z, H, W) complex64
+    └── subject_002: ...
+```
+
+**Format B: Magnitude/Mapping data** (flat subject datasets):
+```
+file.h5
+├── subject_001: (N_z, H, W) float32
+├── subject_002: ...
+└── subject_003: ...
+```
+
+Quantitative maps use a `scaling_factor` to normalize values to ~[0, 1] range.
+
+For coilwise training, `ComplexImageDataset` supports:
+- `random_coil=True` (default): Randomly samples a coil per slice for diversity
+- `random_coil=False`: Iterates through all (z, coil) combinations sequentially
+
+### Augmentation Pipeline
+
+- Spatial: Random shifts, horizontal flips, affine transforms (kornia)
+- Intensity: Gamma correction for contrast variation (magnitude only)
+- Phase augmentation for complex data
+
+---
+
 ## Project Stack
 
 - Python 3.12
@@ -27,35 +136,36 @@ pytest
 pytest tests/test_models/test_unet.py -v
 
 # Training
-python train.py --config config.yaml
+python train.py fit --config config.yaml
 ```
 
 ## Project Structure
 
 ```
 ./
-├── config.py                 # Global config / LightningCLI config
-├── train.py                  # Training entry point
+├── train.py                  # Training entry point (LightningCLI)
 ├── models/
-│   ├── diffusion.py          # Diffusion model wrapper
-│   ├── unet.py               # UNet architecture
-│   └── film_conditioning.py  # FiLM layers for conditioning
+│   ├── diffusion.py          # VP-SDE diffusion model
+│   ├── unet.py               # Dual-head UNet with FiLM conditioning
+│   └── conditioning.py       # Sinusoidal + kind embeddings
 ├── datasets/
-│   ├── base.py               # Base dataset class
+│   ├── base.py               # Base dataset class (H5 handling)
+│   ├── complex.py            # Complex-valued datasets (coilwise/combined)
 │   ├── magnitude.py          # Magnitude image datasets
-│   ├── complex.py            # Complex-valued datasets
-│   ├── concat.py             # Dataset concatenation
-│   ├── augmentation.py       # Data augmentations
-│   ├── batch_sampler.py      # Custom batch sampling
-│   ├── mapping.py            # qmri Mapping dataset
+│   ├── mapping.py            # Quantitative mapping datasets (with scaling)
+│   ├── kind.py               # DatasetKind enum
+│   ├── augmentation.py       # Spatial/intensity augmentations (kornia)
+│   ├── batch_sampler.py      # Scheduled batch sampling across datasets
+│   ├── concat.py             # Dataset concatenation utilities
 │   ├── lightning.py          # LightningDataModule
-│   └── config.py             # Dataset configs
+│   └── config.py             # Augmentation configs
 ├── training/
 │   ├── lightning_module.py   # LightningModule for training
-│   ├── losses.py             # Loss functions
+│   ├── losses.py             # Noise MSE + SSIM/L1 losses
 │   └── phase_augmentation.py # Phase augmentation for complex data
 ├── sampling/
-│   └── ddpm_sampler.py       # DDPM sampling
+│   ├── ddpm_sampler.py       # DDPM sampling
+│   └── ddim_sampler.py       # DDIM sampling (used for validation)
 ├── tests/                    # pytest tests (mirror main structure)
 └── pyproject.toml
 ```
@@ -87,7 +197,7 @@ def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:  # (B,C,H,W
 - Document shapes, expected ranges, semantics.
 
 ```python
-class UNet(nn.Module):
+class UNet(torch.nn.Module):
     """UNet with FiLM conditioning for diffusion."""
 
     def __init__(self, in_channels: int, base_dim: int = 64, time_emb_dim: int = 256):
@@ -120,7 +230,6 @@ alpha_bar = torch.cumprod(1 - betas, dim=0)
 ### Performance
 
 - Vectorize—no Python loops over batch/spatial dims.
-- `torch.no_grad()` for inference.
 - `torch.compile()` for hot paths.
 - In-place ops when safe: `x.add_(1)`
 - `pin_memory=True`, `num_workers>0` in DataLoader.
@@ -153,14 +262,13 @@ prefer moveaxis instead of permute (and einops.rearrange over permute)
 ### Use Libraries, Don't Reimplement
 
 - **torchvision**: transforms, pretrained models
-- **kornia**: gpu acceleratred augmentations
+- **kornia**: gpu accelerated augmentations
 
 ## Testing
 
 - Mirror main structure in `tests/`.
 - Use fixtures in `conftest.py` for common tensors/models.
 - Test shapes, dtypes, gradient flow, edge cases.
-
 
 ## Complex MRI Conventions
 
@@ -169,4 +277,5 @@ prefer moveaxis instead of permute (and einops.rearrange over permute)
 - k-space: apply `torch.fft.fft2` / `ifft2` with `norm="ortho"`.
 
 ## Imports
-- do not impofr torch.nn as nn, or torch.nn.functional as F. Just use full path in the code.
+
+- Do not import `torch.nn as nn` or `torch.nn.functional as F`. Use full path in the code.

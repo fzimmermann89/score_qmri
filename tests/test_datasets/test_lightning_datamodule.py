@@ -5,7 +5,7 @@ from datasets.lightning import MRIDataModule
 
 def test_datamodule_init_stores_config():
     """Test MRIDataModule stores configuration."""
-    configs = [{"type": "magnitude", "h5_path": "dummy.h5", "dataset_path": "mag", "kind": 1}]
+    configs = [{"type": "magnitude", "h5_path": "dummy.h5", "kind": 9}]
 
     dm = MRIDataModule(
         dataset_configs=configs,
@@ -17,9 +17,9 @@ def test_datamodule_init_stores_config():
     assert dm.num_workers == 0
 
 
-def test_datamodule_setup_creates_concat_dataset(sample_h5_file):
+def test_datamodule_setup_creates_concat_dataset(sample_h5_file_magnitude):
     """Test setup creates ConcatDataset and size labels."""
-    configs = [{"type": "magnitude", "h5_path": sample_h5_file, "dataset_path": "magnitude", "kind": 1}]
+    configs = [{"type": "magnitude", "h5_path": sample_h5_file_magnitude, "kind": 9}]
 
     dm = MRIDataModule(
         dataset_configs=configs,
@@ -36,7 +36,7 @@ def test_datamodule_setup_creates_concat_dataset(sample_h5_file):
 
 def test_datamodule_hparams_saved():
     """Test hyperparameters are saved correctly."""
-    configs = [{"type": "magnitude", "h5_path": "dummy.h5", "dataset_path": "mag", "kind": 1}]
+    configs = [{"type": "magnitude", "h5_path": "dummy.h5", "kind": 9}]
 
     dm = MRIDataModule(
         dataset_configs=configs,
