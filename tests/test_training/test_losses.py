@@ -1,6 +1,5 @@
 """Tests for loss functions."""
 
-import pytest
 import torch
 
 from training.losses import compute_loss, l1_loss, noise_loss
@@ -34,26 +33,16 @@ def test_l1_loss():
 
 def test_ssim_loss():
     """Test SSIM loss."""
-    try:
-        from training.losses import ssim_loss
+    from training.losses import ssim_loss
 
-        pred = torch.randn(2, 2, 64, 64)
-        target = torch.randn(2, 2, 64, 64)
-        loss = ssim_loss(pred, target)
-        assert 0 <= loss.item() <= 2
-    except ImportError:
-        pytest.skip("pytorch-msssim not available")
+    pred = torch.randn(2, 2, 64, 64)
+    target = torch.randn(2, 2, 64, 64)
+    loss = ssim_loss(pred, target)
+    assert 0 <= loss.item() <= 2
 
 
 def test_compute_loss():
     """Test combined loss computation."""
-    try:
-        from training.losses import ssim_loss
-
-        ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
-    except ImportError:
-        pytest.skip("pytorch-msssim not available")
-
     x0_pred = torch.randn(2, 2, 64, 64)
     x0_target = torch.randn(2, 2, 64, 64)
     noise_pred = torch.randn(2, 2, 64, 64)
@@ -68,16 +57,57 @@ def test_compute_loss():
 
 def test_compute_loss_weights():
     """Test loss weights affect output."""
-    try:
-        from training.losses import ssim_loss
-
-        ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
-    except ImportError:
-        pytest.skip("pytorch-msssim not available")
-
     x0_pred = torch.randn(2, 2, 64, 64)
     x0_target = torch.randn(2, 2, 64, 64)
     noise_pred = torch.randn(2, 2, 64, 64)
     noise_target = torch.randn(2, 2, 64, 64)
     output_no_x0 = compute_loss(x0_pred, x0_target, noise_pred, noise_target, noise_weight=1.0, x0_weight=0.0)
     assert torch.allclose(output_no_x0.total, output_no_x0.noise_mse)
+
+
+def test_ssim_loss_with_mask():
+    """Test SSIM loss with mask only considers non-masked windows."""
+    from training.losses import ssim_loss
+
+    # Create identical images in the unmasked region
+    pred = torch.zeros(1, 2, 32, 32)
+    target = torch.zeros(1, 2, 32, 32)
+    pred[:, :, 8:24, 8:24] = 1.0
+    target[:, :, 8:24, 8:24] = 1.0
+
+    # Mask that covers only the matching region
+    mask = torch.zeros(1, 1, 32, 32)
+    mask[:, :, 10:22, 10:22] = 1.0
+
+    # With mask, should be low loss (only considers masked region where images match)
+    loss_with_mask = ssim_loss(pred, target, mask=mask, window_size=7)
+
+    # Without mask, should also be low loss (images match everywhere)
+    loss_without_mask = ssim_loss(pred, target, mask=None, window_size=7)
+
+    # Both should be low since images match
+    assert loss_with_mask < 0.1
+    assert loss_without_mask < 0.1
+
+
+def test_ssim_loss_mask_does_not_inflate():
+    """Test that masking doesn't artificially inflate SSIM."""
+    from training.losses import ssim_loss
+
+    # Create case where unmasked region has mismatch but masked region is zero
+    pred = torch.zeros(1, 2, 32, 32)
+    target = torch.zeros(1, 2, 32, 32)
+
+    # Mismatch in center region
+    pred[:, :, 12:20, 12:20] = 1.0
+    target[:, :, 12:20, 12:20] = 0.5
+
+    # Mask that covers the mismatched region
+    mask = torch.zeros(1, 1, 32, 32)
+    mask[:, :, 10:22, 10:22] = 1.0
+
+    # With mask, should capture the mismatch
+    loss_with_mask = ssim_loss(pred, target, mask=mask, window_size=7)
+
+    # Loss should be > 0 since there's a mismatch in masked region
+    assert loss_with_mask > 0.0
