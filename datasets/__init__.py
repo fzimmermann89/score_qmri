@@ -1,12 +1,11 @@
 """MRI Diffusion Dataset System."""
 
-from .augmentation import AugmentationPipeline
+from .augmentation import AugmentationPipeline, PhaseAugmentation
 from .base import BaseMRIDataset
 from .batch_sampler import ScheduledBatchSampler
 from .complex import ComplexImageDataset
 from .concat import (
     create_concat_dataset,
-    create_schedule_functions,
     get_size_labels,
 )
 from .config import (
@@ -33,6 +32,7 @@ from .mapping import MappingDataset
 __all__ = [
     "AugmentationConfig",
     "AugmentationPipeline",
+    "PhaseAugmentation",
     "BaseMRIDataset",
     "ComplexImageDataset",
     "DatasetKind",
@@ -43,7 +43,6 @@ __all__ = [
     "MRIDataModule",
     "create_concat_dataset",
     "get_size_labels",
-    "create_schedule_functions",
     "MAGNITUDE_CONFIG",
     "MAPPING_CONFIG",
     "COMPLEX_CONFIG",

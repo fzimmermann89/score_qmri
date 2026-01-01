@@ -1,67 +1,106 @@
 """Tests for MappingDataset."""
 
-import tempfile
+
+from pathlib import Path
 
 import h5py
+import numpy as np
 import pytest
+import torch
 
 from datasets.kind import DatasetKind
 from datasets.mapping import MappingDataset
 
 
-def test_mapping_dataset_counts_all_subjects(sample_h5_file_mapping):
+def test_mapping_dataset_counts_all_subjects(sample_h5_file_mapping: str) -> None:
     """Test MappingDataset counts slices across all subjects."""
-    dataset = MappingDataset(
-        sample_h5_file_mapping,
-        scaling_factor=1 / 3000,
-        kind=DatasetKind.T1MAP,
-    )
+    dataset = MappingDataset(sample_h5_file_mapping, scaling_factor=2000.0, kind=DatasetKind.T1MAP)
     # Subject 1: 4 slices, Subject 2: 3 slices = 7 total
     assert len(dataset) == 7
     assert dataset.slice_shape == (64, 64)
 
 
-def test_mapping_applies_scaling(sample_h5_file_mapping):
-    """Test scaling factor is applied correctly."""
-    scaling_factor = 1 / 3000
-    dataset = MappingDataset(
-        sample_h5_file_mapping,
-        scaling_factor=scaling_factor,
-        kind=DatasetKind.T1MAP,
-    )
-    sample = dataset[0]
-
-    # Values should be scaled to ~[0, 1] range
-    # Original values are uniform(500, 2000), scaled by 1/3000 gives ~[0.17, 0.67]
-    assert sample["image"].min() >= 0
-    assert sample["image"].max() <= 1
-    assert sample["kind"].item() == DatasetKind.T1MAP.value
-
-
-def test_mapping_getitem_shape(sample_h5_file_mapping):
-    """Test __getitem__ returns correct shape."""
-    dataset = MappingDataset(
-        sample_h5_file_mapping,
-        scaling_factor=0.001,
-        kind=DatasetKind.T2MAP,
-    )
+def test_mapping_getitem_returns_correct_shape(sample_h5_file_mapping: str) -> None:
+    """Test __getitem__ returns correct shape and type."""
+    dataset = MappingDataset(sample_h5_file_mapping, scaling_factor=2000.0, kind=DatasetKind.T1MAP)
     sample = dataset[0]
     assert sample["image"].shape == (64, 64)
     assert sample["image"].dtype.is_floating_point
+    assert sample["kind"].item() == DatasetKind.T1MAP.value
 
 
-def test_mapping_empty_file_raises():
+def test_mapping_iterates_all_slices(sample_h5_file_mapping: str) -> None:
+    """Test we can iterate through all slices."""
+    dataset = MappingDataset(sample_h5_file_mapping, scaling_factor=2000.0, kind=DatasetKind.T1MAP)
+    for i in range(len(dataset)):
+        sample = dataset[i]
+        assert sample["image"].shape == (64, 64)
+
+
+def test_scaling_factor_applied(sample_h5_file_mapping: str) -> None:
+    """Test scaling factor is correctly applied to mapping data."""
+    # Use 1/2000.0 to divide values to ~[0.25, 1.0] range
+    dataset = MappingDataset(sample_h5_file_mapping, scaling_factor=1.0 / 2000.0, kind=DatasetKind.T1MAP)
+    sample = dataset[0]
+
+    # Verify values are in expected range (~[0, 1] after scaling)
+    # Original data is 500-2000, after dividing by 2000 should be ~[0.25, 1.0]
+    assert sample["image"].min() >= 0.0
+    assert sample["image"].max() <= 1.1
+
+
+def test_scaling_factor_zero(sample_h5_file_mapping: str, tmp_path: Path) -> None:
+    """Test scaling factor of zero returns zero values."""
+    # Create a temporary H5 file with known values
+    with h5py.File(str(tmp_path / "test_zero_scale.h5"), "w") as f:
+        f.create_dataset("subject_001", data=np.ones((2, 64, 64), dtype=np.float32) * 1000.0)
+
+    dataset = MappingDataset(str(tmp_path / "test_zero_scale.h5"), scaling_factor=0.0, kind=DatasetKind.T1MAP)
+    sample = dataset[0]
+
+    # Values should be zero when scaling_factor=0.0
+    assert sample["image"].max() == 0.0
+    assert sample["image"].min() == 0.0
+
+
+def test_scaling_factor_negative(sample_h5_file_mapping: str, tmp_path: Path) -> None:
+    """Test negative scaling factor inverts values."""
+    # Create a temporary H5 file with known values
+    with h5py.File(str(tmp_path / "test_neg_scale.h5"), "w") as f:
+        f.create_dataset("subject_001", data=np.ones((2, 64, 64), dtype=np.float32) * 1000.0)
+
+    dataset = MappingDataset(str(tmp_path / "test_neg_scale.h5"), scaling_factor=-0.001, kind=DatasetKind.T1MAP)
+    sample = dataset[0]
+
+    # Values should be negative and large magnitude
+    assert sample["image"].max() < 0
+
+
+def test_mapping_empty_file_raises(tmp_path: Path) -> None:
     """Test error when H5 file has no datasets."""
-    with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
-        temp_path = f.name
+    with h5py.File(str(tmp_path / "empty.h5"), "w") as f:
+        # Create a group but no datasets
+        f.create_group("some_group")
 
-    try:
-        with h5py.File(temp_path, "w") as f:
-            f.create_group("empty_group")
+    with pytest.raises(ValueError, match="No datasets found"):
+        MappingDataset(str(tmp_path / "empty.h5"), scaling_factor=2000.0, kind=DatasetKind.T1MAP)
 
-        with pytest.raises(ValueError, match="No datasets found"):
-            MappingDataset(temp_path, scaling_factor=1.0, kind=DatasetKind.T1MAP)
-    finally:
-        import os
 
-        os.unlink(temp_path)
+def test_mapping_mask_is_nonzero_pixels(sample_h5_file_mapping: str) -> None:
+    """Test mask correctly identifies non-zero pixels."""
+    dataset = MappingDataset(sample_h5_file_mapping, scaling_factor=2000.0, kind=DatasetKind.T1MAP)
+    sample = dataset[0]
+
+    image, mask = sample["image"], sample["mask"]
+    # Since values are scaled to [0, 1], non-zero pixels should have mask True
+    # But some pixels might be exactly zero due to floating point precision
+    assert torch.all((image > 1e-6) == mask)
+
+
+def test_mapping_different_kinds(sample_h5_file_mapping: str) -> None:
+    """Test MappingDataset works with different DatasetKind values."""
+    for kind in [DatasetKind.T1MAP, DatasetKind.T2MAP, DatasetKind.T2STARMAP]:
+        dataset = MappingDataset(sample_h5_file_mapping, scaling_factor=2000.0, kind=kind)
+        assert dataset.kind == kind
+        sample = dataset[0]
+        assert sample["kind"].item() == kind.value

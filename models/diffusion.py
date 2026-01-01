@@ -80,6 +80,11 @@ class DiffusionModel(torch.nn.Module):
             cond_dim=cond_dim,
         )
 
+    @property
+    def device(self) -> torch.device:
+        """Get device of the model (inferred from first parameter)."""
+        return next(self.parameters()).device
+
     def beta(self, t: Tensor) -> Tensor:
         """Instantaneous noise rate β(t) = β_min + t(β_max - β_min)."""
         return self.beta_min + t * (self.beta_max - self.beta_min)

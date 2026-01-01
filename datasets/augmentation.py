@@ -2,12 +2,90 @@
 
 import math
 
+import einops
 import kornia.augmentation as K
 import torch
-from einops import einsum
+from einops import rearrange
 from torch import Tensor
 
 from .config import AugmentationConfig
+
+
+class PhaseAugmentation:
+    """Applies random 2D phase rotation to complex images.
+
+    Uses a low-order polynomial to generate smoothly varying spatial phase,
+    simulating realistic B0 inhomogeneity and receive coil phase.
+
+    Parameters
+    ----------
+    mean_phase_range
+        Range for random mean phase offset in radians (default: [0, 2π]).
+    poly_coeff_range
+        Range for polynomial coefficients controlling spatial variation.
+    prob
+        Probability of applying augmentation.
+    """
+
+    def __init__(
+        self,
+        mean_phase_range: tuple[float, float] = (0.0, 2.0 * math.pi),
+        poly_coeff_range: tuple[float, float] = (-0.1, 0.1),
+        prob: float = 0.5,
+    ) -> None:
+        self.mean_phase_range = mean_phase_range
+        self.poly_coeff_range = poly_coeff_range
+        self.prob = prob
+
+    def __call__(self, real: Tensor, imag: Tensor) -> tuple[Tensor, Tensor]:
+        """Apply random phase rotation to complex image.
+
+        Parameters
+        ----------
+        real
+            Real part of shape (H, W) or (B, H, W).
+        imag
+            Imaginary part of shape (H, W) or (B, H, W).
+
+        Returns
+        -------
+        tuple
+            Augmented (real, imag) with same shapes.
+        """
+        if torch.rand(1).item() > self.prob:
+            return real, imag
+
+        squeeze_batch = real.ndim == 2
+        if squeeze_batch:
+            real = rearrange(real, "h w -> 1 h w")
+            imag = rearrange(imag, "h w -> 1 h w")
+
+        B, H, W = real.shape
+        phase = self._generate_phase_field(B, H, W, real.device, real.dtype)
+
+        cos_p, sin_p = phase.cos(), phase.sin()
+        aug_real = real * cos_p - imag * sin_p
+        aug_imag = real * sin_p + imag * cos_p
+
+        if squeeze_batch:
+            return aug_real.squeeze(0), aug_imag.squeeze(0)
+        return aug_real, aug_imag
+
+    def _generate_phase_field(self, B: int, H: int, W: int, device: torch.device, dtype: torch.dtype) -> Tensor:
+        """Generate polynomial phase fields: a + bx + cy + dxy + ex² + fy².
+
+        Coordinates are normalized to [-1, 1] for numerical stability.
+        """
+        y = torch.linspace(-1, 1, H, device=device, dtype=dtype)
+        x = torch.linspace(-1, 1, W, device=device, dtype=dtype)
+        Y, X = torch.meshgrid(y, x, indexing="ij")
+
+        coeffs = torch.empty(B, 6, device=device, dtype=dtype)
+        coeffs[:, 0].uniform_(*self.mean_phase_range)
+        coeffs[:, 1:].uniform_(*self.poly_coeff_range)
+
+        basis = torch.stack([torch.ones_like(X), X, Y, X * Y, X.pow(2), Y.pow(2)])
+        return einops.einsum(coeffs, basis, "b c, c h w -> b h w")
 
 
 class AugmentationPipeline:
@@ -36,6 +114,15 @@ class AugmentationPipeline:
             p=1.0,
         )
         self._hflip = K.RandomHorizontalFlip(p=config.flip_prob)
+        self.phase_aug = (
+            PhaseAugmentation(
+                mean_phase_range=(0.0, 2.0 * math.pi),
+                poly_coeff_range=config.poly_coeff_range,
+                prob=config.phase_prob,
+            )
+            if config.phase_prob > 0
+            else None
+        )
 
     def __call__(self, image: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
         """Apply augmentations to image and mask.
@@ -43,20 +130,23 @@ class AugmentationPipeline:
         Parameters
         ----------
         image
-            Image tensor of shape (H, W). Can be real (float) or complex.
+            Image tensor of shape (H, W) or (B, H, W). Can be real (float) or complex.
         mask
-            Boolean mask of shape (H, W).
+            Boolean mask of shape (H, W) or (B, H, W).
 
         Returns
         -------
-        Augmented (image, mask) with same shapes.
+        image : Tensor
+            Augmented image with same shape as input.
+        mask : Tensor
+            Augmented boolean mask with same shape as input.
         """
         is_complex = image.is_complex()
 
         if is_complex:
             real, imag = image.real, image.imag
-            if torch.rand(1).item() < self.config.phase_prob:
-                real, imag = self._apply_phase(real, imag)
+            if torch.rand(1).item() < self.config.phase_prob and self.phase_aug is not None:
+                real, imag = self.phase_aug(real, imag)
             # Apply spatial augmentations to both real and imag
             real, mask = self._apply_spatial(real, mask)
             imag, _ = self._apply_spatial(imag, mask.clone())
@@ -80,11 +170,24 @@ class AugmentationPipeline:
             image = torch.roll(image, shifts=shifts, dims=(0, 1))
             mask = torch.roll(mask, shifts=shifts, dims=(0, 1))
 
-        # Random horizontal flip (probability handled by K.RandomHorizontalFlip)
-        img_4d = image[None, None]
-        mask_4d = mask[None, None].float()
-        image = self._hflip(img_4d)[0, 0]
-        mask = self._hflip(mask_4d, params=self._hflip._params)[0, 0].bool()
+        # Reshape for kornia's (B, C, H, W) format
+        if image.ndim == 2:
+            img_4d = image[None, None]
+            mask_4d = mask[None, None].float()
+        else:  # image.ndim == 3
+            img_4d = image.unsqueeze(1)
+            mask_4d = mask.unsqueeze(1).float()
+
+        image_out = self._hflip(img_4d)
+        mask_out = self._hflip(mask_4d, params=self._hflip._params)
+
+        # Remove extra dimensions to get back to original shape
+        if image.ndim == 2:
+            image = image_out[0, 0]
+            mask = mask_out[0, 0].bool()
+        else:
+            image = image_out.squeeze(1)
+            mask = mask_out.squeeze(1).bool()
 
         # Random affine
         if torch.rand(1).item() < self.config.geometric_prob:
@@ -94,11 +197,21 @@ class AugmentationPipeline:
 
     def _apply_affine(self, image: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
         """Random affine (scale, rotate, shear, translate)."""
-        img_4d = image[None, None]
-        mask_4d = mask[None, None].float()
+        if image.ndim == 2:
+            img_4d = image[None, None]
+            mask_4d = mask[None, None].float()
+        else:  # image.ndim == 3
+            img_4d = image.unsqueeze(1)
+            mask_4d = mask.unsqueeze(1).float()
+
         img_out = self._affine_img(img_4d)
         mask_out = self._affine_mask(mask_4d, params=self._affine_img._params)
-        return img_out[0, 0], mask_out[0, 0].bool()
+
+        # Remove extra dimensions to get back to original shape
+        if image.ndim == 2:
+            return img_out[0, 0], mask_out[0, 0].bool()
+        else:
+            return img_out.squeeze(1), mask_out.squeeze(1).bool()
 
     def _apply_gamma(self, image: Tensor) -> Tensor:
         """Random gamma correction for contrast augmentation."""
@@ -115,32 +228,3 @@ class AugmentationPipeline:
             .item()
         )
         return img_norm.pow(gamma) * (img_max - img_min) + img_min
-
-    def _apply_phase(self, real: Tensor, imag: Tensor) -> tuple[Tensor, Tensor]:
-        """Apply random phase rotation simulating B0 inhomogeneity.
-
-        Uses polynomial phase field: φ(x,y) = a + bx + cy + dxy + ex² + fy²
-        """
-        H, W = real.shape
-        device, dtype = real.device, real.dtype
-
-        # Generate normalized coordinates
-        y = torch.linspace(-1, 1, H, device=device, dtype=dtype)
-        x = torch.linspace(-1, 1, W, device=device, dtype=dtype)
-        Y, X = torch.meshgrid(y, x, indexing="ij")
-
-        # Random coefficients: mean phase + spatial variation
-        coeffs = torch.empty(6, device=device, dtype=dtype)
-        coeffs[0].uniform_(0.0, 2.0 * math.pi)  # Mean phase
-        coeffs[1:].uniform_(-0.3, 0.3)  # Spatial variation
-
-        # Polynomial basis and phase field
-        basis = torch.stack([torch.ones_like(X), X, Y, X * Y, X.pow(2), Y.pow(2)])
-        phase = einsum(coeffs, basis, "c, c h w -> h w")
-
-        # Apply rotation: (real + i*imag) * exp(i*phase)
-        cos_p, sin_p = phase.cos(), phase.sin()
-        aug_real = real * cos_p - imag * sin_p
-        aug_imag = real * sin_p + imag * cos_p
-
-        return aug_real, aug_imag

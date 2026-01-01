@@ -28,7 +28,6 @@ class DDIMSampler:
     def sample(
         self,
         shape: tuple[int, ...],
-        device: torch.device,
         kind: Tensor,
         initial_noise: Tensor | None = None,
     ) -> Tensor:
@@ -39,13 +38,17 @@ class DDIMSampler:
         ----------
         shape
             Output shape (B, 2, H, W).
-        device
-            Computation device.
         kind
             Dataset kind indices of shape (B,).
         initial_noise
             Optional fixed noise for reproducibility.
+
+        Returns
+        -------
+        Tensor
+            Generated sample of shape (B, 2, H, W).
         """
+        device = self.model.device
         with torch.no_grad():
             B = shape[0]
             x = initial_noise.to(device) if initial_noise is not None else torch.randn(shape, device=device)
@@ -59,7 +62,7 @@ class DDIMSampler:
             return x
 
     def _step(self, x: Tensor, t: Tensor, t_prev: Tensor, kind: Tensor) -> Tensor:
-        """Execute single DDIM reverse step."""
+        """Compute x_{t-1} from x_t using DDIM update rule."""
         output = self.model(x, t, kind)
         x0_pred = self.model.predict_x0(x, t, output.noise)
 
@@ -86,6 +89,10 @@ def create_fixed_noise(image_shape: tuple[int, int], seed: int = 42) -> dict[int
         (H, W) shape of images.
     seed
         Random seed for reproducibility.
+
+    Returns
+    -------
+    Dictionary mapping dataset kind index to noise tensor of shape (1, 2, H, W).
     """
     from datasets.kind import NUM_DATASET_KINDS
 

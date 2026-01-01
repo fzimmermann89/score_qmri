@@ -20,7 +20,7 @@ def module():
 def test_training_step(module):
     """Test training step computes loss."""
     batch = {
-        "image": torch.randn(2, 64, 64),
+        "image": torch.randn(2, 2, 64, 64),
         "mask": torch.ones(2, 64, 64, dtype=torch.bool),
         "kind": torch.tensor([0, 1]),
     }
@@ -42,7 +42,7 @@ def test_hparams_saved(module):
     assert module.model.num_kinds > 0
 
 
-def test_fixed_noise_creation(module):
+def test_create_fixed_noise_for_all_kinds(module):
     """Test fixed noise is created for each kind."""
     module._fixed_noise = None  # Reset
     module._log_samples()  # This won't log (no WandB) but creates noise

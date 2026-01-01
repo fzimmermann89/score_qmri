@@ -1,7 +1,5 @@
 """Tests for ComplexImageDataset."""
 
-import tempfile
-
 import h5py
 import pytest
 import torch
@@ -76,35 +74,21 @@ class TestComplexDataset:
 class TestErrorHandling:
     """Tests for error handling."""
 
-    def test_missing_group_raises(self):
+    def test_missing_group_raises(self, tmp_path):
         """Test error when group missing from H5."""
-        with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
-            temp_path = f.name
+        h5_path = tmp_path / "test.h5"
+        with h5py.File(h5_path, "w") as f:
+            f.create_dataset("other", data=[1, 2, 3])
 
-        try:
-            with h5py.File(temp_path, "w") as f:
-                f.create_dataset("other", data=[1, 2, 3])
+        with pytest.raises(ValueError, match="not found"):
+            ComplexImageDataset(str(h5_path), mode="combined", kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED)
 
-            with pytest.raises(ValueError, match="not found"):
-                ComplexImageDataset(temp_path, mode="combined", kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED)
-        finally:
-            import os
-
-            os.unlink(temp_path)
-
-    def test_dataset_instead_of_group_raises(self):
+    def test_dataset_instead_of_group_raises(self, tmp_path):
         """Test error when mode points to dataset instead of group."""
-        with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
-            temp_path = f.name
+        h5_path = tmp_path / "test.h5"
+        with h5py.File(h5_path, "w") as f:
+            # Create 'combined' as a dataset, not a group
+            f.create_dataset("combined", data=[[1, 2], [3, 4]])
 
-        try:
-            with h5py.File(temp_path, "w") as f:
-                # Create 'combined' as a dataset, not a group
-                f.create_dataset("combined", data=[[1, 2], [3, 4]])
-
-            with pytest.raises(ValueError, match="must be a group"):
-                ComplexImageDataset(temp_path, mode="combined", kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED)
-        finally:
-            import os
-
-            os.unlink(temp_path)
+        with pytest.raises(ValueError, match="must be a group"):
+            ComplexImageDataset(str(h5_path), mode="combined", kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED)

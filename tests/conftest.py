@@ -96,7 +96,11 @@ def sample_h5_file_mapping():
 # Keep old fixture name for backward compatibility with other tests
 @pytest.fixture
 def sample_h5_file(sample_h5_file_magnitude):
-    """Alias for magnitude H5 file (backward compatibility)."""
+    """Alias for magnitude H5 file (backward compatibility).
+
+    NOTE: This is an alias for sample_h5_file_magnitude. Prefer using
+    the explicit fixture name for clarity in new tests.
+    """
     return sample_h5_file_magnitude
 
 

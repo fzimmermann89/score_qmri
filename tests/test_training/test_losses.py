@@ -1,5 +1,6 @@
 """Tests for loss functions."""
 
+import pytest
 import torch
 
 from training.losses import compute_loss, l1_loss, noise_loss
@@ -111,3 +112,75 @@ def test_ssim_loss_mask_does_not_inflate():
 
     # Loss should be > 0 since there's a mismatch in masked region
     assert loss_with_mask > 0.0
+
+
+def test_ssim_loss_mismatched_shapes():
+    """Test ssim_loss raises error for mismatched shapes."""
+    from training.losses import ssim_loss
+
+    pred = torch.randn(2, 2, 32, 32)
+    target = torch.randn(1, 2, 32, 32)
+
+    with pytest.raises(ValueError, match="Shape mismatch"):
+        ssim_loss(pred, target)
+
+
+def test_ssim_loss_invalid_window_size():
+    """Test ssim_loss handles invalid window sizes."""
+    from training.losses import ssim_loss
+
+    pred = torch.randn(1, 2, 32, 32)
+    target = torch.randn(1, 2, 32, 32)
+
+    # Window size larger than image should raise error
+    with pytest.raises(ValueError, match="too small"):
+        ssim_loss(pred, target, window_size=100)
+
+
+def test_ssim_loss_all_zero_mask():
+    """Test ssim_loss handles all-zero mask gracefully."""
+    from training.losses import ssim_loss
+
+    pred = torch.randn(1, 2, 32, 32)
+    target = torch.randn(1, 2, 32, 32)
+
+    # All-zero mask (invalid, but should handle gracefully)
+    mask = torch.zeros(1, 1, 32, 32)
+
+    # Should raise ValueError or handle gracefully
+    try:
+        loss = ssim_loss(pred, target, mask=mask)
+        # If it handles gracefully without error, just check it returns a value
+        assert loss.item() >= 0
+    except (ValueError, ZeroDivisionError):
+        # Either raising an error or handling gracefully is acceptable
+        pass
+
+
+def test_ssim_loss_mask_shape_mismatch():
+    """Test ssim_loss raises error for shape mismatch in mask."""
+    from training.losses import ssim_loss
+
+    pred = torch.randn(1, 2, 32, 32)
+    target = torch.randn(1, 2, 32, 32)
+    mask = torch.zeros(1, 2, 32)  # Wrong shape: (B, C, H) instead of (B, 1, H, W)
+
+    with pytest.raises((ValueError, IndexError, RuntimeError)):
+        ssim_loss(pred, target, mask=mask)
+
+
+def test_ssim_loss_negative_mask_values():
+    """Test ssim_loss handles negative mask values."""
+    from training.losses import ssim_loss
+
+    pred = torch.randn(1, 2, 32, 32)
+    target = torch.randn(1, 2, 32, 32)
+    mask = -torch.ones(1, 1, 32, 32)  # Negative values
+
+    # Should handle gracefully (raise error or accept)
+    try:
+        loss = ssim_loss(pred, target, mask=mask)
+        # Either raises error or returns valid loss
+        assert not torch.isnan(loss)
+    except (ValueError, RuntimeError):
+        pass  # Expected to handle somehow
