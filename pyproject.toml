@@ -80,6 +80,10 @@ show_error_context = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "h5py"
+ignore_missing_imports = true
 disallow_incomplete_defs = false
 
 [[tool.mypy.overrides]]
