@@ -23,8 +23,7 @@ class ComplexImageDataset(BaseMRIDataset):
     Expects H5 files with 'coilwise' and/or 'combined' groups containing
     subject datasets.
 
-    For coilwise mode, randomly samples coils during training to learn
-    a prior over individual coil images.
+    Coilwise mode iterates through all (z, coil) combinations deterministically.
     """
 
     def __init__(
@@ -96,16 +95,8 @@ class ComplexImageDataset(BaseMRIDataset):
         group = h5_file[self.mode]
         data = group[subject_key]
 
-        if self.mode == "combined":
-            # Shape: (N_z, H, W)
-            slice_data = data[z_idx, :, :]
-        else:
-            # Shape: (N_z, N_coils, H, W)
-            if coil_idx == -1:
-                # Random coil selection
-                n_coils = data.shape[1]
-                coil_idx = int(np.random.randint(0, n_coils))
-            slice_data = data[z_idx, coil_idx, :, :]
+        # Shape: (N_z, H, W) for combined, (N_z, N_coils, H, W) for coilwise
+        slice_data = data[z_idx, :, :] if self.mode == "combined" else data[z_idx, coil_idx, :, :]
 
         # Convert to torch complex tensor
         arr = np.array(slice_data)

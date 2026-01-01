@@ -35,7 +35,7 @@ class AugmentationPipeline:
             resample="nearest",
             p=1.0,
         )
-        self._hflip = K.RandomHorizontalFlip(p=0.5)
+        self._hflip = K.RandomHorizontalFlip(p=config.flip_prob)
 
     def __call__(self, image: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
         """Apply augmentations to image and mask.
@@ -55,7 +55,6 @@ class AugmentationPipeline:
 
         if is_complex:
             real, imag = image.real, image.imag
-            # Apply phase augmentation before spatial transforms
             if torch.rand(1).item() < self.config.phase_prob:
                 real, imag = self._apply_phase(real, imag)
             # Apply spatial augmentations to both real and imag
@@ -73,13 +72,15 @@ class AugmentationPipeline:
     def _apply_spatial(self, image: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
         """Apply spatial augmentations (shift, flip, affine)."""
         # Random shift
-        shift_x: int = int(torch.randint(-10, 11, (1,)).item())
-        shift_y: int = int(torch.randint(-10, 11, (1,)).item())
-        shifts: list[int] = [shift_y, shift_x]
-        image = torch.roll(image, shifts=shifts, dims=(0, 1))
-        mask = torch.roll(mask, shifts=shifts, dims=(0, 1))
+        if torch.rand(1).item() < self.config.roll_prob:
+            shift_min, shift_max = self.config.shift_range
+            shift_x: int = int(torch.randint(shift_min, shift_max + 1, (1,)).item())
+            shift_y: int = int(torch.randint(shift_min, shift_max + 1, (1,)).item())
+            shifts: list[int] = [shift_y, shift_x]
+            image = torch.roll(image, shifts=shifts, dims=(0, 1))
+            mask = torch.roll(mask, shifts=shifts, dims=(0, 1))
 
-        # Random horizontal flip
+        # Random horizontal flip (probability handled by K.RandomHorizontalFlip)
         img_4d = image[None, None]
         mask_4d = mask[None, None].float()
         image = self._hflip(img_4d)[0, 0]

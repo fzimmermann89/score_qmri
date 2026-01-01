@@ -13,16 +13,16 @@ class DummyDataset(BaseMRIDataset):
     """Dummy dataset for testing base class. Expects flat root datasets."""
 
     def _count_slices_in_file(self, h5_file):
-        keys = [k for k in h5_file.keys() if isinstance(h5_file[k], h5py.Dataset)]
+        keys = [k for k in h5_file if isinstance(h5_file[k], h5py.Dataset)]
         return sum(h5_file[k].shape[0] for k in keys)
 
     def _get_slice_shape(self, h5_file):
-        first_key = next(k for k in h5_file.keys() if isinstance(h5_file[k], h5py.Dataset))
+        first_key = next(k for k in h5_file if isinstance(h5_file[k], h5py.Dataset))
         return h5_file[first_key].shape[1], h5_file[first_key].shape[2]
 
     def _load_slice(self, h5_file, idx):
         # Simple sequential access
-        keys = [k for k in h5_file.keys() if isinstance(h5_file[k], h5py.Dataset)]
+        keys = [k for k in h5_file if isinstance(h5_file[k], h5py.Dataset)]
         offset = 0
         for k in keys:
             n_slices = h5_file[k].shape[0]
@@ -35,7 +35,7 @@ class DummyDataset(BaseMRIDataset):
 def test_base_dataset_init(sample_h5_file):
     """Test BaseMRIDataset initialization counts slices correctly."""
     dataset = DummyDataset(sample_h5_file, kind=DatasetKind.T1W_MAGNITUDE)
-    # sample_h5_file_magnitude: subject_001 has 5 slices, subject_002 has 3 slices = 8
+    # sample_h5_file: subject_001 has 5 slices, subject_002 has 3 slices = 8
     assert len(dataset) == 8
     assert dataset.slice_shape == (64, 64)
     assert dataset.kind == DatasetKind.T1W_MAGNITUDE

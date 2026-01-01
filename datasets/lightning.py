@@ -60,7 +60,6 @@ def create_dataset_from_config(
                 mode=config.get("mode", "combined"),
                 augmentation_config=config.get("augmentation_config"),
                 kind=_get_kind(config.get("kind"), DatasetKind.COMPLEX_T1W_COILWISE),
-                random_coil=config.get("random_coil", True),
             )
         case "magnitude":
             return MagnitudeImageDataset(

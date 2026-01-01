@@ -53,7 +53,7 @@ class MappingDataset(BaseMRIDataset):
 
     def _count_slices_in_file(self, h5_file: h5py.File) -> int:
         """Count total slices across all subjects."""
-        self._subject_keys = [k for k in h5_file.keys() if isinstance(h5_file[k], h5py.Dataset)]
+        self._subject_keys = [k for k in h5_file if isinstance(h5_file[k], h5py.Dataset)]
         if not self._subject_keys:
             raise ValueError(f"No datasets found in {self.h5_path}")
 
