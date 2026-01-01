@@ -1,9 +1,9 @@
 """PyTorch Lightning DataModule for MRI datasets."""
 
 import os
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Literal
 
 import torch
 from lightning import LightningDataModule
@@ -12,100 +12,132 @@ from torch.utils.data import ConcatDataset, DataLoader
 from .batch_sampler import ScheduledBatchSampler
 from .complex import ComplexImageDataset
 from .concat import create_concat_dataset, get_size_labels
+from .config import AugmentationConfig
 from .kind import DatasetKind
 from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
+
+MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset
+
+
+@dataclass(kw_only=True)
+class ConstantSchedule:
+    """Constant sampling weight throughout training."""
+
+    type: Literal["constant"] = "constant"
+    weight: float = 1.0
+
+    def __call__(self, step: int) -> float:
+        """Return constant weight."""
+        return self.weight
+
+
+@dataclass(kw_only=True)
+class PhaseInSchedule:
+    """Phase in sampling weight linearly over N steps."""
+
+    type: Literal["phase_in"] = "phase_in"
+    steps: int
+    weight: float = 1.0
+
+    def __call__(self, step: int) -> float:
+        """Return weight ramped from 0 to target over `steps`."""
+        return self.weight * min(1.0, step / self.steps) if self.steps > 0 else self.weight
+
+
+@dataclass(kw_only=True)
+class PhaseOutSchedule:
+    """Phase out sampling weight linearly over N steps."""
+
+    type: Literal["phase_out"] = "phase_out"
+    steps: int
+    weight: float = 1.0
+
+    def __call__(self, step: int) -> float:
+        """Return weight ramped from target to 0 over `steps`."""
+        return self.weight * max(0.0, 1.0 - step / self.steps) if self.steps > 0 else 0.0
+
+
+ScheduleType = ConstantSchedule | PhaseInSchedule | PhaseOutSchedule
+
+
+@dataclass(kw_only=True)
+class BaseDatasetConfig(ABC):
+    """Base configuration for MRI datasets."""
+
+    h5_path: str
+    augmentation_config: AugmentationConfig | None = None
+    schedule: ScheduleType = field(default_factory=ConstantSchedule)
+
+    @abstractmethod
+    def create(self) -> MRIDataset:
+        """Create dataset instance from this config."""
+        ...
+
+
+@dataclass(kw_only=True)
+class ComplexDatasetConfig(BaseDatasetConfig):
+    """Configuration for complex-valued MRI datasets."""
+
+    type: Literal["complex"] = "complex"
+    mode: Literal["combined", "coilwise"] = "combined"
+    kind: DatasetKind = DatasetKind.COMPLEX_T1W_COILWISE
+
+    def create(self) -> ComplexImageDataset:
+        """Create ComplexImageDataset from this config."""
+        return ComplexImageDataset(
+            h5_path=self.h5_path,
+            mode=self.mode,
+            kind=self.kind,
+            augmentation_config=self.augmentation_config,
+        )
+
+
+@dataclass(kw_only=True)
+class MagnitudeDatasetConfig(BaseDatasetConfig):
+    """Configuration for magnitude MRI datasets."""
+
+    type: Literal["magnitude"] = "magnitude"
+    kind: DatasetKind = DatasetKind.T1W_MAGNITUDE
+
+    def create(self) -> MagnitudeImageDataset:
+        """Create MagnitudeImageDataset from this config."""
+        return MagnitudeImageDataset(
+            h5_path=self.h5_path,
+            kind=self.kind,
+            augmentation_config=self.augmentation_config,
+        )
+
+
+@dataclass(kw_only=True)
+class MappingDatasetConfig(BaseDatasetConfig):
+    """Configuration for quantitative mapping datasets."""
+
+    type: Literal["mapping"] = "mapping"
+    kind: DatasetKind = DatasetKind.T1MAP
+    scaling_factor: float = 1.0
+
+    def create(self) -> MappingDataset:
+        """Create MappingDataset from this config."""
+        return MappingDataset(
+            h5_path=self.h5_path,
+            kind=self.kind,
+            scaling_factor=self.scaling_factor,
+            augmentation_config=self.augmentation_config,
+        )
+
+
+DatasetConfig = ComplexDatasetConfig | MagnitudeDatasetConfig | MappingDatasetConfig
 
 
 @dataclass
 class MRIDataModuleHparams:
     """Type-safe hyperparameter definitions for MRIDataModule."""
 
-    dataset_configs: list[dict[str, Any]] | None
-    schedule_ramp_steps: list[int] | None
+    dataset_configs: list[DatasetConfig] | None
     batch_size: int
     num_workers: int
     base_seed: int
-
-
-def create_dataset_from_config(
-    config: dict[str, Any],
-) -> ComplexImageDataset | MagnitudeImageDataset | MappingDataset:
-    """
-    Create a dataset from configuration dictionary.
-
-    Parameters
-    ----------
-    config
-        Configuration dict with keys: type, h5_path, and dataset-specific params.
-
-    Returns
-    -------
-    Dataset
-        Created dataset instance.
-
-    Raises
-    ------
-    ValueError
-        If h5_path is missing or type is unknown.
-    """
-    dataset_type = config.get("type")
-    h5_path = config.get("h5_path")
-
-    if not isinstance(h5_path, str):
-        raise ValueError("h5_path must be a string in dataset configuration")
-
-    def _get_kind(kind_value: int | DatasetKind | None, default: DatasetKind) -> DatasetKind:
-        """Convert kind value to DatasetKind enum."""
-        if kind_value is None:
-            return default
-        if isinstance(kind_value, DatasetKind):
-            return kind_value
-        if isinstance(kind_value, int):
-            return DatasetKind(kind_value)
-        raise ValueError(f"kind must be int or DatasetKind, got {type(kind_value)}")
-
-    match dataset_type:
-        case "complex":
-            return ComplexImageDataset(
-                h5_path=h5_path,
-                mode=config.get("mode", "combined"),
-                augmentation_config=config.get("augmentation_config"),
-                kind=_get_kind(config.get("kind"), DatasetKind.COMPLEX_T1W_COILWISE),
-            )
-        case "magnitude":
-            return MagnitudeImageDataset(
-                h5_path=h5_path,
-                augmentation_config=config.get("augmentation_config"),
-                kind=_get_kind(config.get("kind"), DatasetKind.T1W_MAGNITUDE),
-            )
-        case "mapping":
-            return MappingDataset(
-                h5_path=h5_path,
-                scaling_factor=config.get("scaling_factor", 1.0),
-                augmentation_config=config.get("augmentation_config"),
-                kind=_get_kind(config.get("kind"), DatasetKind.T1MAP),
-            )
-        case _:
-            raise ValueError(f"Unknown dataset type: {dataset_type}")
-
-
-def _linear_schedule(target_step: int) -> Callable[[int], float]:
-    """Create linear schedule from 0 to 1 at target_step."""
-
-    def schedule(step: int) -> float:
-        return 1.0 if target_step <= 0 else min(1.0, step / target_step)
-
-    return schedule
-
-
-def _constant_schedule(weight: float) -> Callable[[int], float]:
-    """Create constant schedule returning fixed weight."""
-
-    def schedule(_: int) -> float:
-        return weight
-
-    return schedule
 
 
 class MRIDataModule(LightningDataModule):
@@ -115,8 +147,7 @@ class MRIDataModule(LightningDataModule):
 
     def __init__(
         self,
-        dataset_configs: list[dict[str, Any]] | None = None,
-        schedule_ramp_steps: list[int] | None = None,
+        dataset_configs: list[DatasetConfig] | None = None,
         batch_size: int = 8,
         num_workers: int = 4,
         base_seed: int = 42,
@@ -127,9 +158,7 @@ class MRIDataModule(LightningDataModule):
         Parameters
         ----------
         dataset_configs
-            List of dataset configuration dicts with keys: type, h5_path, etc.
-        schedule_ramp_steps
-            Steps at which each dataset reaches full weight.
+            List of dataset configurations (dataclasses).
         batch_size
             Training batch size.
         num_workers
@@ -140,33 +169,26 @@ class MRIDataModule(LightningDataModule):
         super().__init__()
         self.save_hyperparameters()
 
-        self.dataset_configs = dataset_configs or []
-        self.schedule_ramp_steps = schedule_ramp_steps
+        self.dataset_configs: list[DatasetConfig] = dataset_configs or []
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.base_seed = base_seed
 
         self.concat_ds: ConcatDataset | None = None
         self.size_labels: list[tuple[int, int]] | None = None
+        self.dataset_lengths: list[int] | None = None
 
     def setup(self, stage: str) -> None:
         """Set up datasets for training."""
         if (stage == "fit" or stage is None) and self.dataset_configs:
-            datasets = [create_dataset_from_config(cfg) for cfg in self.dataset_configs]
+            datasets = [cfg.create() for cfg in self.dataset_configs]
             self.concat_ds = create_concat_dataset(datasets)
             self.size_labels = get_size_labels(datasets)
-
-    def _create_schedule_functions(self) -> list[Callable[[int], float]]:
-        """Create schedule functions from ramp steps."""
-        if self.schedule_ramp_steps is None:
-            n = len(self.dataset_configs)
-            weight = 1.0 / n
-            return [_constant_schedule(weight) for _ in range(n)]
-        return [_linear_schedule(steps) for steps in self.schedule_ramp_steps]
+            self.dataset_lengths = [len(ds) for ds in datasets]
 
     def train_dataloader(self) -> DataLoader:
         """Create training dataloader with scheduled batch sampler."""
-        if self.concat_ds is None or self.size_labels is None:
+        if self.concat_ds is None or self.size_labels is None or self.dataset_lengths is None:
             raise RuntimeError("Must call setup() before train_dataloader()")
 
         rank = self.trainer.global_rank if self.trainer is not None else int(os.environ.get("LOCAL_RANK", 0))
@@ -174,7 +196,8 @@ class MRIDataModule(LightningDataModule):
         batch_sampler = ScheduledBatchSampler(
             self.concat_ds,
             self.size_labels,
-            self._create_schedule_functions(),
+            self.dataset_lengths,
+            [cfg.schedule for cfg in self.dataset_configs],
             batch_size=self.batch_size,
             base_seed=self.base_seed,
             rank=rank,

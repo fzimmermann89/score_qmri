@@ -16,7 +16,17 @@ from .config import (
     AugmentationConfig,
 )
 from .kind import NUM_DATASET_KINDS, DatasetKind
-from .lightning import MRIDataModule, create_dataset_from_config
+from .lightning import (
+    ComplexDatasetConfig,
+    ConstantSchedule,
+    DatasetConfig,
+    MagnitudeDatasetConfig,
+    MappingDatasetConfig,
+    MRIDataModule,
+    PhaseInSchedule,
+    PhaseOutSchedule,
+    ScheduleType,
+)
 from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
 
@@ -34,8 +44,15 @@ __all__ = [
     "create_concat_dataset",
     "get_size_labels",
     "create_schedule_functions",
-    "create_dataset_from_config",
     "MAGNITUDE_CONFIG",
     "MAPPING_CONFIG",
     "COMPLEX_CONFIG",
+    "ComplexDatasetConfig",
+    "MagnitudeDatasetConfig",
+    "MappingDatasetConfig",
+    "DatasetConfig",
+    "ConstantSchedule",
+    "PhaseInSchedule",
+    "PhaseOutSchedule",
+    "ScheduleType",
 ]
