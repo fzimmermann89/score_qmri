@@ -9,13 +9,6 @@ from training.lightning_module import DiffusionLightningModule
 @pytest.fixture
 def module():
     """Create small module for testing."""
-    try:
-        from training.losses import ssim_loss
-
-        ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
-    except ImportError:
-        pytest.skip("pytorch-msssim not available")
-
     return DiffusionLightningModule(
         base_channels=16,
         num_blocks=2,

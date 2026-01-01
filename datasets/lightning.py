@@ -209,5 +209,5 @@ class MRIDataModule(LightningDataModule):
             num_workers=self.num_workers,
             persistent_workers=self.num_workers > 0,
             pin_memory=torch.cuda.is_available(),
-            prefetch_factor=4 if self.num_workers > 0 else 2,
+            prefetch_factor=4 if self.num_workers > 0 else None,
         )
