@@ -32,7 +32,7 @@ class DummyDataset(BaseMRIDataset):
         raise IndexError(f"Index {idx} out of bounds")
 
 
-def test_base_dataset_init(sample_h5_file):
+def test_base_dataset_magnitude_init(sample_h5_file):
     """Test BaseMRIDataset initialization counts slices correctly."""
     dataset = DummyDataset(sample_h5_file, kind=DatasetKind.T1W_MAGNITUDE)
     # sample_h5_file: subject_001 has 5 slices, subject_002 has 3 slices = 8

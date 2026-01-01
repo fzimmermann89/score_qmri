@@ -13,7 +13,7 @@ def test_ddim_sampler_shape():
 
     shape = (2, 2, 32, 32)
     kind = torch.tensor([0, 1])
-    samples = sampler.sample(shape, torch.device("cpu"), kind)
+    samples = sampler.sample(shape, kind)
     assert samples.shape == shape
 
 
@@ -26,7 +26,7 @@ def test_ddim_sampler_fixed_noise():
     kind = torch.tensor([0])
     noise = torch.randn(shape)
 
-    samples = sampler.sample(shape, torch.device("cpu"), kind, initial_noise=noise)
+    samples = sampler.sample(shape, kind, initial_noise=noise)
     assert samples.shape == shape
 
 
@@ -39,8 +39,8 @@ def test_ddim_deterministic():
     kind = torch.tensor([0])
     noise = torch.randn(shape)
 
-    s1 = sampler.sample(shape, torch.device("cpu"), kind, noise.clone())
-    s2 = sampler.sample(shape, torch.device("cpu"), kind, noise.clone())
+    s1 = sampler.sample(shape, kind, noise.clone())
+    s2 = sampler.sample(shape, kind, noise.clone())
     assert torch.allclose(s1, s2)
 
 
@@ -62,3 +62,36 @@ def test_create_fixed_noise_reproducible():
     n2 = create_fixed_noise((32, 32), seed=42)
     for k in range(NUM_DATASET_KINDS):
         assert torch.allclose(n1[k], n2[k])
+
+
+def test_ddim_sampler_uses_model_device():
+    """Test DDIM sampler uses device from model."""
+    model = DiffusionModel(base_channels=16, num_blocks=2)
+    sampler = DDIMSampler(model, num_steps=10)
+
+    # Put model on CPU
+    model = model.to(torch.device("cpu"))
+    shape = (1, 2, 32, 32)
+    kind = torch.tensor([0])
+
+    samples = sampler.sample(shape, kind)
+    assert samples.device.type == "cpu"
+
+
+def test_ddim_sampler_device_changes_with_model():
+    """Test DDIM sampler follows model device changes."""
+    model = DiffusionModel(base_channels=16, num_blocks=2)
+    sampler = DDIMSampler(model, num_steps=10)
+
+    shape = (1, 2, 32, 32)
+    kind = torch.tensor([0])
+
+    # Sample on CPU
+    samples_cpu = sampler.sample(shape, kind)
+    assert samples_cpu.device.type == "cpu"
+
+    if torch.cuda.is_available():
+        # Move model to CUDA
+        model = model.to(torch.device("cuda:0"))
+        samples_cuda = sampler.sample(shape, kind)
+        assert samples_cuda.device.type == "cuda"

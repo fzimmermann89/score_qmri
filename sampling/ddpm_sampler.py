@@ -8,24 +8,33 @@ from models.diffusion import DiffusionModel
 
 
 class DDPMSampler:
-    """DDPM sampler with continuous time."""
+    """DDPM sampler with continuous time.
+
+    Uses the reverse diffusion process to generate samples from pure Gaussian noise.
+    The sampler follows the DDPM (Denoising Diffusion Probabilistic Models) algorithm
+    adapted for continuous time t ∈ [0, 1] used in VP-SDE diffusion.
+
+    Key equations:
+        - Predict x₀ from noise: x₀ = (xₜ - σ(t)·ε) / √ᾱ(t)
+        - Compute mean: μₜ = ᾱₜ₋₁·x₀ + (1 - ᾱₜ₋₁)·xₜ₋₁
+        - Compute variance: Σₜ = βₜ·(1 - ᾱₜ₋₁)²·ᾱₜ₋₁
+        - Sample: xₜ₋₁ ~ N(μₜ, Σₜ)
+
+    Parameters
+    ----------
+    model
+        Diffusion model instance.
+    num_steps
+        Number of denoising steps.
+    """
 
     def __init__(self, model: DiffusionModel, num_steps: int = 1000) -> None:
-        """
-        Parameters
-        ----------
-        model
-            Diffusion model instance.
-        num_steps
-            Number of sampling steps.
-        """
         self.model = model
         self.num_steps = num_steps
 
     def sample(
         self,
         shape: tuple[int, ...],
-        device: torch.device,
         kind: Tensor | None = None,
     ) -> Tensor:
         """
@@ -35,11 +44,15 @@ class DDPMSampler:
         ----------
         shape
             Output shape (B, 2, H, W).
-        device
-            Computation device.
         kind
             Dataset kind indices of shape (B,). Defaults to zeros.
+
+        Returns
+        -------
+        Tensor
+            Generated sample of shape (B, 2, H, W).
         """
+        device = self.model.device
         with torch.no_grad():
             B = shape[0]
             if kind is None:

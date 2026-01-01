@@ -1,5 +1,6 @@
 """Tests for ScheduledBatchSampler."""
 
+import pytest
 import torch
 from torch.utils.data import ConcatDataset, TensorDataset
 
@@ -68,3 +69,71 @@ def test_batch_sampler_increments_step():
     assert sampler.step == 0
     next(iter(sampler))
     assert sampler.step == 1
+
+
+def test_batch_sampler_all_weights_zero():
+    """Test sampler raises StopIteration when all weights are zero."""
+    ds1 = TensorDataset(torch.randn(10, 3, 32, 32))
+    ds2 = TensorDataset(torch.randn(15, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds1, ds2])
+
+    # Both datasets have weight 0
+    sampler = ScheduledBatchSampler(
+        concat, [(32, 32), (32, 32)], [10, 15], [lambda s: 0.0, lambda s: 0.0], batch_size=4, base_seed=42, rank=0
+    )
+
+    iterator = iter(sampler)
+    with pytest.raises(StopIteration, match="All dataset weights are zero"):
+        next(iterator)
+
+
+def test_batch_sampler_single_dataset():
+    """Test sampler works correctly with single dataset."""
+    ds = TensorDataset(torch.randn(30, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds])
+
+    sampler = ScheduledBatchSampler(concat, [(32, 32)], [30], [lambda s: 1.0], batch_size=4, base_seed=42, rank=0)
+
+    batch = next(iter(sampler))
+    assert len(batch) == 4
+    assert all(0 <= idx < len(concat) for idx in batch)
+
+
+def test_batch_sampler_negative_weights():
+    """Test sampler handles negative weights."""
+    ds1 = TensorDataset(torch.randn(10, 3, 32, 32))
+    ds2 = TensorDataset(torch.randn(15, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds1, ds2])
+
+    # Second dataset has negative weight
+    sampler = ScheduledBatchSampler(
+        concat, [(32, 32), (32, 32)], [10, 15], [lambda s: 1.0, lambda s: -1.0], batch_size=4, base_seed=42, rank=0
+    )
+
+    batch = next(iter(sampler))
+    # Should only sample from first dataset (positive weight)
+    assert all(idx < 10 for idx in batch)
+
+
+def test_batch_sampler_handles_large_steps():
+    """Test sampler properly handles large step values that drop weight to zero."""
+    ds = TensorDataset(torch.randn(10, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds])
+
+    # Schedule drops weight to zero after step 2
+    def step_schedule(step: int) -> float:
+        return 1.0 if step < 2 else 0.0
+
+    sampler = ScheduledBatchSampler(concat, [(32, 32)], [10], [step_schedule], batch_size=4, base_seed=42, rank=0)
+
+    # At step 0, should sample normally
+    batch1 = next(iter(sampler))
+    assert len(batch1) == 4
+
+    # At step 1, should still sample normally
+    batch2 = next(iter(sampler))
+    assert len(batch2) == 4
+
+    # After step 2, weight becomes zero, should raise StopIteration
+    with pytest.raises(StopIteration, match="All dataset weights are zero"):
+        next(iter(sampler))

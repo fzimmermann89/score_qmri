@@ -160,7 +160,7 @@ class DiffusionLightningModule(LightningModule):
         images = []
         for k in range(self.model.num_kinds):
             kind = torch.tensor([k], device=self.device)
-            sample = self.sampler.sample((1, 2, size, size), self.device, kind, self._fixed_noise[k])
+            sample = self.sampler.sample((1, 2, size, size), kind, self._fixed_noise[k])
             images.append(wandb.Image(sample[0, 0].cpu().numpy(), caption=f"kind_{k}"))
 
         self.logger.experiment.log({"validation/samples": images, "global_step": self.global_step})

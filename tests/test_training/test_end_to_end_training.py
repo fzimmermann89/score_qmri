@@ -2,7 +2,9 @@
 
 import sys
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import lightning.pytorch as pl
 import pytest
@@ -20,7 +22,7 @@ from training.lightning_module import DiffusionLightningModule
 
 
 @pytest.fixture
-def training_yaml_config(sample_h5_file_magnitude: str):
+def training_yaml_config(sample_h5_file_magnitude: str) -> Generator[str, None, None]:
     """Create temporary YAML config file for training tests."""
     config_content = f"""model:
   base_channels: 16
@@ -82,7 +84,10 @@ def test_augmentation_config():
 
 
 @pytest.fixture
-def magnitude_dataset_config(sample_h5_file_magnitude: str, test_augmentation_config):
+def magnitude_dataset_config(
+    sample_h5_file_magnitude: str,
+    test_augmentation_config: AugmentationConfig,
+) -> MagnitudeDatasetConfig:
     return MagnitudeDatasetConfig(
         type="magnitude",
         kind=DatasetKind.T1W_MAGNITUDE,
@@ -134,6 +139,7 @@ def test_training_with_single_dataset(
     """Verify training completes with single dataset and parameters receive gradients."""
     try:
         from training.losses import ssim_loss
+
         ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
     except ImportError:
         pytest.skip("pytorch-msssim not available")
@@ -157,15 +163,16 @@ def test_training_with_single_dataset(
 
 
 def test_training_with_multiple_datasets(
-    magnitude_dataset_config,
+    magnitude_dataset_config: MagnitudeDatasetConfig,
     sample_h5_file_mapping: str,
-    test_augmentation_config,
-    fast_trainer,
-    small_model_kwargs,
-):
+    test_augmentation_config: AugmentationConfig,
+    fast_trainer: pl.Trainer,
+    small_model_kwargs: dict[str, Any],
+) -> None:
     """Verify multi-dataset concat works and both dataset configs are retained."""
     try:
         from training.losses import ssim_loss
+
         ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
     except ImportError:
         pytest.skip("pytorch-msssim not available")
@@ -197,10 +204,14 @@ def test_training_with_multiple_datasets(
     assert len(datamodule.dataset_configs) == 2
 
 
-def test_training_with_yaml_config(training_yaml_config: str, fast_trainer):
+def test_training_with_yaml_config(
+    training_yaml_config: str,
+    fast_trainer: pl.Trainer,
+) -> None:
     """Verify Lightning CLI correctly parses YAML config and training succeeds."""
     try:
         from training.losses import ssim_loss
+
         ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
     except ImportError:
         pytest.skip("pytorch-msssim not available")

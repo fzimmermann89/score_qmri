@@ -2,7 +2,7 @@
 
 import torch
 
-from training.phase_augmentation import PhaseAugmentation
+from datasets.augmentation import PhaseAugmentation
 
 
 def test_phase_augmentation_preserves_shape():

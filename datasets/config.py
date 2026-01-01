@@ -17,6 +17,7 @@ class AugmentationConfig:
     rotation_range: tuple[float, float] = (-10.0, 10.0)
     shear_range: tuple[float, float] = (-0.1, 0.1)
     contrast_strength: float = 0.2
+    poly_coeff_range: tuple[float, float] = (-0.3, 0.3)
 
 
 # Preset configurations for different dataset types
