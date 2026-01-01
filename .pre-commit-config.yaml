@@ -18,4 +18,18 @@ repos:
     rev: v1.8.0
     hooks:
       - id: mypy
-        args: [--ignore-missing-imports]
+        additional_dependencies:
+          - torch>=2.8.0
+          - torchvision>=0.20.0
+          - lightning>=2.0.0
+          - einops>=0.7.0
+          - numpy>=1.24.0
+          - kornia>=0.7.0
+          - jsonargparse[signatures]>=4.27.0
+          - h5py>=3.8.0
+          - h5py-stubs
+          - typing-extensions
+          - pytest
+          - types-PyYAML
+          - "--index-url=https://download.pytorch.org/whl/cpu"
+          - "--extra-index-url=https://pypi.python.org/simple"

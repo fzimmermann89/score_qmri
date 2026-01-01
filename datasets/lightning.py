@@ -2,6 +2,7 @@
 
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -14,6 +15,17 @@ from .concat import create_concat_dataset, get_size_labels
 from .kind import DatasetKind
 from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
+
+
+@dataclass
+class MRIDataModuleHparams:
+    """Type-safe hyperparameter definitions for MRIDataModule."""
+
+    dataset_configs: list[dict[str, Any]] | None
+    schedule_ramp_steps: list[int] | None
+    batch_size: int
+    num_workers: int
+    base_seed: int
 
 
 def create_dataset_from_config(
@@ -98,6 +110,8 @@ def _constant_schedule(weight: float) -> Callable[[int], float]:
 
 class MRIDataModule(LightningDataModule):
     """DataModule for MRI training datasets with scheduled sampling."""
+
+    hparams: MRIDataModuleHparams  # type: ignore[assignment]
 
     def __init__(
         self,

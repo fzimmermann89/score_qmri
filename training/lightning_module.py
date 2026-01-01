@@ -1,6 +1,7 @@
 """PyTorch Lightning module for diffusion training."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -15,8 +16,29 @@ from sampling.ddim_sampler import DDIMSampler, create_fixed_noise
 from training.losses import compute_loss
 
 
+@dataclass
+class DiffusionHparams:
+    """Type-safe hyperparameter definitions for DiffusionLightningModule."""
+
+    base_channels: int
+    num_blocks: int
+    cond_dim: int
+    beta_min: float
+    beta_max: float
+    learning_rate: float
+    noise_weight: float
+    x0_weight: float
+    ssim_weight: float
+    l1_weight: float
+    validation_size: int
+    validation_steps: int
+    validation_interval: int
+
+
 class DiffusionLightningModule(LightningModule):
     """Lightning module for diffusion training with dual prediction heads."""
+
+    hparams: DiffusionHparams  # type: ignore[assignment]
 
     def __init__(
         self,
