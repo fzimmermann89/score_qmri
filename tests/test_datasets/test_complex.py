@@ -24,27 +24,16 @@ class TestComplexDataset:
         assert len(dataset) == 5
         assert dataset.slice_shape == (64, 64)
 
-    def test_coilwise_random_mode(self, sample_h5_file_complex):
-        """Test coilwise with random coil selection."""
+    def test_coilwise_mode(self, sample_h5_file_complex):
+        """Test coilwise mode iterates through all coil combinations."""
         dataset = ComplexImageDataset(
             sample_h5_file_complex,
             mode="coilwise",
             kind=DatasetKind.COMPLEX_T1W_COILWISE,
-            random_coil=True,
         )
-        # Subject 1: 3 z-slices, Subject 2: 2 z-slices = 5 total
-        assert len(dataset) == 5
-
-    def test_coilwise_sequential_mode(self, sample_h5_file_complex):
-        """Test coilwise with all coils sequentially."""
-        dataset = ComplexImageDataset(
-            sample_h5_file_complex,
-            mode="coilwise",
-            kind=DatasetKind.COMPLEX_T1W_COILWISE,
-            random_coil=False,
-        )
-        # Subject 1: 3 z * 4 coils = 12, Subject 2: 2 z * 4 coils = 8 = 20 total
+        # Subject 1: 3 z-slices * 4 coils = 12, Subject 2: 2 z-slices * 4 coils = 8 = 20 total
         assert len(dataset) == 20
+        assert dataset.slice_shape == (64, 64)
 
     def test_getitem_returns_complex_tensor(self, sample_h5_file_complex):
         """Test __getitem__ returns complex tensor."""
@@ -69,19 +58,19 @@ class TestComplexDataset:
         assert sample["image"].shape == (64, 64)
         assert sample["image"].is_complex()
 
-    def test_random_coil_varies(self, sample_h5_file_complex):
-        """Test that random_coil=True samples different coils."""
+    def test_coilwise_access_all_coils(self, sample_h5_file_complex):
+        """Test that coilwise mode iterates through all coil combinations."""
         dataset = ComplexImageDataset(
             sample_h5_file_complex,
             mode="coilwise",
             kind=DatasetKind.COMPLEX_T1W_COILWISE,
-            random_coil=True,
         )
-        # Sample the same index multiple times - coils should vary
-        samples = [dataset[0]["image"] for _ in range(10)]
-        # At least some should differ (probability of all same is very low)
-        different_found = any(not torch.allclose(samples[0], s) for s in samples[1:])
-        assert different_found, "Random coil selection should produce varying results"
+        # Should access all (z, coil) combinations
+        assert len(dataset) == 20  # 3*4 + 2*4
+        # Each access should return deterministic data
+        sample1 = dataset[0]
+        sample2 = dataset[0]
+        assert torch.allclose(sample1["image"], sample2["image"])
 
 
 class TestErrorHandling:
