@@ -215,4 +215,3 @@ score_qmri/
 - Song et al., "Score-Based Generative Modeling through Stochastic Differential Equations", ICLR 2021
 - Ho et al., "Denoising Diffusion Probabilistic Models", NeurIPS 2020
 - Perez et al., "FiLM: Visual Reasoning with a General Conditioning Layer", AAAI 2018
-

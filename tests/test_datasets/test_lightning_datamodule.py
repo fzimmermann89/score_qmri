@@ -46,6 +46,7 @@ def test_datamodule_hparams_saved():
         base_seed=123,
     )
 
+    # The hparams are properly typed via the class-level annotation
     assert dm.hparams.batch_size == 8
     assert dm.hparams.num_workers == 2
     assert dm.hparams.base_seed == 123

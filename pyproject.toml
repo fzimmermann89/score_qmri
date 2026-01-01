@@ -84,14 +84,7 @@ disallow_incomplete_defs = false
 
 [[tool.mypy.overrides]]
 module = [
-    "h5py.*",
-    "pytorch_lightning.*",
-    "lightning.*",
-    "jsonargparse.*",
-    "einops.*",
-    "torchvision.*",
     "pytorch_msssim.*",
-    "pytest.*",
     "_pytest.*",
     "wandb.*",
 ]
