@@ -231,7 +231,9 @@ class MRIDataModule(LightningDataModule):
 
     def setup(self, stage: str) -> None:
         """Set up datasets for training."""
-        if (stage == "fit" or stage is None) and self.dataset_configs:
+        if stage == "fit" or stage is None:
+            if not self.dataset_configs:
+                raise ValueError("No datasets configured. Provide at least one dataset_config when initializing MRIDataModule.")
             datasets = [cfg.create() for cfg in self.dataset_configs]
             self.concat_ds = ConcatDataset(datasets)
             self.size_labels = get_size_labels(datasets)
@@ -240,7 +242,7 @@ class MRIDataModule(LightningDataModule):
     def train_dataloader(self) -> DataLoader:
         """Create training dataloader with scheduled batch sampler."""
         if self.concat_ds is None or self.size_labels is None or self.dataset_lengths is None:
-            raise RuntimeError("Must call setup() before train_dataloader()")
+            raise RuntimeError("Datasets not initialized. Ensure setup() was called with valid dataset_configs.")
 
         rank = self.trainer.global_rank if self.trainer is not None else int(os.environ.get("LOCAL_RANK", 0))
 

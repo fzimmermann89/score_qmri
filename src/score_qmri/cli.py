@@ -36,9 +36,9 @@ class WandbSaveConfigCallback(SaveConfigCallback):
             return
 
         # Log config as artifact
-        artifact = wandb.Artifact(f"config-{wandb.run.id}", type="config")  # type: ignore[union-attr]
+        artifact = wandb.Artifact(f"config-{wandb.run.id}", type="config")
         artifact.add_file(str(config_path))
-        wandb.run.log_artifact(artifact)  # type: ignore[union-attr]
+        wandb.run.log_artifact(artifact)
 
 
 class DiffusionLightningCLI(LightningCLI):
@@ -147,15 +147,15 @@ class DiffusionLightningCLI(LightningCLI):
     @staticmethod
     def subcommands() -> dict[str, set[str]]:
         """Define trainer functions to use as subcommands of the CLI."""
-        return {
-            "fit": {"model", "train_dataloaders", "datamodule"},
-            "predict": {"model", "dataloaders", "datamodule"},
-        }
+        return {"fit": {"model", "train_dataloaders", "datamodule"}}
 
 
 def main() -> None:
     """Run the training CLI."""
     torch.set_float32_matmul_precision("high")
+
+    if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1].startswith("-")):
+        sys.argv.insert(1, "fit")
 
     DiffusionLightningCLI(
         DiffusionLightningModule,

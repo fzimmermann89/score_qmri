@@ -62,10 +62,12 @@ def test_datamodule_hparams_saved():
 
 
 def test_datamodule_empty_configs():
-    """Test MRIDataModule handles empty configs."""
+    """Test MRIDataModule raises error when no configs provided."""
+    import pytest
+
     dm = MRIDataModule(dataset_configs=[])
-    dm.setup("fit")
-    assert dm.concat_ds is None
+    with pytest.raises(ValueError, match="No datasets configured"):
+        dm.setup("fit")
 
 
 def test_datamodule_get_config_summary():

@@ -139,7 +139,7 @@ class DiffusionLightningModule(LightningModule):
 
         # Log source code
         project_root = Path(__file__).parent.parent
-        wandb.run.log_code(  # type: ignore[union-attr]
+        wandb.run.log_code(
             str(project_root),
             include_fn=lambda p: p.endswith(".py") or p.endswith(".yaml") or p.endswith(".toml"),
         )
