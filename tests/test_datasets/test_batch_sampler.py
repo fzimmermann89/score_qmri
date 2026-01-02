@@ -100,19 +100,19 @@ def test_batch_sampler_single_dataset():
 
 
 def test_batch_sampler_negative_weights():
-    """Test sampler handles negative weights."""
+    """Test sampler handles negative weights by raising StopIteration when combined weight is zero or negative."""
     ds1 = TensorDataset(torch.randn(10, 3, 32, 32))
     ds2 = TensorDataset(torch.randn(15, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds1, ds2])
 
-    # Second dataset has negative weight
+    # Both datasets in same bucket: 1.0*10 + (-1.0)*15 = -5 < 0
     sampler = ScheduledBatchSampler(
         concat, [(32, 32), (32, 32)], [10, 15], [lambda s: 1.0, lambda s: -1.0], batch_size=4, base_seed=42, rank=0
     )
 
-    batch = next(iter(sampler))
-    # Should only sample from first dataset (positive weight)
-    assert all(idx < 10 for idx in batch)
+    iterator = iter(sampler)
+    with pytest.raises(StopIteration, match="All dataset weights are zero"):
+        next(iterator)
 
 
 def test_batch_sampler_handles_large_steps():

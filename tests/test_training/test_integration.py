@@ -65,7 +65,7 @@ def test_integration_single_dataset_training(
     integration_aug_config: AugmentationConfig,
     integration_trainer: pl.Trainer,
     small_integration_model_kwargs: dict,
-):
+) -> None:
     """Test complete training loop with single dataset."""
     dataset_config = MagnitudeDatasetConfig(
         type="magnitude",
@@ -97,7 +97,7 @@ def test_integration_multiple_datasets_produce_distinct_outputs(
     integration_aug_config: AugmentationConfig,
     integration_trainer: pl.Trainer,
     small_integration_model_kwargs: dict,
-):
+) -> None:
     """Test multiple datasets with different kinds produce distinct outputs."""
     from datasets.lightning import MappingDatasetConfig
 
@@ -142,7 +142,7 @@ def test_integration_datamodule_with_lightning_module(
     sample_h5_file_magnitude: str,
     integration_aug_config: AugmentationConfig,
     small_integration_model_kwargs: dict,
-):
+) -> None:
     """Test MRIDataModule correctly integrates with DiffusionLightningModule."""
     dataset_config = MagnitudeDatasetConfig(
         type="magnitude",
@@ -158,8 +158,6 @@ def test_integration_datamodule_with_lightning_module(
         num_workers=0,
         base_seed=42,
     )
-
-    model = DiffusionLightningModule(**small_integration_model_kwargs)
 
     datamodule.setup("fit")
     train_loader = datamodule.train_dataloader()

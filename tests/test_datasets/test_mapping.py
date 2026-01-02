@@ -1,6 +1,5 @@
 """Tests for MappingDataset."""
 
-
 from pathlib import Path
 
 import h5py
