@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from datasets.config import AugmentationConfig
+from score_qmri.datasets.config import AugmentationConfig
 
 
 @pytest.fixture

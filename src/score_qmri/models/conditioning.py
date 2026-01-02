@@ -5,7 +5,7 @@ import math
 import torch
 from torch import Tensor
 
-from datasets.kind import NUM_DATASET_KINDS
+from score_qmri.datasets.kind import NUM_DATASET_KINDS
 
 
 class SinusoidalEmbedding(torch.nn.Module):

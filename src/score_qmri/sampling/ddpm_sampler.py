@@ -4,7 +4,7 @@ import torch
 from einops import rearrange
 from torch import Tensor
 
-from models.diffusion import DiffusionModel
+from score_qmri.models.diffusion import DiffusionModel
 
 
 class DDPMSampler:

@@ -11,8 +11,8 @@ from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, Mo
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
 
-from datasets.lightning import MRIDataModule
-from training.lightning_module import DiffusionLightningModule
+from score_qmri.datasets.lightning import MRIDataModule
+from score_qmri.training.lightning_module import DiffusionLightningModule
 
 if not sys.warnoptions:
     warnings.simplefilter("ignore")
@@ -50,7 +50,7 @@ class DiffusionLightningCLI(LightningCLI):
         parser.add_argument("--wandb_project", type=str, default="mri-diffusion", help="WandB project name.")
         parser.add_argument("--wandb_entity", type=str | None, default=None, help="WandB entity name.")
         parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Path for checkpoints.")
-        parser.set_defaults({"data": {"class_path": "datasets.lightning.MRIDataModule"}})
+        parser.set_defaults({"data": {"class_path": "score_qmri.datasets.lightning.MRIDataModule"}})
 
     def before_instantiate_classes(self) -> None:
         """Set up logger and callbacks before instantiating classes."""

@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch.utils.data import ConcatDataset, TensorDataset
 
-from datasets.batch_sampler import ScheduledBatchSampler
+from score_qmri.datasets.batch_sampler import ScheduledBatchSampler
 
 
 def test_batch_sampler_produces_correct_batch_size():

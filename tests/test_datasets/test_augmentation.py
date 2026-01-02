@@ -2,8 +2,8 @@
 
 import torch
 
-from datasets.augmentation import AugmentationPipeline
-from datasets.config import AugmentationConfig
+from score_qmri.datasets.augmentation import AugmentationPipeline
+from score_qmri.datasets.config import AugmentationConfig
 
 # Original AugmentationPipeline tests
 

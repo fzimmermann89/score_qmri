@@ -2,7 +2,7 @@
 
 import torch
 
-from models.unet import ResBlock, UNet
+from score_qmri.models.unet import ResBlock, UNet
 
 
 def test_resblock_forward():

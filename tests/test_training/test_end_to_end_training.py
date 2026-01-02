@@ -11,14 +11,14 @@ import pytest
 import torch
 from lightning.pytorch.cli import LightningCLI
 
-from datasets.config import AugmentationConfig
-from datasets.kind import DatasetKind
-from datasets.lightning import (
+from score_qmri.datasets.config import AugmentationConfig
+from score_qmri.datasets.kind import DatasetKind
+from score_qmri.datasets.lightning import (
     ConstantSchedule,
     MagnitudeDatasetConfig,
     MRIDataModule,
 )
-from training.lightning_module import DiffusionLightningModule
+from score_qmri.training.lightning_module import DiffusionLightningModule
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def training_yaml_config(sample_h5_file_magnitude: str) -> Generator[str, None, 
   validation_interval: 100
 
 data:
-  class_path: datasets.lightning.MRIDataModule
+  class_path: score_qmri.datasets.lightning.MRIDataModule
   init_args:
     dataset_configs:
       - type: magnitude
@@ -138,7 +138,7 @@ def test_training_with_single_dataset(
 ):
     """Verify training completes with single dataset and parameters receive gradients."""
     try:
-        from training.losses import ssim_loss
+        from score_qmri.training.losses import ssim_loss
 
         ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
     except ImportError:
@@ -171,13 +171,13 @@ def test_training_with_multiple_datasets(
 ) -> None:
     """Verify multi-dataset concat works and both dataset configs are retained."""
     try:
-        from training.losses import ssim_loss
+        from score_qmri.training.losses import ssim_loss
 
         ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
     except ImportError:
         pytest.skip("pytorch-msssim not available")
 
-    from datasets.lightning import MappingDatasetConfig
+    from score_qmri.datasets.lightning import MappingDatasetConfig
 
     mapping_config = MappingDatasetConfig(
         type="mapping",
@@ -210,7 +210,7 @@ def test_training_with_yaml_config(
 ) -> None:
     """Verify Lightning CLI correctly parses YAML config and training succeeds."""
     try:
-        from training.losses import ssim_loss
+        from score_qmri.training.losses import ssim_loss
 
         ssim_loss(torch.randn(1, 2, 64, 64), torch.randn(1, 2, 64, 64))
     except ImportError:

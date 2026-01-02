@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import torch
 
-from datasets.kind import DatasetKind
-from datasets.mapping import MappingDataset
+from score_qmri.datasets.kind import DatasetKind
+from score_qmri.datasets.mapping import MappingDataset
 
 
 def test_mapping_dataset_counts_all_subjects(sample_h5_file_mapping: str) -> None:

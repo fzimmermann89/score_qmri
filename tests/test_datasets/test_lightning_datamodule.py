@@ -1,7 +1,7 @@
 """Tests for MRIDataModule."""
 
-from datasets.kind import DatasetKind
-from datasets.lightning import (
+from score_qmri.datasets.kind import DatasetKind
+from score_qmri.datasets.lightning import (
     ConstantSchedule,
     DatasetConfig,
     MagnitudeDatasetConfig,
@@ -70,7 +70,7 @@ def test_datamodule_empty_configs():
 
 def test_datamodule_get_config_summary():
     """Test get_config_summary returns flattened config dict."""
-    from datasets.config import AugmentationConfig
+    from score_qmri.datasets.config import AugmentationConfig
 
     configs: list[DatasetConfig] = [
         MagnitudeDatasetConfig(

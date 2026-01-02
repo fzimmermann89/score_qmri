@@ -2,7 +2,7 @@
 
 import torch
 
-from models.diffusion import DiffusionModel, DiffusionOutput
+from score_qmri.models.diffusion import DiffusionModel, DiffusionOutput
 
 
 def test_diffusion_init():

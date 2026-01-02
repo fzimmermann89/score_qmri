@@ -2,7 +2,7 @@
 
 import torch
 
-from models.conditioning import ConditioningMLP, SinusoidalEmbedding
+from score_qmri.models.conditioning import ConditioningMLP, SinusoidalEmbedding
 
 
 def test_sinusoidal_embedding():

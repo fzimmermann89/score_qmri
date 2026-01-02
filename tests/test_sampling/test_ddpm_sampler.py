@@ -2,8 +2,8 @@
 
 import torch
 
-from models.diffusion import DiffusionModel
-from sampling.ddpm_sampler import DDPMSampler
+from score_qmri.models.diffusion import DiffusionModel
+from score_qmri.sampling.ddpm_sampler import DDPMSampler
 
 
 def test_ddpm_sampler_shape():

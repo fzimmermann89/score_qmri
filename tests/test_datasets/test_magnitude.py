@@ -5,8 +5,8 @@ import tempfile
 import h5py
 import pytest
 
-from datasets.kind import DatasetKind
-from datasets.magnitude import MagnitudeImageDataset
+from score_qmri.datasets.kind import DatasetKind
+from score_qmri.datasets.magnitude import MagnitudeImageDataset
 
 
 def test_magnitude_dataset_counts_all_subjects(sample_h5_file_magnitude):

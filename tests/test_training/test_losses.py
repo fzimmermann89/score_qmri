@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from training.losses import compute_loss, l1_loss, noise_loss
+from score_qmri.training.losses import compute_loss, l1_loss, noise_loss
 
 
 def test_noise_loss():
@@ -52,7 +52,7 @@ def test_l1_loss_identical_inputs():
 
 def test_ssim_loss():
     """Test SSIM loss."""
-    from training.losses import ssim_loss
+    from score_qmri.training.losses import ssim_loss
 
     pred = torch.randn(2, 2, 64, 64)
     target = torch.randn(2, 2, 64, 64)
@@ -86,7 +86,7 @@ def test_compute_loss_weights():
 
 def test_ssim_loss_with_mask():
     """Test SSIM loss with mask only considers non-masked windows."""
-    from training.losses import ssim_loss
+    from score_qmri.training.losses import ssim_loss
 
     # Create identical images in the unmasked region
     pred = torch.zeros(1, 2, 32, 32)
@@ -111,7 +111,7 @@ def test_ssim_loss_with_mask():
 
 def test_ssim_loss_mask_does_not_inflate():
     """Test that masking doesn't artificially inflate SSIM."""
-    from training.losses import ssim_loss
+    from score_qmri.training.losses import ssim_loss
 
     # Create case where unmasked region has mismatch but masked region is zero
     pred = torch.zeros(1, 2, 32, 32)
@@ -134,7 +134,7 @@ def test_ssim_loss_mask_does_not_inflate():
 
 def test_ssim_loss_mismatched_shapes():
     """Test ssim_loss raises error for mismatched shapes."""
-    from training.losses import ssim_loss
+    from score_qmri.training.losses import ssim_loss
 
     pred = torch.randn(2, 2, 32, 32)
     target = torch.randn(1, 2, 32, 32)
@@ -145,7 +145,7 @@ def test_ssim_loss_mismatched_shapes():
 
 def test_ssim_loss_invalid_window_size():
     """Test ssim_loss handles invalid window sizes."""
-    from training.losses import ssim_loss
+    from score_qmri.training.losses import ssim_loss
 
     pred = torch.randn(1, 2, 32, 32)
     target = torch.randn(1, 2, 32, 32)
@@ -157,7 +157,7 @@ def test_ssim_loss_invalid_window_size():
 
 def test_ssim_loss_all_zero_mask():
     """Test ssim_loss returns NaN-free value for all-zero mask."""
-    from training.losses import ssim_loss
+    from score_qmri.training.losses import ssim_loss
 
     pred = torch.randn(1, 2, 32, 32)
     target = torch.randn(1, 2, 32, 32)
@@ -171,7 +171,7 @@ def test_ssim_loss_all_zero_mask():
 
 def test_ssim_loss_mask_shape_mismatch():
     """Test ssim_loss raises error for shape mismatch in mask."""
-    from training.losses import ssim_loss
+    from score_qmri.training.losses import ssim_loss
 
     pred = torch.randn(1, 2, 32, 32)
     target = torch.randn(1, 2, 32, 32)
@@ -183,7 +183,7 @@ def test_ssim_loss_mask_shape_mismatch():
 
 def test_ssim_loss_negative_mask_values():
     """Test ssim_loss raises ValueError for negative mask values."""
-    from training.losses import ssim_loss
+    from score_qmri.training.losses import ssim_loss
 
     pred = torch.randn(1, 2, 32, 32)
     target = torch.randn(1, 2, 32, 32)

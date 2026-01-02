@@ -2,7 +2,7 @@
 
 import torch
 
-from datasets.augmentation import PhaseAugmentation
+from score_qmri.datasets.augmentation import PhaseAugmentation
 
 
 def test_phase_augmentation_preserves_shape():

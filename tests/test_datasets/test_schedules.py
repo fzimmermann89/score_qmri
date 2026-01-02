@@ -1,6 +1,6 @@
 """Tests for schedule classes."""
 
-from datasets.lightning import (
+from score_qmri.datasets.lightning import (
     ConstantSchedule,
     PhaseInSchedule,
     PhaseOutSchedule,

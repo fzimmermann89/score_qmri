@@ -4,7 +4,7 @@ import torch
 from einops import rearrange
 from torch import Tensor
 
-from models.diffusion import DiffusionModel
+from score_qmri.models.diffusion import DiffusionModel
 
 
 class DDIMSampler:
@@ -101,7 +101,7 @@ def create_fixed_noise(image_shape: tuple[int, int], seed: int = 42) -> dict[int
     -------
     Dictionary mapping dataset kind index to noise tensor of shape (1, 2, H, W).
     """
-    from datasets.kind import NUM_DATASET_KINDS
+    from score_qmri.datasets.kind import NUM_DATASET_KINDS
 
     gen = torch.Generator().manual_seed(seed)
     return {k: torch.randn(1, 2, *image_shape, generator=gen) for k in range(NUM_DATASET_KINDS)}

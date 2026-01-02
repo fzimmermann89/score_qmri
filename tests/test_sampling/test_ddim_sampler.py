@@ -2,8 +2,8 @@
 
 import torch
 
-from models.diffusion import DiffusionModel
-from sampling.ddim_sampler import DDIMSampler, create_fixed_noise
+from score_qmri.models.diffusion import DiffusionModel
+from score_qmri.sampling.ddim_sampler import DDIMSampler, create_fixed_noise
 
 
 def test_ddim_sampler_shape():
@@ -46,7 +46,7 @@ def test_ddim_deterministic():
 
 def test_create_fixed_noise():
     """Test fixed noise creation."""
-    from datasets.kind import NUM_DATASET_KINDS
+    from score_qmri.datasets.kind import NUM_DATASET_KINDS
 
     noise = create_fixed_noise((64, 64))
     assert len(noise) == NUM_DATASET_KINDS
@@ -56,7 +56,7 @@ def test_create_fixed_noise():
 
 def test_create_fixed_noise_reproducible():
     """Test fixed noise is reproducible."""
-    from datasets.kind import NUM_DATASET_KINDS
+    from score_qmri.datasets.kind import NUM_DATASET_KINDS
 
     n1 = create_fixed_noise((32, 32), seed=42)
     n2 = create_fixed_noise((32, 32), seed=42)

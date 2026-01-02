@@ -11,10 +11,10 @@ from lightning import LightningModule
 from lightning.pytorch.loggers import WandbLogger
 from torch import Tensor
 
-from datasets.kind import DatasetKind
-from models.diffusion import DiffusionModel
-from sampling.ddim_sampler import DDIMSampler, create_fixed_noise
-from training.losses import compute_loss
+from score_qmri.datasets.kind import DatasetKind
+from score_qmri.models.diffusion import DiffusionModel
+from score_qmri.sampling.ddim_sampler import DDIMSampler, create_fixed_noise
+from score_qmri.training.losses import compute_loss
 
 # Subset of kinds to generate validation samples for
 VALIDATION_KINDS: tuple[DatasetKind, ...] = (

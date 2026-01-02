@@ -3,8 +3,8 @@
 import pytest
 import torch
 
-from datasets.kind import NUM_DATASET_KINDS
-from training.lightning_module import DiffusionLightningModule
+from score_qmri.datasets.kind import NUM_DATASET_KINDS
+from score_qmri.training.lightning_module import DiffusionLightningModule
 
 
 @pytest.fixture
@@ -44,7 +44,7 @@ def test_hparams_saved(module):
 
 def test_create_fixed_noise_for_all_kinds(module):
     """Test fixed noise is created for each kind."""
-    from sampling.ddim_sampler import create_fixed_noise
+    from score_qmri.sampling.ddim_sampler import create_fixed_noise
 
     noise = create_fixed_noise((32, 32))
     assert len(noise) == NUM_DATASET_KINDS

@@ -4,8 +4,8 @@ import h5py
 import pytest
 import torch
 
-from datasets.complex import ComplexImageDataset
-from datasets.kind import DatasetKind
+from score_qmri.datasets.complex import ComplexImageDataset
+from score_qmri.datasets.kind import DatasetKind
 
 
 class TestComplexDataset:
