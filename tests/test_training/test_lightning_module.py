@@ -3,6 +3,7 @@
 import pytest
 import torch
 
+from datasets.kind import NUM_DATASET_KINDS
 from training.lightning_module import DiffusionLightningModule
 
 
@@ -39,17 +40,13 @@ def test_hparams_saved(module):
     """Test hyperparameters are saved."""
     assert module.hparams.base_channels == 16
     assert module.hparams.num_blocks == 2
-    assert module.model.num_kinds > 0
 
 
 def test_create_fixed_noise_for_all_kinds(module):
     """Test fixed noise is created for each kind."""
-    module._fixed_noise = None  # Reset
-    module._log_samples()  # This won't log (no WandB) but creates noise
-    # Manually trigger noise creation
     from sampling.ddim_sampler import create_fixed_noise
 
     noise = create_fixed_noise((32, 32))
-    assert len(noise) == module.model.num_kinds
-    for k in range(module.model.num_kinds):
+    assert len(noise) == NUM_DATASET_KINDS
+    for k in range(NUM_DATASET_KINDS):
         assert noise[k].shape == (1, 2, 32, 32)

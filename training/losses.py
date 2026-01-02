@@ -203,7 +203,6 @@ def ssim_loss(
 
     # Broadcast target, pred, and mask
     if mask is not None:
-        target, pred = torch.broadcast_tensors(target, pred)
         target, pred, mask = torch.broadcast_tensors(target, pred, mask)
     else:
         target, pred = torch.broadcast_tensors(target, pred)
@@ -221,20 +220,20 @@ def ssim_loss(
     mean_pred_sq = (pred_window**2).mean(dim=(-2, -1))
     mean_target_pred = (target_window * pred_window).mean(dim=(-2, -1))
 
-    # Unbiased covariance
+    # Unbiased covariance (clamp to prevent negative variance from numerical errors)
     n = target_window.shape[-2:].numel()
     cov_norm = n / (n - 1)
-    var_target = cov_norm * (mean_target_sq - mean_target * mean_target)
-    var_pred = cov_norm * (mean_pred_sq - mean_pred * mean_pred)
+    var_target = (cov_norm * (mean_target_sq - mean_target * mean_target)).clamp(min=0.0)
+    var_pred = (cov_norm * (mean_pred_sq - mean_pred * mean_pred)).clamp(min=0.0)
     var_target_pred = cov_norm * (mean_target_pred - mean_target * mean_pred)
 
     # Data range
     if data_range is None:
         target_max = target_window.amax(dim=(-2, -1)).amax(dim=(-2, -1), keepdim=True)
         target_min = target_window.amin(dim=(-2, -1)).amin(dim=(-2, -1), keepdim=True)
-        data_range_ = target_max - target_min
+        data_range_ = (target_max - target_min).clamp(min=1e-8)
     else:
-        data_range_ = Tensor(data_range) if isinstance(data_range, Tensor) else torch.tensor(data_range)
+        data_range_ = data_range if isinstance(data_range, Tensor) else torch.tensor(data_range)
 
     c1 = (k1 * data_range_) ** 2
     c2 = (k2 * data_range_) ** 2

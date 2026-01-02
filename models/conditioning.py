@@ -5,6 +5,8 @@ import math
 import torch
 from torch import Tensor
 
+from datasets.kind import NUM_DATASET_KINDS
+
 
 class SinusoidalEmbedding(torch.nn.Module):
     """Sinusoidal positional embedding for timesteps."""
@@ -37,7 +39,7 @@ class SinusoidalEmbedding(torch.nn.Module):
         """
         device = t.device
         half_dim = self.dim // 2
-        freqs = torch.exp(torch.arange(half_dim, device=device) * -(math.log(10000) / (half_dim - 1)))
+        freqs = torch.exp(torch.arange(half_dim, device=device) * -(math.log(10000) / max(half_dim - 1, 1)))
         args = t[:, None].float() * freqs[None, :]
         emb: Tensor = torch.cat([args.sin(), args.cos()], dim=-1)
         return emb
@@ -48,7 +50,6 @@ class ConditioningMLP(torch.nn.Module):
 
     def __init__(
         self,
-        num_kinds: int = 3,
         cond_dim: int = 128,
         time_embed_dim: int = 64,
     ) -> None:
@@ -57,8 +58,6 @@ class ConditioningMLP(torch.nn.Module):
 
         Parameters
         ----------
-        num_kinds
-            Number of dataset types.
         cond_dim
             Output conditioning dimension.
         time_embed_dim
@@ -66,7 +65,7 @@ class ConditioningMLP(torch.nn.Module):
         """
         super().__init__()
         self.time_embed = SinusoidalEmbedding(time_embed_dim)
-        self.kind_embed = torch.nn.Embedding(num_kinds, cond_dim // 2)
+        self.kind_embed = torch.nn.Embedding(NUM_DATASET_KINDS, cond_dim // 2)
         self.mlp = torch.nn.Sequential(
             torch.nn.Linear(time_embed_dim + cond_dim // 2, cond_dim),
             torch.nn.SiLU(),

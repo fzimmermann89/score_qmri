@@ -64,7 +64,8 @@ class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
     def __getitem__(self, idx: int) -> dict[str, Any]:
         """Get sample with image, mask, and kind tensors."""
         image = self._load_slice(self._get_h5_file(), idx)
-        mask = image != 0
+        # For complex: compare complex number to 0. For real: use small epsilon for float comparison.
+        mask = image != 0 if image.is_complex() else image.abs() > 1e-6
 
         if self.augmentation is not None:
             image, mask = self.augmentation(image, mask)

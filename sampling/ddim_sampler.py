@@ -28,7 +28,7 @@ class DDIMSampler:
     def sample(
         self,
         shape: tuple[int, ...],
-        kind: Tensor,
+        kind: Tensor | None = None,
         initial_noise: Tensor | None = None,
     ) -> Tensor:
         """
@@ -39,7 +39,7 @@ class DDIMSampler:
         shape
             Output shape (B, 2, H, W).
         kind
-            Dataset kind indices of shape (B,).
+            Dataset kind indices of shape (B,). Defaults to zeros.
         initial_noise
             Optional fixed noise for reproducibility.
 
@@ -51,6 +51,8 @@ class DDIMSampler:
         device = self.model.device
         with torch.no_grad():
             B = shape[0]
+            kind = torch.zeros(B, dtype=torch.long, device=device) if kind is None else kind.to(device)
+
             x = initial_noise.to(device) if initial_noise is not None else torch.randn(shape, device=device)
             timesteps = torch.linspace(1.0, 0.0, self.num_steps + 1, device=device)
 
@@ -69,11 +71,16 @@ class DDIMSampler:
         ab_t = rearrange(self.model.alpha_bar(t), "b -> b 1 1 1")
         ab_prev = rearrange(self.model.alpha_bar(t_prev), "b -> b 1 1 1")
 
-        sigma = self.eta * ((1 - ab_prev) / (1 - ab_t).clamp(min=1e-8) * (1 - ab_t / ab_prev.clamp(min=1e-8))).sqrt()
+        # Clamp before sqrt to prevent NaN from numerical errors
+        one_minus_ab_t = (1 - ab_t).clamp(min=1e-8)
+        one_minus_ab_prev = (1 - ab_prev).clamp(min=0.0)
+        sigma_sq = self.eta**2 * (one_minus_ab_prev / one_minus_ab_t * (1 - ab_t / ab_prev.clamp(min=1e-8)))
+        sigma = sigma_sq.clamp(min=0.0).sqrt()
+
         pred_dir = (1 - ab_prev - sigma**2).clamp(min=0.0).sqrt() * output.noise
         x_prev: Tensor = ab_prev.sqrt() * x0_pred + pred_dir
 
-        if self.eta > 0 and t_prev[0].item() > 0:
+        if self.eta > 0 and t_prev[0] > 1e-8:
             x_prev = x_prev + sigma * torch.randn_like(x)
 
         return x_prev

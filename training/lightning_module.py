@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -10,10 +11,19 @@ from lightning import LightningModule
 from lightning.pytorch.loggers import WandbLogger
 from torch import Tensor
 
-from datasets.kind import NUM_DATASET_KINDS
+from datasets.kind import DatasetKind
 from models.diffusion import DiffusionModel
 from sampling.ddim_sampler import DDIMSampler, create_fixed_noise
 from training.losses import compute_loss
+
+# Subset of kinds to generate validation samples for
+VALIDATION_KINDS: tuple[DatasetKind, ...] = (
+    DatasetKind.T1W_MAGNITUDE,
+    DatasetKind.T1MAP,
+    DatasetKind.COMPLEX_T1W_COIL_COMBINED,
+    DatasetKind.T2MAP,
+    DatasetKind.M0_MAGNITUDE,
+)
 
 
 @dataclass
@@ -26,6 +36,7 @@ class DiffusionHparams:
     beta_min: float
     beta_max: float
     learning_rate: float
+    weight_decay: float
     noise_weight: float
     x0_weight: float
     ssim_weight: float
@@ -48,6 +59,7 @@ class DiffusionLightningModule(LightningModule):
         beta_min: float = 0.1,
         beta_max: float = 20.0,
         learning_rate: float = 1e-4,
+        weight_decay: float = 0.01,
         noise_weight: float = 1.0,
         x0_weight: float = 0.1,
         ssim_weight: float = 0.5,
@@ -71,6 +83,8 @@ class DiffusionLightningModule(LightningModule):
             Maximum noise rate at t=1.
         learning_rate
             Optimizer learning rate.
+        weight_decay
+            AdamW weight decay.
         noise_weight
             Weight for noise prediction loss.
         x0_weight
@@ -90,7 +104,6 @@ class DiffusionLightningModule(LightningModule):
         self.save_hyperparameters()
 
         self.model = DiffusionModel(
-            num_kinds=NUM_DATASET_KINDS,
             beta_min=beta_min,
             beta_max=beta_max,
             base_channels=base_channels,
@@ -99,6 +112,57 @@ class DiffusionLightningModule(LightningModule):
         )
         self.sampler: DDIMSampler = DDIMSampler(self.model, num_steps=validation_steps)
         self._fixed_noise: dict[int, Tensor] | None = None
+
+    def on_fit_start(self) -> None:
+        """Log model info, optimizer config, and source code at training start."""
+        if not isinstance(self.logger, WandbLogger):
+            return
+
+        import wandb
+
+        # Model parameter counts
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+
+        # Optimizer betas (AdamW defaults)
+        beta1, beta2 = 0.9, 0.999
+
+        hparams = {
+            "model/total_params": total_params,
+            "model/trainable_params": trainable_params,
+            "optimizer/weight_decay": self.hparams.weight_decay,
+            "optimizer/beta1": beta1,
+            "optimizer/beta2": beta2,
+        }
+
+        self.logger.log_hyperparams(hparams)
+
+        # Log source code
+        project_root = Path(__file__).parent.parent
+        wandb.run.log_code(  # type: ignore[union-attr]
+            str(project_root),
+            include_fn=lambda p: p.endswith(".py") or p.endswith(".yaml") or p.endswith(".toml"),
+        )
+
+    def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
+        """Log gradient statistics before optimizer step."""
+        grads = [p.grad.detach().flatten() for p in self.model.parameters() if p.grad is not None]
+        if not grads:
+            return
+
+        all_grads = torch.cat(grads)
+        grad_norm = all_grads.norm()
+        grad_variance = all_grads.var()
+
+        self.log_dict(
+            {
+                "gradients/norm": grad_norm,
+                "gradients/variance": grad_variance,
+            },
+            on_step=True,
+            on_epoch=False,
+            sync_dist=True,
+        )
 
     def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:
         """Compute training loss and log metrics."""
@@ -131,6 +195,7 @@ class DiffusionLightningModule(LightningModule):
                 "train/x0_ssim": losses.x0_ssim,
             },
             prog_bar=True,
+            sync_dist=True,
         )
         return losses.total
 
@@ -145,7 +210,7 @@ class DiffusionLightningModule(LightningModule):
             self._log_samples()
 
     def _log_samples(self) -> None:
-        """Generate and log samples for each dataset kind to W&B."""
+        """Generate and log samples for selected dataset kinds to W&B."""
         if not isinstance(self.logger, WandbLogger):
             return
 
@@ -157,15 +222,22 @@ class DiffusionLightningModule(LightningModule):
         if self._fixed_noise is None:
             self._fixed_noise = create_fixed_noise((size, size))
 
-        images = []
-        for k in range(self.model.num_kinds):
-            kind = torch.tensor([k], device=self.device)
-            sample = self.sampler.sample((1, 2, size, size), kind, self._fixed_noise[k])
-            images.append(wandb.Image(sample[0, 0].cpu().numpy(), caption=f"kind_{k}"))
+        with torch.no_grad():
+            for kind_enum in VALIDATION_KINDS:
+                k = int(kind_enum)
+                kind_tensor = torch.tensor([k], device=self.device)
+                sample = self.sampler.sample((1, 2, size, size), kind_tensor, self._fixed_noise[k])
 
-        self.logger.experiment.log({"validation/samples": images, "global_step": self.global_step})
+                # Log real channel as image, use enum name as key
+                image = wandb.Image(sample[0, 0].cpu().numpy(), caption=f"step_{self.global_step}")
+                self.logger.experiment.log({f"samples/{kind_enum.name}": image, "global_step": self.global_step})
+
         self.model.train()
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         """Configure AdamW optimizer."""
-        return torch.optim.AdamW(self.model.parameters(), lr=self.hparams.learning_rate)
+        return torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay,
+        )

@@ -290,3 +290,26 @@ class TestComplexAugmentation:
 
         assert aug_image.is_complex()
         assert not torch.equal(aug_image, image)
+
+    def test_complex_spatial_transforms_consistent(self):
+        """Real and imag parts receive identical spatial transforms."""
+        # Use only spatial transforms (no phase aug)
+        config = AugmentationConfig(
+            roll_prob=1.0, flip_prob=1.0, geometric_prob=1.0, phase_prob=0.0, shift_range=(-2, 2), rotation_range=(-90, 90)
+        )
+        pipeline = AugmentationPipeline(config)
+
+        # Create image where real and imag are distinct but correlated
+        # real = gradient, imag = same gradient * 2
+        real = torch.linspace(0, 1, 64).reshape(8, 8)
+        imag = real * 2.0
+        image = torch.complex(real, imag)
+        mask = torch.ones(8, 8, dtype=torch.bool)
+
+        # Apply transforms multiple times to verify consistency
+        for _ in range(5):
+            aug_image, _ = pipeline(image, mask)
+
+            # If transforms are consistent, the relationship imag = real * 2 should be preserved
+            # Note: kornia's resampling might introduce small numerical errors, so use allclose
+            torch.testing.assert_close(aug_image.imag, aug_image.real * 2.0, rtol=1e-5, atol=1e-5)

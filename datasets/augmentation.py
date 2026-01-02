@@ -16,15 +16,6 @@ class PhaseAugmentation:
 
     Uses a low-order polynomial to generate smoothly varying spatial phase,
     simulating realistic B0 inhomogeneity and receive coil phase.
-
-    Parameters
-    ----------
-    mean_phase_range
-        Range for random mean phase offset in radians (default: [0, 2π]).
-    poly_coeff_range
-        Range for polynomial coefficients controlling spatial variation.
-    prob
-        Probability of applying augmentation.
     """
 
     def __init__(
@@ -33,6 +24,16 @@ class PhaseAugmentation:
         poly_coeff_range: tuple[float, float] = (-0.1, 0.1),
         prob: float = 0.5,
     ) -> None:
+        """
+        Parameters
+        ----------
+        mean_phase_range
+            Range for random mean phase offset in radians (default: [0, 2π]).
+        poly_coeff_range
+            Range for polynomial coefficients controlling spatial variation.
+        prob
+            Probability of applying augmentation.
+        """
         self.mean_phase_range = mean_phase_range
         self.poly_coeff_range = poly_coeff_range
         self.prob = prob
@@ -144,20 +145,69 @@ class AugmentationPipeline:
         is_complex = image.is_complex()
 
         if is_complex:
-            real, imag = image.real, image.imag
-            if torch.rand(1).item() < self.config.phase_prob and self.phase_aug is not None:
+            real, imag = image.real.clone(), image.imag.clone()
+            orig_ndim = real.ndim  # Save before phase_aug potentially modifies
+            if self.phase_aug is not None:
                 real, imag = self.phase_aug(real, imag)
-            # Apply spatial augmentations to both real and imag
-            real, mask = self._apply_spatial(real, mask)
-            imag, _ = self._apply_spatial(imag, mask.clone())
+            # Stack as channels: (H, W) -> (2, H, W) or (B, H, W) -> (B, 2, H, W)
+            stacked = torch.stack([real, imag], dim=0) if orig_ndim == 2 else torch.stack([real, imag], dim=1)
+            stacked, mask = self._apply_spatial_complex(stacked, mask)
+            # Unstack back
+            if orig_ndim == 2:
+                real, imag = stacked[0], stacked[1]
+            else:
+                real, imag = stacked[:, 0], stacked[:, 1]
             image = torch.complex(real, imag)
         else:
             image, mask = self._apply_spatial(image, mask)
-            # Apply contrast only to real-valued images
             if torch.rand(1).item() < self.config.contrast_prob:
                 image = self._apply_gamma(image)
 
         return image, mask
+
+    def _apply_spatial_complex(self, image: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
+        """Apply spatial augmentations to 2-channel image and mask.
+
+        Parameters
+        ----------
+        image
+            Image tensor of shape (2, H, W) or (B, 2, H, W).
+        mask
+            Mask of shape (H, W) or (B, H, W).
+        """
+        # Random shift
+        if torch.rand(1).item() < self.config.roll_prob:
+            shift_min, shift_max = self.config.shift_range
+            shift_x: int = int(torch.randint(shift_min, shift_max + 1, (1,)).item())
+            shift_y: int = int(torch.randint(shift_min, shift_max + 1, (1,)).item())
+            shifts: list[int] = [shift_y, shift_x]
+            image = torch.roll(image, shifts=shifts, dims=(-2, -1))
+            mask = torch.roll(mask, shifts=shifts, dims=(-2, -1))
+
+        is_2d_input = image.ndim == 3  # (2, H, W) means original was 2D
+
+        # Reshape for kornia: (2, H, W) -> (1, 2, H, W) or keep (B, 2, H, W)
+        if is_2d_input:
+            img_4d = image.unsqueeze(0)  # (1, 2, H, W)
+            mask_4d = mask[None, None].float()  # (1, 1, H, W)
+        else:
+            img_4d = image  # (B, 2, H, W)
+            mask_4d = mask.unsqueeze(1).float()  # (B, 1, H, W)
+
+        # Apply hflip - same transform applied to all channels automatically
+        img_out = self._hflip(img_4d)
+        mask_out = self._hflip(mask_4d, params=self._hflip._params)
+
+        # Random affine
+        if torch.rand(1).item() < self.config.geometric_prob:
+            img_out = self._affine_img(img_out)
+            mask_out = self._affine_mask(mask_out, params=self._affine_img._params)
+
+        # Reshape back
+        if is_2d_input:
+            return img_out.squeeze(0), mask_out[0, 0].bool()
+        else:
+            return img_out, mask_out.squeeze(1).bool()
 
     def _apply_spatial(self, image: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
         """Apply spatial augmentations (shift, flip, affine)."""
@@ -167,8 +217,8 @@ class AugmentationPipeline:
             shift_x: int = int(torch.randint(shift_min, shift_max + 1, (1,)).item())
             shift_y: int = int(torch.randint(shift_min, shift_max + 1, (1,)).item())
             shifts: list[int] = [shift_y, shift_x]
-            image = torch.roll(image, shifts=shifts, dims=(0, 1))
-            mask = torch.roll(mask, shifts=shifts, dims=(0, 1))
+            image = torch.roll(image, shifts=shifts, dims=(-2, -1))
+            mask = torch.roll(mask, shifts=shifts, dims=(-2, -1))
 
         # Reshape for kornia's (B, C, H, W) format
         if image.ndim == 2:
@@ -216,7 +266,7 @@ class AugmentationPipeline:
     def _apply_gamma(self, image: Tensor) -> Tensor:
         """Random gamma correction for contrast augmentation."""
         img_min, img_max = image.min(), image.max()
-        if img_max <= img_min:
+        if (img_max - img_min) < 1e-6:
             return image
         img_norm = (image - img_min) / (img_max - img_min)
         gamma = (

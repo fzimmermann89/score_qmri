@@ -11,7 +11,7 @@ from torch.utils.data import ConcatDataset, DataLoader
 
 from .batch_sampler import ScheduledBatchSampler
 from .complex import ComplexImageDataset
-from .concat import create_concat_dataset, get_size_labels
+from .concat import get_size_labels
 from .config import AugmentationConfig
 from .kind import DatasetKind
 from .magnitude import MagnitudeImageDataset
@@ -178,11 +178,62 @@ class MRIDataModule(LightningDataModule):
         self.size_labels: list[tuple[int, int]] | None = None
         self.dataset_lengths: list[int] | None = None
 
+    def get_config_summary(self) -> dict[str, object]:
+        """
+        Get flattened configuration summary for logging to W&B.
+
+        Returns
+        -------
+        Dictionary with flattened dataset and augmentation parameters.
+        """
+        summary: dict[str, object] = {
+            "data/batch_size": self.batch_size,
+            "data/num_workers": self.num_workers,
+            "data/base_seed": self.base_seed,
+            "data/num_datasets": len(self.dataset_configs),
+        }
+
+        # List of dataset kinds being trained on
+        kinds = [cfg.kind.name for cfg in self.dataset_configs]
+        summary["data/dataset_kinds"] = kinds
+
+        # Per-dataset config
+        for i, cfg in enumerate(self.dataset_configs):
+            prefix = f"data/dataset_{i}"
+            summary[f"{prefix}/kind"] = cfg.kind.name
+            summary[f"{prefix}/h5_path"] = cfg.h5_path
+            summary[f"{prefix}/type"] = cfg.type
+            summary[f"{prefix}/schedule_type"] = cfg.schedule.type
+            summary[f"{prefix}/schedule_weight"] = cfg.schedule.weight
+
+            if isinstance(cfg, ComplexDatasetConfig):
+                summary[f"{prefix}/mode"] = cfg.mode
+            if isinstance(cfg, MappingDatasetConfig):
+                summary[f"{prefix}/scaling_factor"] = cfg.scaling_factor
+
+            # Augmentation config
+            if cfg.augmentation_config is not None:
+                aug = cfg.augmentation_config
+                aug_prefix = f"{prefix}/aug"
+                summary[f"{aug_prefix}/geometric_prob"] = aug.geometric_prob
+                summary[f"{aug_prefix}/contrast_prob"] = aug.contrast_prob
+                summary[f"{aug_prefix}/phase_prob"] = aug.phase_prob
+                summary[f"{aug_prefix}/flip_prob"] = aug.flip_prob
+                summary[f"{aug_prefix}/roll_prob"] = aug.roll_prob
+                summary[f"{aug_prefix}/shift_range"] = list(aug.shift_range)
+                summary[f"{aug_prefix}/scale_range"] = list(aug.scale_range)
+                summary[f"{aug_prefix}/rotation_range"] = list(aug.rotation_range)
+                summary[f"{aug_prefix}/shear_range"] = list(aug.shear_range)
+                summary[f"{aug_prefix}/contrast_strength"] = aug.contrast_strength
+                summary[f"{aug_prefix}/poly_coeff_range"] = list(aug.poly_coeff_range)
+
+        return summary
+
     def setup(self, stage: str) -> None:
         """Set up datasets for training."""
         if (stage == "fit" or stage is None) and self.dataset_configs:
             datasets = [cfg.create() for cfg in self.dataset_configs]
-            self.concat_ds = create_concat_dataset(datasets)
+            self.concat_ds = ConcatDataset(datasets)
             self.size_labels = get_size_labels(datasets)
             self.dataset_lengths = [len(ds) for ds in datasets]
 

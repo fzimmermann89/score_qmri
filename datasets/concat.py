@@ -3,12 +3,7 @@
 from collections.abc import Sequence, Sized
 from typing import cast
 
-from torch.utils.data import ConcatDataset, Dataset
-
-
-def create_concat_dataset(datasets: Sequence[Dataset]) -> ConcatDataset:
-    """Create a ConcatDataset from a list of datasets."""
-    return ConcatDataset(datasets)
+from torch.utils.data import Dataset
 
 
 def get_size_labels(datasets: Sequence[Dataset]) -> list[tuple[int, int]]:

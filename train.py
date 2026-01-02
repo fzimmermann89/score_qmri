@@ -3,11 +3,12 @@
 import os
 import sys
 import warnings
+from pathlib import Path
 
 import jsonargparse
 import torch
-from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
-from lightning.pytorch.cli import LightningCLI
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, ModelSummary
+from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
 
 from datasets.lightning import MRIDataModule
@@ -16,6 +17,28 @@ from training.lightning_module import DiffusionLightningModule
 if not sys.warnoptions:
     warnings.simplefilter("ignore")
     os.environ["PYTHONWARNINGS"] = "ignore"
+
+
+class WandbSaveConfigCallback(SaveConfigCallback):
+    """Save config and log as W&B artifact."""
+
+    def save_config(self, trainer: "lightning.Trainer", pl_module: "lightning.LightningModule", stage: str) -> None:  # type: ignore[name-defined]  # noqa: F821
+        """Save config to file and log as W&B artifact."""
+        super().save_config(trainer, pl_module, stage)
+
+        if not isinstance(trainer.logger, WandbLogger):
+            return
+
+        import wandb
+
+        config_path = Path(trainer.log_dir) / self.config_filename if trainer.log_dir else None
+        if config_path is None or not config_path.exists():
+            return
+
+        # Log config as artifact
+        artifact = wandb.Artifact(f"config-{wandb.run.id}", type="config")  # type: ignore[union-attr]
+        artifact.add_file(str(config_path))
+        wandb.run.log_artifact(artifact)  # type: ignore[union-attr]
 
 
 class DiffusionLightningCLI(LightningCLI):
@@ -59,20 +82,67 @@ class DiffusionLightningCLI(LightningCLI):
 
         config.trainer.callbacks = [
             LearningRateMonitor(logging_interval="step"),
+            ModelSummary(max_depth=3),
             checkpoint_callback,
         ]
 
     def after_instantiate_classes(self) -> None:
-        """Log config to W&B after instantiation."""
+        """Log flattened hyperparams to W&B after instantiation."""
         if self.subcommand is None:
             return
-        if self.trainer.logger is not None and hasattr(self.trainer.logger, "experiment"):
-            config = getattr(self.config, self.subcommand)
-            experiment = self.trainer.logger.experiment
-            if hasattr(experiment, "config"):
-                update = getattr(experiment.config, "update", None)
-                if callable(update):
-                    update({"cli_config": config.as_dict()})
+
+        logger = self.trainer.logger
+        if not isinstance(logger, WandbLogger):
+            return
+
+        config = getattr(self.config, self.subcommand)
+        experiment = logger.experiment
+
+        # Log full CLI config
+        if hasattr(experiment, "config"):
+            update = getattr(experiment.config, "update", None)
+            if callable(update):
+                update({"cli_config": config.as_dict()})
+
+        # Log flattened datamodule config
+        if isinstance(self.datamodule, MRIDataModule):
+            data_summary = self.datamodule.get_config_summary()
+            logger.log_hyperparams(data_summary)
+
+        # Log trainer config
+        trainer_hparams = {
+            "trainer/max_steps": self.trainer.max_steps,
+            "trainer/max_epochs": self.trainer.max_epochs,
+            "trainer/precision": str(self.trainer.precision),
+            "trainer/gradient_clip_val": self.trainer.gradient_clip_val,
+            "trainer/accumulate_grad_batches": self.trainer.accumulate_grad_batches,
+            "trainer/num_devices": self.trainer.num_devices,
+            "trainer/accelerator": str(self.trainer.accelerator),
+        }
+        logger.log_hyperparams(trainer_hparams)
+
+        # Log system info
+        system_info = {
+            "system/cuda_available": torch.cuda.is_available(),
+            "system/cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+            "system/torch_version": torch.__version__,
+        }
+        if torch.cuda.is_available():
+            system_info["system/cuda_version"] = torch.version.cuda
+            for i in range(torch.cuda.device_count()):
+                system_info[f"system/gpu_{i}_name"] = torch.cuda.get_device_name(i)
+                mem = torch.cuda.get_device_properties(i).total_memory / 1e9
+                system_info[f"system/gpu_{i}_memory_gb"] = round(mem, 2)
+
+        logger.log_hyperparams(system_info)
+
+        # Log experiment metadata
+        experiment_hparams = {
+            "experiment/name": config.experiment,
+            "experiment/wandb_project": config.wandb_project,
+            "experiment/checkpoint_dir": config.checkpoint_dir,
+        }
+        logger.log_hyperparams(experiment_hparams)
 
     @staticmethod
     def subcommands() -> dict[str, set[str]]:
@@ -90,7 +160,7 @@ def main() -> None:
     DiffusionLightningCLI(
         DiffusionLightningModule,
         MRIDataModule,
-        save_config_callback=None,
+        save_config_callback=WandbSaveConfigCallback,
         subclass_mode_data=True,
         seed_everything_default=42,
         trainer_defaults={

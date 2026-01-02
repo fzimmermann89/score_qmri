@@ -1,7 +1,7 @@
 """Custom BatchSampler with step-based probability scheduling."""
 
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 import torch
 from torch.utils.data import BatchSampler, ConcatDataset
@@ -47,10 +47,8 @@ class ScheduledBatchSampler(BatchSampler):
         modifiers = torch.tensor([s(self.step) for s in self.schedules])
         return modifiers * self.dataset_lengths
 
-    def __iter__(self) -> "ScheduledBatchSampler":
-        return self
-
-    def __next__(self) -> list[int]:
+    def _next_batch(self) -> list[int]:
+        """Generate a single batch of indices."""
         weights = self._compute_weights()
 
         bucket_data = []
@@ -60,7 +58,7 @@ class ScheduledBatchSampler(BatchSampler):
                 bucket_data.append((indices, bucket_weight))
 
         if not bucket_data:
-            raise StopIteration("All dataset weights are zero")
+            raise RuntimeError("All dataset weights are zero")
 
         bucket_weights = torch.tensor([b[1] for b in bucket_data])
         bucket_idx = int(torch.multinomial(bucket_weights, 1, generator=self.rng).item())
@@ -76,8 +74,16 @@ class ScheduledBatchSampler(BatchSampler):
         self.step += 1
         return (local_indices + offset).tolist()
 
+    def __iter__(self) -> Iterator[list[int]]:
+        for _ in range(len(self)):
+            yield self._next_batch()
+
     def __len__(self) -> int:
         return max(1, int(self.dataset_lengths.sum().item()) // self.batch_size)
 
     def reset_step(self, step: int = 0) -> None:
         self.step = step
+
+    def set_epoch(self, epoch: int) -> None:
+        """Reset step counter for new epoch (for distributed training compatibility)."""
+        self.step = 0

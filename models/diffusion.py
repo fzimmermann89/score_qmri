@@ -44,7 +44,6 @@ class DiffusionModel(torch.nn.Module):
 
     def __init__(
         self,
-        num_kinds: int = 3,
         beta_min: float = 0.1,
         beta_max: float = 20.0,
         base_channels: int = 64,
@@ -54,8 +53,6 @@ class DiffusionModel(torch.nn.Module):
         """
         Parameters
         ----------
-        num_kinds
-            Number of dataset types for conditioning embedding.
         beta_min
             Minimum noise rate β(0).
         beta_max
@@ -68,11 +65,10 @@ class DiffusionModel(torch.nn.Module):
             Conditioning embedding dimension.
         """
         super().__init__()
-        self.num_kinds = num_kinds
         self.beta_min = beta_min
         self.beta_max = beta_max
 
-        self.cond_mlp = ConditioningMLP(num_kinds, cond_dim)
+        self.cond_mlp = ConditioningMLP(cond_dim)
         self.unet = UNet(
             in_channels=2,
             base_channels=base_channels,
@@ -154,10 +150,17 @@ class DiffusionModel(torch.nn.Module):
         Prepare 2-channel input from image tensor.
 
         Complex data (B, 2, H, W) passes through unchanged.
-        Magnitude data (B, H, W) is stacked with zeros for imaginary part.
+        Magnitude data (B, 1, H, W) or (B, H, W) is stacked with zeros for imaginary part.
+
+        Raises
+        ------
+        ValueError
+            If 4D input has unexpected channel count.
         """
         if image.ndim == 4 and image.shape[1] == 2:
             return image
-        if image.ndim == 4:
+        if image.ndim == 4 and image.shape[1] == 1:
             image = image.squeeze(1)
+        elif image.ndim == 4:
+            raise ValueError(f"Expected 4D input with 1 or 2 channels, got {image.shape[1]}")
         return torch.stack([image, torch.zeros_like(image)], dim=1)

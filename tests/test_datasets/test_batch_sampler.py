@@ -72,7 +72,7 @@ def test_batch_sampler_increments_step():
 
 
 def test_batch_sampler_all_weights_zero():
-    """Test sampler raises StopIteration when all weights are zero."""
+    """Test sampler raises RuntimeError when all weights are zero."""
     ds1 = TensorDataset(torch.randn(10, 3, 32, 32))
     ds2 = TensorDataset(torch.randn(15, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds1, ds2])
@@ -83,7 +83,7 @@ def test_batch_sampler_all_weights_zero():
     )
 
     iterator = iter(sampler)
-    with pytest.raises(StopIteration, match="All dataset weights are zero"):
+    with pytest.raises(RuntimeError, match="All dataset weights are zero"):
         next(iterator)
 
 
@@ -100,7 +100,7 @@ def test_batch_sampler_single_dataset():
 
 
 def test_batch_sampler_negative_weights():
-    """Test sampler handles negative weights by raising StopIteration when combined weight is zero or negative."""
+    """Test sampler handles negative weights by raising RuntimeError when combined weight is zero or negative."""
     ds1 = TensorDataset(torch.randn(10, 3, 32, 32))
     ds2 = TensorDataset(torch.randn(15, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds1, ds2])
@@ -111,7 +111,7 @@ def test_batch_sampler_negative_weights():
     )
 
     iterator = iter(sampler)
-    with pytest.raises(StopIteration, match="All dataset weights are zero"):
+    with pytest.raises(RuntimeError, match="All dataset weights are zero"):
         next(iterator)
 
 
@@ -134,6 +134,6 @@ def test_batch_sampler_handles_large_steps():
     batch2 = next(iter(sampler))
     assert len(batch2) == 4
 
-    # After step 2, weight becomes zero, should raise StopIteration
-    with pytest.raises(StopIteration, match="All dataset weights are zero"):
+    # After step 2, weight becomes zero, should raise RuntimeError
+    with pytest.raises(RuntimeError, match="All dataset weights are zero"):
         next(iter(sampler))

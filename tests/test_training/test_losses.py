@@ -7,11 +7,20 @@ from training.losses import compute_loss, l1_loss, noise_loss
 
 
 def test_noise_loss():
-    """Test noise MSE loss."""
+    """Test noise MSE loss matches expected MSE."""
     pred = torch.randn(2, 2, 32, 32)
     target = torch.randn(2, 2, 32, 32)
     loss = noise_loss(pred, target)
-    assert loss.item() >= 0
+
+    # Verify matches expected MSE
+    expected = torch.nn.functional.mse_loss(pred, target)
+    assert torch.allclose(loss, expected)
+
+
+def test_noise_loss_identical_inputs():
+    """Test noise loss is zero for identical inputs."""
+    x = torch.randn(2, 2, 32, 32)
+    assert noise_loss(x, x).item() == 0.0
 
 
 def test_noise_loss_with_mask():
@@ -25,11 +34,20 @@ def test_noise_loss_with_mask():
 
 
 def test_l1_loss():
-    """Test L1 loss."""
+    """Test L1 loss matches expected L1."""
     pred = torch.randn(2, 2, 32, 32)
     target = torch.randn(2, 2, 32, 32)
     loss = l1_loss(pred, target)
-    assert loss.item() >= 0
+
+    # Verify matches expected L1
+    expected = torch.nn.functional.l1_loss(pred, target)
+    assert torch.allclose(loss, expected)
+
+
+def test_l1_loss_identical_inputs():
+    """Test L1 loss is zero for identical inputs."""
+    x = torch.randn(2, 2, 32, 32)
+    assert l1_loss(x, x).item() == 0.0
 
 
 def test_ssim_loss():
@@ -138,23 +156,17 @@ def test_ssim_loss_invalid_window_size():
 
 
 def test_ssim_loss_all_zero_mask():
-    """Test ssim_loss handles all-zero mask gracefully."""
+    """Test ssim_loss returns NaN-free value for all-zero mask."""
     from training.losses import ssim_loss
 
     pred = torch.randn(1, 2, 32, 32)
     target = torch.randn(1, 2, 32, 32)
-
-    # All-zero mask (invalid, but should handle gracefully)
     mask = torch.zeros(1, 1, 32, 32)
 
-    # Should raise ValueError or handle gracefully
-    try:
-        loss = ssim_loss(pred, target, mask=mask)
-        # If it handles gracefully without error, just check it returns a value
-        assert loss.item() >= 0
-    except (ValueError, ZeroDivisionError):
-        # Either raising an error or handling gracefully is acceptable
-        pass
+    # All-zero mask should still return a valid (NaN-free) loss
+    loss = ssim_loss(pred, target, mask=mask)
+    assert not torch.isnan(loss)
+    assert loss.item() >= 0
 
 
 def test_ssim_loss_mask_shape_mismatch():
@@ -170,17 +182,12 @@ def test_ssim_loss_mask_shape_mismatch():
 
 
 def test_ssim_loss_negative_mask_values():
-    """Test ssim_loss handles negative mask values."""
+    """Test ssim_loss raises ValueError for negative mask values."""
     from training.losses import ssim_loss
 
     pred = torch.randn(1, 2, 32, 32)
     target = torch.randn(1, 2, 32, 32)
-    mask = -torch.ones(1, 1, 32, 32)  # Negative values
+    mask = -torch.ones(1, 1, 32, 32)
 
-    # Should handle gracefully (raise error or accept)
-    try:
-        loss = ssim_loss(pred, target, mask=mask)
-        # Either raises error or returns valid loss
-        assert not torch.isnan(loss)
-    except (ValueError, RuntimeError):
-        pass  # Expected to handle somehow
+    with pytest.raises(ValueError, match="negative"):
+        ssim_loss(pred, target, mask=mask)

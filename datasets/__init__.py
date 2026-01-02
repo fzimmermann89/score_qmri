@@ -4,16 +4,14 @@ from .augmentation import AugmentationPipeline, PhaseAugmentation
 from .base import BaseMRIDataset
 from .batch_sampler import ScheduledBatchSampler
 from .complex import ComplexImageDataset
-from .concat import (
-    create_concat_dataset,
-    get_size_labels,
-)
+from .concat import get_size_labels
 from .config import (
     COMPLEX_CONFIG,
     MAGNITUDE_CONFIG,
     MAPPING_CONFIG,
     AugmentationConfig,
 )
+from .flat_h5 import FlatH5Dataset
 from .kind import NUM_DATASET_KINDS, DatasetKind
 from .lightning import (
     ComplexDatasetConfig,
@@ -34,6 +32,7 @@ __all__ = [
     "AugmentationPipeline",
     "PhaseAugmentation",
     "BaseMRIDataset",
+    "FlatH5Dataset",
     "ComplexImageDataset",
     "DatasetKind",
     "NUM_DATASET_KINDS",
@@ -41,7 +40,6 @@ __all__ = [
     "MappingDataset",
     "ScheduledBatchSampler",
     "MRIDataModule",
-    "create_concat_dataset",
     "get_size_labels",
     "MAGNITUDE_CONFIG",
     "MAPPING_CONFIG",

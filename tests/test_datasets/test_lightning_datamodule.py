@@ -66,3 +66,27 @@ def test_datamodule_empty_configs():
     dm = MRIDataModule(dataset_configs=[])
     dm.setup("fit")
     assert dm.concat_ds is None
+
+
+def test_datamodule_get_config_summary():
+    """Test get_config_summary returns flattened config dict."""
+    from datasets.config import AugmentationConfig
+
+    configs: list[DatasetConfig] = [
+        MagnitudeDatasetConfig(
+            h5_path="dummy.h5",
+            kind=DatasetKind.T1W_MAGNITUDE,
+            schedule=ConstantSchedule(weight=1.0),
+            augmentation_config=AugmentationConfig(geometric_prob=0.5),
+        )
+    ]
+
+    dm = MRIDataModule(dataset_configs=configs, batch_size=4, num_workers=2)
+    summary = dm.get_config_summary()
+
+    assert summary["data/batch_size"] == 4
+    assert summary["data/num_workers"] == 2
+    assert summary["data/num_datasets"] == 1
+    assert summary["data/dataset_kinds"] == ["T1W_MAGNITUDE"]
+    assert summary["data/dataset_0/kind"] == "T1W_MAGNITUDE"
+    assert summary["data/dataset_0/aug/geometric_prob"] == 0.5

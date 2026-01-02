@@ -53,8 +53,8 @@ class ResBlock(torch.nn.Module):
         scale, shift = self.cond_proj(cond)[:, :, None, None].chunk(2, dim=1)
         h = h * (1 + scale) + shift
         h = self.block2(h)
-        result: Tensor = h + self.skip(x)
-        return result
+        out: Tensor = h + self.skip(x)
+        return out
 
 
 class DownBlock(torch.nn.Module):
@@ -116,8 +116,8 @@ class UpBlock(torch.nn.Module):
     def forward(self, x: Tensor, skip: Tensor, cond: Tensor) -> Tensor:
         """Forward pass concatenating skip connection after pixelshuffle upsampling."""
         x_up = self.pixel_shuffle(self.up_conv(x))
-        result: Tensor = self.res(torch.cat([x_up, skip], dim=1), cond)
-        return result
+        out: Tensor = self.res(torch.cat([x_up, skip], dim=1), cond)
+        return out
 
 
 class OutputHead(torch.nn.Module):
@@ -142,8 +142,8 @@ class OutputHead(torch.nn.Module):
 
     def forward(self, x: Tensor, cond: Tensor) -> Tensor:
         """Forward pass through ResBlock and final conv."""
-        result: Tensor = self.conv(self.res(x, cond))
-        return result
+        out: Tensor = self.conv(self.res(x, cond))
+        return out
 
 
 class UNet(torch.nn.Module):

@@ -22,4 +22,4 @@ class DatasetKind(IntEnum):
     M0_MAGNITUDE = 13
 
 
-NUM_DATASET_KINDS = len(DatasetKind)
+NUM_DATASET_KINDS: int = len(DatasetKind)
