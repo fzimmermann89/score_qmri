@@ -1,6 +1,5 @@
 """Tests for schedule classes."""
 
-
 from datasets.lightning import (
     ConstantSchedule,
     PhaseInSchedule,
