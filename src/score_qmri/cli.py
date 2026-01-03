@@ -46,6 +46,7 @@ class DiffusionLightningCLI(LightningCLI):
 
     def add_arguments_to_parser(self, parser: jsonargparse.ArgumentParser) -> None:
         """Add custom arguments to the parser."""
+        parser.add_argument("--job_name", type=str, required=True, help="Unique job name for resumption.")
         parser.add_argument("--experiment", type=str, default="mri-diffusion", help="Name of the experiment.")
         parser.add_argument("--wandb_project", type=str, default="mri-diffusion", help="WandB project name.")
         parser.add_argument("--wandb_entity", type=str | None, default=None, help="WandB entity name.")
@@ -58,11 +59,19 @@ class DiffusionLightningCLI(LightningCLI):
             return
 
         config = getattr(self.config, self.subcommand)
-        experiment_name = config.experiment
 
+        # Path Resolution
+        run_id = config.job_name
+        run_dir = Path(config.checkpoint_dir) / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        config.trainer.default_root_dir = str(run_dir)
+
+        # WandB Continuity
         logger = WandbLogger(
+            id=run_id,
+            resume="allow",
             project=config.wandb_project,
-            name=experiment_name,
+            name=config.experiment,
             entity=config.wandb_entity,
             log_model=False,
             save_dir="logs",
@@ -70,12 +79,21 @@ class DiffusionLightningCLI(LightningCLI):
 
         config.trainer.logger = logger
 
+        # Checkpoint Auto-Detection
+        last_ckpt_path = run_dir / "last.ckpt"
+        if last_ckpt_path.exists() and last_ckpt_path.is_file():
+            # If no checkpoint path is provided, use the last checkpoint
+            if not config.ckpt_path:
+                print(f"Resuming from checkpoint: {last_ckpt_path}")
+                config.ckpt_path = str(last_ckpt_path)
+
+        # Safety & Robustness
         checkpoint_callback = ModelCheckpoint(
             monitor="train/loss",
             mode="min",
             save_top_k=3,
             save_last=True,
-            dirpath=f"{config.checkpoint_dir}/{experiment_name}",
+            dirpath=str(run_dir),
             filename="{step:06d}-{train_loss:.4f}",
             every_n_train_steps=1000,
         )
@@ -139,6 +157,7 @@ class DiffusionLightningCLI(LightningCLI):
         # Log experiment metadata
         experiment_hparams = {
             "experiment/name": config.experiment,
+            "experiment/job_name": config.job_name,
             "experiment/wandb_project": config.wandb_project,
             "experiment/checkpoint_dir": config.checkpoint_dir,
         }
@@ -163,6 +182,7 @@ def main() -> None:
         save_config_callback=WandbSaveConfigCallback,
         subclass_mode_data=True,
         seed_everything_default=42,
+        save_config_kwargs={"overwrite": True},
         trainer_defaults={
             "max_steps": 100000,
             "accelerator": "auto",
