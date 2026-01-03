@@ -60,13 +60,11 @@ class DiffusionLightningCLI(LightningCLI):
 
         config = getattr(self.config, self.subcommand)
 
-        # Path Resolution
         run_id = config.job_name
         run_dir = Path(config.checkpoint_dir) / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         config.trainer.default_root_dir = str(run_dir)
 
-        # WandB Continuity
         logger = WandbLogger(
             id=run_id,
             resume="allow",
@@ -79,15 +77,11 @@ class DiffusionLightningCLI(LightningCLI):
 
         config.trainer.logger = logger
 
-        # Checkpoint Auto-Detection
         last_ckpt_path = run_dir / "last.ckpt"
-        if last_ckpt_path.exists() and last_ckpt_path.is_file():
-            # If no checkpoint path is provided, use the last checkpoint
-            if not config.ckpt_path:
-                print(f"Resuming from checkpoint: {last_ckpt_path}")
-                config.ckpt_path = str(last_ckpt_path)
+        if last_ckpt_path.exists() and last_ckpt_path.is_file() and not config.ckpt_path:
+            print(f"Resuming from checkpoint: {last_ckpt_path}")
+            config.ckpt_path = str(last_ckpt_path)
 
-        # Safety & Robustness
         checkpoint_callback = ModelCheckpoint(
             monitor="train/loss",
             mode="min",
