@@ -11,10 +11,10 @@ from lightning import LightningModule
 from lightning.pytorch.loggers import WandbLogger
 from torch import Tensor
 
-from score_qmri.datasets.kind import DatasetKind
+from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
 from score_qmri.sampling.ddim_sampler import DDIMSampler, create_fixed_noise
-from score_qmri.training.losses import compute_loss
+from score_qmri.training.losses import l1_loss, noise_loss, ssim_loss
 
 # Subset of kinds to generate validation samples for
 VALIDATION_KINDS: tuple[DatasetKind, ...] = (
@@ -41,6 +41,7 @@ class DiffusionHparams:
     x0_weight: float
     ssim_weight: float
     l1_weight: float
+    mask_weight: float
     validation_size: int
     validation_steps: int
     validation_interval: int
@@ -64,6 +65,7 @@ class DiffusionLightningModule(LightningModule):
         x0_weight: float = 0.1,
         ssim_weight: float = 0.5,
         l1_weight: float = 0.5,
+        mask_weight: float = 1e-3,
         validation_size: int = 128,
         validation_steps: int = 100,
         validation_interval: int = 1000,
@@ -93,6 +95,8 @@ class DiffusionLightningModule(LightningModule):
             SSIM weight within x0 loss.
         l1_weight
             L1 weight within x0 loss.
+        mask_weight
+            Weight for masked-out regions in loss (0 = ignore, 1 = full weight).
         validation_size
             Image size for validation sampling.
         validation_steps
@@ -109,6 +113,7 @@ class DiffusionLightningModule(LightningModule):
             base_channels=base_channels,
             num_blocks=num_blocks,
             cond_dim=cond_dim,
+            num_kinds=NUM_DATASET_KINDS,
         )
         self.sampler: DDIMSampler = DDIMSampler(self.model, num_steps=validation_steps)
         self._fixed_noise: dict[int, Tensor] | None = None
@@ -175,29 +180,28 @@ class DiffusionLightningModule(LightningModule):
         x_t = self.model.q_sample(x0, t, noise)
 
         output = self.model(x_t, t, kind)
-        losses = compute_loss(
-            output.x0,
-            x0,
-            output.noise,
-            noise,
-            mask,
-            self.hparams.noise_weight,
-            self.hparams.x0_weight,
-            self.hparams.ssim_weight,
-            self.hparams.l1_weight,
-        )
+
+        # Compute weighted mask: masked regions get mask_weight, unmasked get 1.0
+        weighted_mask = torch.where(mask > 0, torch.ones_like(mask), self.hparams.mask_weight * torch.ones_like(mask))
+
+        loss_noise = noise_loss(output.noise, noise, weighted_mask)
+        loss_l1 = l1_loss(output.x0, x0, weighted_mask)
+        loss_ssim = ssim_loss(output.x0, x0, weighted_mask)
+
+        x0_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
+        total_loss = self.hparams.noise_weight * loss_noise + self.hparams.x0_weight * x0_loss
 
         self.log_dict(
             {
-                "train/loss": losses.total,
-                "train/noise_mse": losses.noise_mse,
-                "train/x0_l1": losses.x0_l1,
-                "train/x0_ssim": losses.x0_ssim,
+                "train/loss": total_loss,
+                "train/noise_mse": loss_noise,
+                "train/x0_l1": loss_l1,
+                "train/x0_ssim": loss_ssim,
             },
             prog_bar=True,
             sync_dist=True,
         )
-        return losses.total
+        return total_loss
 
     def on_train_batch_end(
         self,

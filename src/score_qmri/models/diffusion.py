@@ -49,6 +49,7 @@ class DiffusionModel(torch.nn.Module):
         base_channels: int = 64,
         num_blocks: int = 4,
         cond_dim: int = 128,
+        num_kinds: int = 14,
     ) -> None:
         """
         Parameters
@@ -63,12 +64,14 @@ class DiffusionModel(torch.nn.Module):
             UNet encoder/decoder depth.
         cond_dim
             Conditioning embedding dimension.
+        num_kinds
+            Number of dataset kind classes for embedding.
         """
         super().__init__()
         self.beta_min = beta_min
         self.beta_max = beta_max
 
-        self.cond_mlp = ConditioningMLP(cond_dim)
+        self.cond_mlp = ConditioningMLP(cond_dim=cond_dim, num_kinds=num_kinds)
         self.unet = UNet(
             in_channels=2,
             base_channels=base_channels,

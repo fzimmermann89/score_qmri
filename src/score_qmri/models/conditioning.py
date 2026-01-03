@@ -5,8 +5,6 @@ import math
 import torch
 from torch import Tensor
 
-from score_qmri.datasets.kind import NUM_DATASET_KINDS
-
 
 class SinusoidalEmbedding(torch.nn.Module):
     """Sinusoidal positional embedding for timesteps."""
@@ -52,6 +50,7 @@ class ConditioningMLP(torch.nn.Module):
         self,
         cond_dim: int = 128,
         time_embed_dim: int = 64,
+        num_kinds: int = 14,
     ) -> None:
         """
         Initialize conditioning MLP.
@@ -62,10 +61,12 @@ class ConditioningMLP(torch.nn.Module):
             Output conditioning dimension.
         time_embed_dim
             Intermediate timestep embedding dimension.
+        num_kinds
+            Number of dataset kind classes for embedding.
         """
         super().__init__()
         self.time_embed = SinusoidalEmbedding(time_embed_dim)
-        self.kind_embed = torch.nn.Embedding(NUM_DATASET_KINDS, cond_dim // 2)
+        self.kind_embed = torch.nn.Embedding(num_kinds, cond_dim // 2)
         self.mlp = torch.nn.Sequential(
             torch.nn.Linear(time_embed_dim + cond_dim // 2, cond_dim),
             torch.nn.SiLU(),

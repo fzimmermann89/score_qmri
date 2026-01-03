@@ -1,21 +1,10 @@
 """Loss functions for diffusion training."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Literal
 
 import torch
 from torch import Tensor
-
-
-@dataclass
-class LossOutput:
-    """Combined loss output."""
-
-    total: Tensor
-    noise_mse: Tensor
-    x0_l1: Tensor
-    x0_ssim: Tensor
 
 
 def _sliding_window(
@@ -261,52 +250,3 @@ def ssim_loss(
         return 1.0 - ssim_weighted
     else:
         raise ValueError(f"Invalid reduction: {reduction}. Must be 'mean' or 'none'")
-
-
-def compute_loss(
-    x0_pred: Tensor,
-    x0_target: Tensor,
-    noise_pred: Tensor,
-    noise_target: Tensor,
-    mask: Tensor | None = None,
-    noise_weight: float = 1.0,
-    x0_weight: float = 0.1,
-    ssim_weight: float = 0.5,
-    l1_weight: float = 0.5,
-) -> LossOutput:
-    """
-    Compute combined diffusion training loss.
-
-    Parameters
-    ----------
-    x0_pred
-        Predicted clean image of shape (B, 2, H, W).
-    x0_target
-        Target clean image of shape (B, 2, H, W).
-    noise_pred
-        Predicted noise of shape (B, 2, H, W).
-    noise_target
-        Target noise of shape (B, 2, H, W).
-    mask
-        Optional mask of shape (B, 1, H, W).
-    noise_weight
-        Weight for noise prediction loss.
-    x0_weight
-        Weight for clean image prediction loss.
-    ssim_weight
-        SSIM weight within x0 loss.
-    l1_weight
-        L1 weight within x0 loss.
-
-    Returns
-    -------
-    Contains total loss and individual components.
-    """
-    loss_noise = noise_loss(noise_pred, noise_target, mask)
-    loss_l1 = l1_loss(x0_pred, x0_target, mask)
-    loss_ssim = ssim_loss(x0_pred, x0_target, mask)
-
-    x0_loss = ssim_weight * loss_ssim + l1_weight * loss_l1
-    total = noise_weight * loss_noise + x0_weight * x0_loss
-
-    return LossOutput(total=total, noise_mse=loss_noise, x0_l1=loss_l1, x0_ssim=loss_ssim)

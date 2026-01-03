@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from score_qmri.training.losses import compute_loss, l1_loss, noise_loss
+from score_qmri.training.losses import l1_loss, noise_loss
 
 
 def test_noise_loss():
@@ -58,30 +58,6 @@ def test_ssim_loss():
     target = torch.randn(2, 2, 64, 64)
     loss = ssim_loss(pred, target)
     assert 0 <= loss.item() <= 2
-
-
-def test_compute_loss():
-    """Test combined loss computation."""
-    x0_pred = torch.randn(2, 2, 64, 64)
-    x0_target = torch.randn(2, 2, 64, 64)
-    noise_pred = torch.randn(2, 2, 64, 64)
-    noise_target = torch.randn(2, 2, 64, 64)
-
-    output = compute_loss(x0_pred, x0_target, noise_pred, noise_target)
-    assert output.total.item() >= 0
-    assert output.noise_mse.item() >= 0
-    assert output.x0_l1.item() >= 0
-    assert output.x0_ssim.item() >= 0
-
-
-def test_compute_loss_weights():
-    """Test loss weights affect output."""
-    x0_pred = torch.randn(2, 2, 64, 64)
-    x0_target = torch.randn(2, 2, 64, 64)
-    noise_pred = torch.randn(2, 2, 64, 64)
-    noise_target = torch.randn(2, 2, 64, 64)
-    output_no_x0 = compute_loss(x0_pred, x0_target, noise_pred, noise_target, noise_weight=1.0, x0_weight=0.0)
-    assert torch.allclose(output_no_x0.total, output_no_x0.noise_mse)
 
 
 def test_ssim_loss_with_mask():
