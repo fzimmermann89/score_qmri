@@ -14,6 +14,7 @@ def test_diffusion_init():
     assert hasattr(model, "beta")
     assert hasattr(model, "sigma")
     assert hasattr(model, "snr")
+    assert hasattr(model, "normalizer")
 
 
 def test_diffusion_forward():
@@ -82,15 +83,12 @@ def test_diffusion_alpha_bar():
     """Test alpha_bar is computed correctly for continuous time."""
     model = DiffusionModel(base_channels=16, num_blocks=2)
 
-    # At t=0, alpha_bar should be close to 1
     ab_0 = model.alpha_bar(torch.tensor([0.0]))
     assert ab_0.item() > 0.99
 
-    # At t=1, alpha_bar should be small
     ab_1 = model.alpha_bar(torch.tensor([1.0]))
     assert ab_1.item() < 0.01
 
-    # Should be monotonically decreasing
     t = torch.linspace(0, 1, 10)
     ab = model.alpha_bar(t)
     assert torch.all(ab[:-1] >= ab[1:])
@@ -171,6 +169,49 @@ def test_diffusion_undo_prepare_complex():
     assert recovered.shape == (4, 64, 64)
     assert torch.allclose(recovered.real, image_2ch[:, 0])
     assert torch.allclose(recovered.imag, image_2ch[:, 1])
+
+
+def test_diffusion_normalize():
+    """Test normalize method with native format."""
+    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model.train()
+
+    x = torch.randn(4, 64, 64) * 2.0 + 5.0
+    mask = torch.ones(4, 64, 64, dtype=torch.bool)
+    kind = torch.zeros(4, dtype=torch.long)
+
+    x_norm = model.normalize(x, kind, mask)
+    assert x_norm.shape == (4, 64, 64)
+    assert x_norm.mean().abs() < 0.5
+
+
+def test_diffusion_normalize_complex():
+    """Test normalize method with complex input."""
+    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model.train()
+
+    x = torch.complex(torch.randn(4, 64, 64), torch.randn(4, 64, 64))
+    mask = torch.ones(4, 64, 64, dtype=torch.bool)
+    kind = torch.zeros(4, dtype=torch.long)
+
+    x_norm = model.normalize(x, kind, mask)
+    assert x_norm.is_complex()
+    assert x_norm.shape == (4, 64, 64)
+
+
+def test_diffusion_denormalize():
+    """Test denormalize method roundtrip."""
+    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model.train()
+
+    x = torch.randn(4, 64, 64) * 2.0 + 5.0
+    mask = torch.ones(4, 64, 64, dtype=torch.bool)
+    kind = torch.zeros(4, dtype=torch.long)
+
+    x_norm = model.normalize(x, kind, mask)
+    x_denorm = model.denormalize(x_norm, kind)
+
+    assert torch.allclose(x_denorm, x, atol=1e-4)
 
 
 def test_diffusion_boundary_t0():

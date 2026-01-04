@@ -15,6 +15,7 @@ import torch
 from torch import Tensor
 
 from .conditioning import ConditioningMLP
+from .normalization import RunningNormalizer
 from .unet import UNet
 
 
@@ -77,6 +78,7 @@ class DiffusionModel(torch.nn.Module):
             num_blocks=num_blocks,
             cond_dim=cond_dim,
         )
+        self.normalizer = RunningNormalizer(num_kinds=num_kinds)
 
     @property
     def device(self) -> torch.device:
@@ -113,6 +115,20 @@ class DiffusionModel(torch.nn.Module):
         if to_complex:
             return torch.view_as_complex(torch.moveaxis(image, 1, -1).contiguous())
         return image[:, 0]
+
+    def normalize(self, x: Tensor, kind: Tensor, mask: Tensor) -> Tensor:
+        """Normalize native (B, H, W) input using per-kind running stats."""
+        was_complex = x.is_complex()
+        x_2ch = self.prepare_input(x)
+        x_norm = self.normalizer.normalize(x_2ch, mask, kind)
+        return self.undo_prepare(x_norm, was_complex)
+
+    def denormalize(self, x: Tensor, kind: Tensor) -> Tensor:
+        """Denormalize native (B, H, W) output back to original scale."""
+        was_complex = x.is_complex()
+        x_2ch = self.prepare_input(x)
+        x_denorm = self.normalizer.denormalize(x_2ch, kind)
+        return self.undo_prepare(x_denorm, was_complex)
 
     def q_sample(self, x0: Tensor, t: Tensor, noise: Tensor | None = None) -> Tensor:
         """Sample from q(xₜ | x₀): xₜ = √ᾱ(t)·x₀ + √(1-ᾱ(t))·ε."""

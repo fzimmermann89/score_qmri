@@ -160,9 +160,11 @@ class DiffusionLightningModule(LightningModule):
         )
 
     def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:
-        x0 = batch["image"]
+        x0_raw = batch["image"]
         mask = batch["mask"]
         kind = batch["kind"]
+
+        x0 = self.model.normalize(x0_raw, kind, mask)
 
         t = torch.rand(x0.shape[0], device=self.device)
         noise = torch.randn_like(x0)
@@ -217,6 +219,7 @@ class DiffusionLightningModule(LightningModule):
                 k = int(kind_enum)
                 kind_tensor = torch.tensor([k], device=self.device)
                 sample = self.sampler.sample((1, size, size), kind_tensor, self._fixed_noise[k])
+                sample = self.model.denormalize(sample, kind_tensor)
 
                 img_np = sample[0].abs().cpu().numpy() if sample.is_complex() else sample[0].cpu().numpy()
 
