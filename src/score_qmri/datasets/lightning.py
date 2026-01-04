@@ -2,7 +2,7 @@
 
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 import torch
@@ -67,7 +67,12 @@ class BaseDatasetConfig(ABC):
 
     h5_path: str
     augmentation_config: AugmentationConfig | None = None
-    schedule: ScheduleType = field(default_factory=ConstantSchedule)
+    schedule: ScheduleType | None = None
+
+    def __post_init__(self) -> None:
+        # We cant use a default factory, or jsonargparse will get confused
+        if self.schedule is None:
+            self.schedule = ConstantSchedule()
 
     @abstractmethod
     def create(self) -> MRIDataset:
