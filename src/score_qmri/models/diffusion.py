@@ -12,7 +12,6 @@ The model predicts both:
 from dataclasses import dataclass
 
 import torch
-from einops import rearrange
 from torch import Tensor
 
 from .conditioning import ConditioningMLP
@@ -23,8 +22,8 @@ from .unet import UNet
 class DiffusionOutput:
     """Output from diffusion model forward pass."""
 
-    x0: Tensor  # (B, 2, H, W)
-    noise: Tensor  # (B, 2, H, W)
+    x0: Tensor  # (B, H, W)
+    noise: Tensor  # (B, H, W)
 
 
 class DiffusionModel(torch.nn.Module):
@@ -101,69 +100,46 @@ class DiffusionModel(torch.nn.Module):
         ab = self.alpha_bar(t)
         return ab / (1.0 - ab).clamp(min=1e-8)
 
-    def q_sample(self, x0: Tensor, t: Tensor, noise: Tensor | None = None) -> Tensor:
-        """
-        Sample from q(xₜ | x₀): xₜ = √ᾱ(t)·x₀ + √(1-ᾱ(t))·ε.
+    @staticmethod
+    def prepare_input(image: Tensor) -> Tensor:
+        """Convert native (B, H, W) to 2-channel (B, 2, H, W) for UNet."""
+        if image.is_complex():
+            return torch.moveaxis(torch.view_as_real(image), -1, 1)
+        return torch.stack([image, torch.zeros_like(image)], dim=1)
 
-        Parameters
-        ----------
-        x0
-            Clean images (B, 2, H, W).
-        t
-            Continuous time in [0, 1] of shape (B,).
-        noise
-            Optional pre-sampled noise. Defaults to N(0, I).
-        """
+    @staticmethod
+    def undo_prepare(image: Tensor, to_complex: bool) -> Tensor:
+        """Convert 2-channel (B, 2, H, W) back to native (B, H, W) format."""
+        if to_complex:
+            return torch.view_as_complex(torch.moveaxis(image, 1, -1).contiguous())
+        return image[:, 0]
+
+    def q_sample(self, x0: Tensor, t: Tensor, noise: Tensor | None = None) -> Tensor:
+        """Sample from q(xₜ | x₀): xₜ = √ᾱ(t)·x₀ + √(1-ᾱ(t))·ε."""
         if noise is None:
             noise = torch.randn_like(x0)
-        ab = rearrange(self.alpha_bar(t), "b -> b 1 1 1")
+        ab = self.alpha_bar(t).view(-1, 1, 1)
         return ab.sqrt() * x0 + (1.0 - ab).sqrt() * noise
 
     def forward(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput:
-        """
-        Predict x₀ and noise from noisy input.
-
-        Parameters
-        ----------
-        x_t
-            Noisy input (B, 2, H, W).
-        t
-            Continuous time in [0, 1] of shape (B,).
-        kind
-            Dataset kind indices (B,).
-        """
+        """Predict x₀ and noise from noisy input. Output format matches input."""
+        is_native = x_t.ndim == 3
+        was_complex = x_t.is_complex()
+        x_t_2ch = self.prepare_input(x_t)
         cond = self.cond_mlp(t, kind)
-        x0_pred, noise_pred = self.unet(x_t, cond)
+        x0_pred, noise_pred = self.unet(x_t_2ch, cond)
+        if is_native:
+            x0_pred = self.undo_prepare(x0_pred, was_complex)
+            noise_pred = self.undo_prepare(noise_pred, was_complex)
         return DiffusionOutput(x0=x0_pred, noise=noise_pred)
 
     def predict_x0(self, x_t: Tensor, t: Tensor, noise: Tensor) -> Tensor:
         """Recover x₀ = (xₜ - σ(t)·ε) / √ᾱ(t)."""
-        ab = rearrange(self.alpha_bar(t), "b -> b 1 1 1")
+        ab = self.alpha_bar(t).view(-1, 1, 1)
         return (x_t - (1.0 - ab).sqrt() * noise) / ab.sqrt().clamp(min=1e-8)
 
     def score(self, x_t: Tensor, t: Tensor, kind: Tensor) -> Tensor:
         """Compute score ∇ₓ log p(xₜ) = -ε / σ(t)."""
         output = self.forward(x_t, t, kind)
-        sigma_t = rearrange(self.sigma(t), "b -> b 1 1 1")
+        sigma_t = self.sigma(t).view(-1, 1, 1)
         return -output.noise / sigma_t.clamp(min=1e-8)
-
-    @staticmethod
-    def prepare_input(image: Tensor) -> Tensor:
-        """
-        Prepare 2-channel input from image tensor.
-
-        Complex data (B, 2, H, W) passes through unchanged.
-        Magnitude data (B, 1, H, W) or (B, H, W) is stacked with zeros for imaginary part.
-
-        Raises
-        ------
-        ValueError
-            If 4D input has unexpected channel count.
-        """
-        if image.ndim == 4 and image.shape[1] == 2:
-            return image
-        if image.ndim == 4 and image.shape[1] == 1:
-            image = image.squeeze(1)
-        elif image.ndim == 4:
-            raise ValueError(f"Expected 4D input with 1 or 2 channels, got {image.shape[1]}")
-        return torch.stack([image, torch.zeros_like(image)], dim=1)
