@@ -1,19 +1,13 @@
 """DDPM sampler for diffusion models."""
 
 import torch
-from einops import rearrange
 from torch import Tensor
 
 from score_qmri.models.diffusion import DiffusionModel
 
 
 class DDPMSampler:
-    """DDPM sampler with continuous time.
-
-    Uses the reverse diffusion process to generate samples from pure Gaussian noise.
-    The sampler follows the DDPM (Denoising Diffusion Probabilistic Models) algorithm
-    adapted for continuous time t ∈ [0, 1] used in VP-SDE diffusion.
-    """
+    """DDPM sampler with continuous time."""
 
     def __init__(self, model: DiffusionModel, num_steps: int = 1000) -> None:
         self.model = model
@@ -25,48 +19,30 @@ class DDPMSampler:
         kind: Tensor | None = None,
         initial_noise: Tensor | None = None,
     ) -> Tensor:
-        """
-        Sample from model using DDPM reverse process.
-
-        Parameters
-        ----------
-        shape
-            Output shape (B, 2, H, W).
-        kind
-            Dataset kind indices of shape (B,). Defaults to zeros.
-        initial_noise
-            Optional fixed noise for reproducibility.
-
-        Returns
-        -------
-        Tensor
-            Generated sample of shape (B, 2, H, W).
-        """
+        """Sample from model using DDPM. Shape is (B, H, W), dtype from initial_noise."""
         device = self.model.device
+        B = shape[0]
+        kind = torch.zeros(B, dtype=torch.long, device=device) if kind is None else kind.to(device)
+        x = initial_noise.to(device) if initial_noise is not None else torch.randn(shape, device=device)
+        timesteps = torch.linspace(1.0, 0.0, self.num_steps + 1, device=device)
+
         with torch.no_grad():
-            B = shape[0]
-            kind = torch.zeros(B, dtype=torch.long, device=device) if kind is None else kind.to(device)
-
-            x = initial_noise.to(device) if initial_noise is not None else torch.randn(shape, device=device)
-            timesteps = torch.linspace(1.0, 0.0, self.num_steps + 1, device=device)
-
             for i in range(self.num_steps):
                 t = timesteps[i].expand(B)
                 t_prev = timesteps[i + 1].expand(B)
                 x = self._step(x, t, t_prev, kind)
 
-            return x
+        return x
 
     def _step(self, x: Tensor, t: Tensor, t_prev: Tensor, kind: Tensor) -> Tensor:
-        """Execute single DDPM reverse step."""
         output = self.model(x, t, kind)
         x0_pred = self.model.predict_x0(x, t, output.noise)
 
         if t_prev[0] <= 0.0:
             return x0_pred
 
-        ab_t = rearrange(self.model.alpha_bar(t), "b -> b 1 1 1")
-        ab_prev = rearrange(self.model.alpha_bar(t_prev), "b -> b 1 1 1")
+        ab_t = self.model.alpha_bar(t).view(-1, 1, 1)
+        ab_prev = self.model.alpha_bar(t_prev).view(-1, 1, 1)
 
         one_minus_ab_t = (1.0 - ab_t).clamp(min=1e-8)
         ab_prev_safe = ab_prev.clamp(min=1e-8)

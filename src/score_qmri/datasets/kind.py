@@ -21,5 +21,21 @@ class DatasetKind(IntEnum):
     M0_COMPLEX = 12
     M0_MAGNITUDE = 13
 
+    @property
+    def is_complex(self) -> bool:
+        return self in _COMPLEX_KINDS
+
+
+_COMPLEX_KINDS = frozenset(
+    {
+        DatasetKind.COMPLEX_T1W_COILWISE,
+        DatasetKind.COMPLEX_T1W_COIL_COMBINED,
+        DatasetKind.COMPLEX_T2W_COILWISE,
+        DatasetKind.COMPLEX_T2W_COIL_COMBINED,
+        DatasetKind.COMPLEX_FLAIR_COILWISE,
+        DatasetKind.COMPLEX_FLAIR_COIL_COMBINED,
+        DatasetKind.M0_COMPLEX,
+    }
+)
 
 NUM_DATASET_KINDS: int = len(DatasetKind)
