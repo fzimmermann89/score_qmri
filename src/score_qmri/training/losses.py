@@ -83,52 +83,22 @@ def _sliding_window(
 
 
 def noise_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tensor:
-    """
-    MSE loss on noise prediction (L_simple).
-
-    Parameters
-    ----------
-    pred
-        Predicted noise of shape (B, C, H, W).
-    target
-        Target noise of shape (B, C, H, W).
-    mask
-        Optional mask of shape (B, 1, H, W).
-
-    Returns
-    -------
-    Scalar loss value.
-    """
+    """MSE loss on noise prediction. Supports complex and real tensors."""
+    diff_sq = (pred - target).abs().square()
     if mask is None:
-        return torch.nn.functional.mse_loss(pred, target)
-    mask = mask.float()
-    return ((pred - target).pow(2) * mask).sum() / mask.sum().clamp(min=1)
+        return diff_sq.mean()
+    return (diff_sq * mask.float()).sum() / mask.sum().clamp(min=1)
 
 
 def l1_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tensor:
-    """
-    L1 loss with optional masking.
-
-    Parameters
-    ----------
-    pred
-        Predicted tensor of shape (B, C, H, W).
-    target
-        Target tensor of shape (B, C, H, W).
-    mask
-        Optional mask of shape (B, 1, H, W).
-
-    Returns
-    -------
-    Scalar loss value.
-    """
+    """L1 loss. Supports complex and real tensors."""
+    diff = (pred - target).abs()
     if mask is None:
-        return torch.nn.functional.l1_loss(pred, target)
-    mask = mask.float()
-    return ((pred - target).abs() * mask).sum() / mask.sum().clamp(min=1)
+        return diff.mean()
+    return (diff * mask.float()).sum() / mask.sum().clamp(min=1)
 
 
-def ssim_loss(
+def _ssim_loss_real(
     pred: Tensor,
     target: Tensor,
     mask: Tensor | None = None,
@@ -138,45 +108,11 @@ def ssim_loss(
     k2: float = 0.03,
     reduction: Literal["mean", "none"] = "mean",
 ) -> Tensor:
-    """
-    SSIM loss (1 - SSIM) with proper mask handling.
-
-    Only windows fully inside the mask are considered, avoiding inflation from
-    zeroed masked regions.
-
-    .. warning::
-       For small images (< 64x64), the window_size may not fit properly.
-
-    Parameters
-    ----------
-    pred
-        Predicted tensor of shape (B, C, H, W).
-    target
-        Target tensor of shape (B, C, H, W).
-    mask
-        Optional mask of shape (B, 1, H, W) or (B, H, W).
-        Only windows with all values > 0 are considered.
-    data_range
-        Value range of the data. If None, computed as max(target) - min(target).
-    window_size
-        Size of the sliding window.
-    k1
-        SSIM constant (typically 0.01).
-    k2
-        SSIM constant (typically 0.03).
-    reduction
-        If 'mean', return mean SSIM loss over batch and channels.
-        If 'none', return per-sample, per-channel SSIM loss map.
-
-    Returns
-    -------
-    Scalar loss value (1 - mean SSIM) or SSIM loss map.
-    """
+    """SSIM loss on real 4D tensors (B, C, H, W)."""
     if pred.shape != target.shape:
         msg = f"Shape mismatch: pred {pred.shape}, target {target.shape}"
         raise ValueError(msg)
 
-    # Normalize mask shape: (B, H, W) -> (B, 1, H, W) and convert to float
     if mask is not None:
         if mask.ndim == 3:
             mask = mask.unsqueeze(1).float()
@@ -190,18 +126,15 @@ def ssim_loss(
             msg = "Mask contains negative values"
             raise ValueError(msg)
 
-    # Broadcast target, pred, and mask
     if mask is not None:
         target, pred, mask = torch.broadcast_tensors(target, pred, mask)
     else:
         target, pred = torch.broadcast_tensors(target, pred)
 
-    # Extract sliding windows over spatial dims (H, W)
     window = (window_size, window_size)
     target_window = _sliding_window(target, window_shape=window, dim=(-2, -1)).movedim((0, 1, 2, 3), (2, 3, 0, 1))
     pred_window = _sliding_window(pred, window_shape=window, dim=(-2, -1)).movedim((0, 1, 2, 3), (2, 3, 0, 1))
 
-    # Compute per-window statistics
     mean_target = target_window.mean(dim=(-2, -1))
     mean_pred = pred_window.mean(dim=(-2, -1))
 
@@ -209,14 +142,12 @@ def ssim_loss(
     mean_pred_sq = (pred_window**2).mean(dim=(-2, -1))
     mean_target_pred = (target_window * pred_window).mean(dim=(-2, -1))
 
-    # Unbiased covariance (clamp to prevent negative variance from numerical errors)
     n = target_window.shape[-2:].numel()
     cov_norm = n / (n - 1)
     var_target = (cov_norm * (mean_target_sq - mean_target * mean_target)).clamp(min=0.0)
     var_pred = (cov_norm * (mean_pred_sq - mean_pred * mean_pred)).clamp(min=0.0)
     var_target_pred = cov_norm * (mean_target_pred - mean_target * mean_pred)
 
-    # Data range
     if data_range is None:
         target_max = target_window.amax(dim=(-2, -1)).amax(dim=(-2, -1), keepdim=True)
         target_min = target_window.amin(dim=(-2, -1)).amin(dim=(-2, -1), keepdim=True)
@@ -227,15 +158,12 @@ def ssim_loss(
     c1 = (k1 * data_range_) ** 2
     c2 = (k2 * data_range_) ** 2
 
-    # SSIM formula
     numerator = (2 * mean_target * mean_pred + c1) * (2 * var_target_pred + c2)
     denominator = (mean_target**2 + mean_pred**2 + c1) * (var_target + var_pred + c2)
     ssim_map = numerator / denominator
 
-    # Handle masking
     if mask is not None:
         mask_window = _sliding_window(mask, window_shape=window, dim=(-2, -1)).movedim((0, 1, 2, 3), (2, 3, 0, 1))
-        # Set weights to 0 for windows not fully inside mask
         valid_mask = ~torch.isclose(mask_window, torch.tensor(0.0, device=mask_window.device)).any(dim=(-2, -1), keepdim=True)
         weight = mask_window * valid_mask.float()
         weight = weight.mean(dim=(-2, -1))
@@ -250,3 +178,26 @@ def ssim_loss(
         return 1.0 - ssim_weighted
     else:
         raise ValueError(f"Invalid reduction: {reduction}. Must be 'mean' or 'none'")
+
+
+def ssim_loss(
+    pred: Tensor,
+    target: Tensor,
+    mask: Tensor | None = None,
+    data_range: Tensor | float | None = None,
+    window_size: int = 7,
+    k1: float = 0.01,
+    k2: float = 0.03,
+    reduction: Literal["mean", "none"] = "mean",
+) -> Tensor:
+    """SSIM loss (1 - SSIM). For complex: computes on real/imag separately, averages."""
+    if pred.is_complex():
+        mask_4d = mask.unsqueeze(1) if mask is not None and mask.ndim == 3 else mask
+        loss_real = _ssim_loss_real(pred.real.unsqueeze(1), target.real.unsqueeze(1), mask_4d, data_range, window_size, k1, k2, reduction)
+        loss_imag = _ssim_loss_real(pred.imag.unsqueeze(1), target.imag.unsqueeze(1), mask_4d, data_range, window_size, k1, k2, reduction)
+        return (loss_real + loss_imag) / 2
+
+    if pred.ndim == 3:
+        return _ssim_loss_real(pred.unsqueeze(1), target.unsqueeze(1), mask, data_range, window_size, k1, k2, reduction)
+
+    return _ssim_loss_real(pred, target, mask, data_range, window_size, k1, k2, reduction)
