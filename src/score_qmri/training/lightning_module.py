@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from einops import rearrange
 from lightning import LightningModule
 from lightning.pytorch.loggers import WandbLogger
 from torch import Tensor
@@ -16,7 +15,6 @@ from score_qmri.models.diffusion import DiffusionModel
 from score_qmri.sampling.ddim_sampler import DDIMSampler, create_fixed_noise
 from score_qmri.training.losses import l1_loss, noise_loss, ssim_loss
 
-# Subset of kinds to generate validation samples for
 VALIDATION_KINDS: tuple[DatasetKind, ...] = (
     DatasetKind.T1W_MAGNITUDE,
     DatasetKind.T1MAP,
@@ -119,17 +117,13 @@ class DiffusionLightningModule(LightningModule):
         self._fixed_noise: dict[int, Tensor] | None = None
 
     def on_fit_start(self) -> None:
-        """Log model info, optimizer config, and source code at training start."""
         if not isinstance(self.logger, WandbLogger):
             return
 
         import wandb
 
-        # Model parameter counts
         total_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-
-        # Optimizer betas (AdamW defaults)
         beta1, beta2 = 0.9, 0.999
 
         hparams = {
@@ -142,15 +136,14 @@ class DiffusionLightningModule(LightningModule):
 
         self.logger.log_hyperparams(hparams)
 
-        # Log source code
-        project_root = Path(__file__).parent.parent
-        wandb.run.log_code(
-            str(project_root),
-            include_fn=lambda p: p.endswith(".py") or p.endswith(".yaml") or p.endswith(".toml"),
-        )
+        if wandb.run is not None:
+            project_root = Path(__file__).parent.parent
+            wandb.run.log_code(
+                str(project_root),
+                include_fn=lambda p: p.endswith(".py") or p.endswith(".yaml") or p.endswith(".toml"),
+            )
 
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
-        """Log gradient statistics before optimizer step."""
         grads = [p.grad.detach().flatten() for p in self.model.parameters() if p.grad is not None]
         if not grads:
             return
@@ -160,19 +153,15 @@ class DiffusionLightningModule(LightningModule):
         grad_variance = all_grads.var()
 
         self.log_dict(
-            {
-                "gradients/norm": grad_norm,
-                "gradients/variance": grad_variance,
-            },
+            {"gradients/norm": grad_norm, "gradients/variance": grad_variance},
             on_step=True,
             on_epoch=False,
             sync_dist=True,
         )
 
     def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:
-        """Compute training loss and log metrics."""
-        x0 = DiffusionModel.prepare_input(batch["image"])
-        mask = rearrange(batch["mask"], "b h w -> b 1 h w").expand_as(x0)
+        x0 = batch["image"]
+        mask = batch["mask"]
         kind = batch["kind"]
 
         t = torch.rand(x0.shape[0], device=self.device)
@@ -181,8 +170,7 @@ class DiffusionLightningModule(LightningModule):
 
         output = self.model(x_t, t, kind)
 
-        # Compute weighted mask: masked regions get mask_weight, unmasked get 1.0
-        weighted_mask = torch.where(mask > 0, torch.ones_like(mask), self.hparams.mask_weight * torch.ones_like(mask))
+        weighted_mask = torch.where(mask, 1.0, self.hparams.mask_weight)
 
         loss_noise = noise_loss(output.noise, noise, weighted_mask)
         loss_l1 = l1_loss(output.x0, x0, weighted_mask)
@@ -209,12 +197,10 @@ class DiffusionLightningModule(LightningModule):
         batch: Any,
         batch_idx: int,
     ) -> None:
-        """Log validation samples at specified intervals."""
         if self.global_step > 0 and self.global_step % self.hparams.validation_interval == 0:
             self._log_samples()
 
     def _log_samples(self) -> None:
-        """Generate and log samples for selected dataset kinds to W&B."""
         if not isinstance(self.logger, WandbLogger):
             return
 
@@ -230,16 +216,16 @@ class DiffusionLightningModule(LightningModule):
             for kind_enum in VALIDATION_KINDS:
                 k = int(kind_enum)
                 kind_tensor = torch.tensor([k], device=self.device)
-                sample = self.sampler.sample((1, 2, size, size), kind_tensor, self._fixed_noise[k])
+                sample = self.sampler.sample((1, size, size), kind_tensor, self._fixed_noise[k])
 
-                # Log real channel as image, use enum name as key
-                image = wandb.Image(sample[0, 0].cpu().numpy(), caption=f"step_{self.global_step}")
+                img_np = sample[0].abs().cpu().numpy() if sample.is_complex() else sample[0].cpu().numpy()
+
+                image = wandb.Image(img_np, caption=f"step_{self.global_step}")
                 self.logger.experiment.log({f"samples/{kind_enum.name}": image, "global_step": self.global_step})
 
         self.model.train()
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-        """Configure AdamW optimizer."""
         return torch.optim.AdamW(
             self.model.parameters(),
             lr=self.hparams.learning_rate,
