@@ -40,8 +40,12 @@ def test_training_step_complex(module):
 
 
 def test_configure_optimizers(module):
-    opt = module.configure_optimizers()
-    assert isinstance(opt, torch.optim.AdamW)
+    config = module.configure_optimizers()
+    assert isinstance(config, dict)
+    assert "optimizer" in config
+    assert "lr_scheduler" in config
+    assert isinstance(config["optimizer"], torch.optim.AdamW)
+    assert config["lr_scheduler"]["interval"] == "step"
 
 
 def test_hparams_saved(module):

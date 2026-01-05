@@ -218,3 +218,7 @@ __marimo__/
 # Logs
 logs/
 wandb/
+datasets
+checkpoints
+
+uv.lock

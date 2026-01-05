@@ -151,7 +151,7 @@ def _ssim_loss_real(
     if data_range is None:
         target_max = target_window.amax(dim=(-2, -1)).amax(dim=(-2, -1), keepdim=True)
         target_min = target_window.amin(dim=(-2, -1)).amin(dim=(-2, -1), keepdim=True)
-        data_range_ = (target_max - target_min).clamp(min=1e-8)
+        data_range_ = (target_max - target_min).clamp(min=1e-3)
     else:
         data_range_ = data_range if isinstance(data_range, Tensor) else torch.tensor(data_range)
 

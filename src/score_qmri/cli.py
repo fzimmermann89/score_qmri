@@ -34,11 +34,11 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         config_path = Path(trainer.log_dir) / self.config_filename if trainer.log_dir else None
         if config_path is None or not config_path.exists():
             return
-        if wandb.run is None:
+        if wandb.run is None:  # type: ignore[attr-defined]
             return
-        artifact = wandb.Artifact(f"config-{wandb.run.id}", type="config")
+        artifact = wandb.Artifact(f"config-{wandb.run.id}", type="config")  # type: ignore[attr-defined]
         artifact.add_file(str(config_path))
-        wandb.run.log_artifact(artifact)
+        wandb.run.log_artifact(artifact)  # type: ignore[attr-defined]
 
 
 class DiffusionLightningCLI(LightningCLI):
@@ -47,7 +47,6 @@ class DiffusionLightningCLI(LightningCLI):
     def add_arguments_to_parser(self, parser: jsonargparse.ArgumentParser) -> None:
         """Add custom arguments to the parser."""
         parser.add_argument("--job_name", type=str | None, default=None, help="Unique job name for resumption. Random ID if omitted.")
-        parser.add_argument("--experiment", type=str, default="mri-diffusion", help="Name of the experiment.")
         parser.add_argument("--wandb_project", type=str, default="mri-diffusion", help="WandB project name.")
         parser.add_argument("--wandb_entity", type=str | None, default=None, help="WandB entity name.")
         parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Path for checkpoints.")
@@ -74,7 +73,6 @@ class DiffusionLightningCLI(LightningCLI):
             id=run_id,
             resume="allow",
             project=config.wandb_project,
-            name=config.experiment,
             entity=config.wandb_entity,
             log_model=False,
             save_dir="logs",
@@ -153,9 +151,7 @@ class DiffusionLightningCLI(LightningCLI):
 
         logger.log_hyperparams(system_info)
 
-        # Log experiment metadata
         experiment_hparams = {
-            "experiment/name": config.experiment,
             "experiment/job_name": config.job_name,
             "experiment/wandb_project": config.wandb_project,
             "experiment/checkpoint_dir": config.checkpoint_dir,

@@ -159,3 +159,8 @@ class DiffusionModel(torch.nn.Module):
         output = self.forward(x_t, t, kind)
         sigma_t = self.sigma(t).view(-1, 1, 1)
         return -output.noise / sigma_t.clamp(min=1e-8)
+
+    def __call__(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput:
+        """Forward pass."""
+        ret: DiffusionOutput = super().__call__(x_t, t, kind)
+        return ret
