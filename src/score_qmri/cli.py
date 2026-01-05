@@ -34,8 +34,8 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         config_path = Path(trainer.log_dir) / self.config_filename if trainer.log_dir else None
         if config_path is None or not config_path.exists():
             return
-
-        # Log config as artifact
+        if wandb.run is None:
+            return
         artifact = wandb.Artifact(f"config-{wandb.run.id}", type="config")
         artifact.add_file(str(config_path))
         wandb.run.log_artifact(artifact)
@@ -46,7 +46,7 @@ class DiffusionLightningCLI(LightningCLI):
 
     def add_arguments_to_parser(self, parser: jsonargparse.ArgumentParser) -> None:
         """Add custom arguments to the parser."""
-        parser.add_argument("--job_name", type=str, required=True, help="Unique job name for resumption.")
+        parser.add_argument("--job_name", type=str | None, default=None, help="Unique job name for resumption. Random ID if omitted.")
         parser.add_argument("--experiment", type=str, default="mri-diffusion", help="Name of the experiment.")
         parser.add_argument("--wandb_project", type=str, default="mri-diffusion", help="WandB project name.")
         parser.add_argument("--wandb_entity", type=str | None, default=None, help="WandB entity name.")
@@ -59,6 +59,11 @@ class DiffusionLightningCLI(LightningCLI):
             return
 
         config = getattr(self.config, self.subcommand)
+
+        if config.job_name is None:
+            import secrets
+
+            config.job_name = secrets.token_hex(4)
 
         run_id = config.job_name
         run_dir = Path(config.checkpoint_dir) / run_id

@@ -4,7 +4,6 @@ from .augmentation import AugmentationPipeline, PhaseAugmentation
 from .base import BaseMRIDataset
 from .batch_sampler import ScheduledBatchSampler
 from .complex import ComplexImageDataset
-from .concat import get_size_labels
 from .config import (
     COMPLEX_CONFIG,
     MAGNITUDE_CONFIG,
@@ -40,7 +39,6 @@ __all__ = [
     "MappingDataset",
     "ScheduledBatchSampler",
     "MRIDataModule",
-    "get_size_labels",
     "MAGNITUDE_CONFIG",
     "MAPPING_CONFIG",
     "COMPLEX_CONFIG",

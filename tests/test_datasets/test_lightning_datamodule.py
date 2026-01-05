@@ -25,7 +25,7 @@ def test_datamodule_init_stores_config():
 
 
 def test_datamodule_setup_creates_concat_dataset(sample_h5_file_magnitude):
-    """Test setup creates ConcatDataset and size labels."""
+    """Test setup creates ConcatDataset."""
     configs: list[DatasetConfig] = [
         MagnitudeDatasetConfig(h5_path=sample_h5_file_magnitude, kind=DatasetKind.T1W_MAGNITUDE, schedule=ConstantSchedule(weight=1.0))
     ]
@@ -38,8 +38,8 @@ def test_datamodule_setup_creates_concat_dataset(sample_h5_file_magnitude):
     dm.setup("fit")
 
     assert dm.concat_ds is not None
-    assert dm.size_labels is not None
-    assert len(dm.size_labels) == 1
+    assert dm.dataset_lengths is not None
+    assert len(dm.dataset_lengths) == 1
 
 
 def test_datamodule_hparams_saved():

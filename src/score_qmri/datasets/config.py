@@ -13,7 +13,7 @@ class AugmentationConfig:
     flip_prob: float = 0.5
     roll_prob: float = 1.0
     shift_range: tuple[int, int] = (-10, 10)
-    scale_range: tuple[float, float] = (0.9, 1.2)
+    scale_range: tuple[float, float] = (0.9, 1.1)
     rotation_range: tuple[float, float] = (-10.0, 10.0)
     shear_range: tuple[float, float] = (-0.1, 0.1)
     contrast_strength: float = 0.2

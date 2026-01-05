@@ -2,8 +2,9 @@
 
 import os
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 from lightning import LightningDataModule
@@ -11,7 +12,6 @@ from torch.utils.data import ConcatDataset, DataLoader
 
 from .batch_sampler import ScheduledBatchSampler
 from .complex import ComplexImageDataset
-from .concat import get_size_labels
 from .config import AugmentationConfig
 from .kind import DatasetKind
 from .magnitude import MagnitudeImageDataset
@@ -28,7 +28,6 @@ class ConstantSchedule:
     weight: float = 1.0
 
     def __call__(self, step: int) -> float:
-        """Return constant weight."""
         return self.weight
 
 
@@ -41,7 +40,6 @@ class PhaseInSchedule:
     weight: float = 1.0
 
     def __call__(self, step: int) -> float:
-        """Return weight ramped from 0 to target over `steps`."""
         return self.weight * min(1.0, step / self.steps) if self.steps > 0 else self.weight
 
 
@@ -54,7 +52,6 @@ class PhaseOutSchedule:
     weight: float = 1.0
 
     def __call__(self, step: int) -> float:
-        """Return weight ramped from target to 0 over `steps`."""
         return self.weight * max(0.0, 1.0 - step / self.steps) if self.steps > 0 else 0.0
 
 
@@ -70,14 +67,11 @@ class BaseDatasetConfig(ABC):
     schedule: ScheduleType | None = None
 
     def __post_init__(self) -> None:
-        # We cant use a default factory, or jsonargparse will get confused
         if self.schedule is None:
             self.schedule = ConstantSchedule()
 
     @abstractmethod
-    def create(self) -> MRIDataset:
-        """Create dataset instance from this config."""
-        ...
+    def create(self) -> MRIDataset: ...
 
 
 @dataclass(kw_only=True)
@@ -85,11 +79,10 @@ class ComplexDatasetConfig(BaseDatasetConfig):
     """Configuration for complex-valued MRI datasets."""
 
     type: Literal["complex"] = "complex"
-    mode: Literal["combined", "coilwise"] = "combined"
+    mode: Literal["flat", "combined", "coilwise"] = "flat"
     kind: DatasetKind = DatasetKind.COMPLEX_T1W_COILWISE
 
     def create(self) -> ComplexImageDataset:
-        """Create ComplexImageDataset from this config."""
         return ComplexImageDataset(
             h5_path=self.h5_path,
             mode=self.mode,
@@ -106,7 +99,6 @@ class MagnitudeDatasetConfig(BaseDatasetConfig):
     kind: DatasetKind = DatasetKind.T1W_MAGNITUDE
 
     def create(self) -> MagnitudeImageDataset:
-        """Create MagnitudeImageDataset from this config."""
         return MagnitudeImageDataset(
             h5_path=self.h5_path,
             kind=self.kind,
@@ -123,7 +115,6 @@ class MappingDatasetConfig(BaseDatasetConfig):
     scaling_factor: float = 1.0
 
     def create(self) -> MappingDataset:
-        """Create MappingDataset from this config."""
         return MappingDataset(
             h5_path=self.h5_path,
             kind=self.kind,
@@ -141,8 +132,33 @@ class MRIDataModuleHparams:
 
     dataset_configs: list[DatasetConfig] | None
     batch_size: int
+    sample_size: tuple[int, int]
     num_workers: int
     base_seed: int
+
+
+def _pad_or_crop_centered(tensor: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
+    """Pad (positive) or crop (negative) to target size, centered."""
+    h, w = tensor.shape[-2:]
+    delta_h = target_h - h
+    delta_w = target_w - w
+    pad_top = delta_h // 2
+    pad_bot = delta_h - pad_top
+    pad_left = delta_w // 2
+    pad_right = delta_w - pad_left
+    return torch.nn.functional.pad(tensor, (pad_left, pad_right, pad_top, pad_bot))
+
+
+def _make_collate_fn(sample_size: tuple[int, int]) -> Callable[[list[dict[str, Any]]], dict[str, torch.Tensor]]:
+    target_h, target_w = sample_size
+
+    def collate_fn(batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
+        images = torch.stack([_pad_or_crop_centered(s["image"], target_h, target_w) for s in batch])
+        masks = torch.stack([_pad_or_crop_centered(s["mask"].float(), target_h, target_w).bool() for s in batch])
+        kinds = torch.stack([s["kind"] for s in batch])
+        return {"image": images, "mask": masks, "kind": kinds}
+
+    return collate_fn
 
 
 class MRIDataModule(LightningDataModule):
@@ -154,18 +170,19 @@ class MRIDataModule(LightningDataModule):
         self,
         dataset_configs: list[DatasetConfig] | None = None,
         batch_size: int = 8,
+        sample_size: tuple[int, int] = (256, 256),
         num_workers: int = 4,
         base_seed: int = 42,
     ) -> None:
         """
-        Initialize MRI data module.
-
         Parameters
         ----------
         dataset_configs
-            List of dataset configurations (dataclasses).
+            List of dataset configurations.
         batch_size
             Training batch size.
+        sample_size
+            Target (H, W) for center crop/pad. Default 256x256.
         num_workers
             DataLoader workers.
         base_seed
@@ -176,47 +193,38 @@ class MRIDataModule(LightningDataModule):
 
         self.dataset_configs: list[DatasetConfig] = dataset_configs or []
         self.batch_size = batch_size
+        self.sample_size = sample_size
         self.num_workers = num_workers
         self.base_seed = base_seed
 
         self.concat_ds: ConcatDataset | None = None
-        self.size_labels: list[tuple[int, int]] | None = None
         self.dataset_lengths: list[int] | None = None
 
     def get_config_summary(self) -> dict[str, object]:
-        """
-        Get flattened configuration summary for logging to W&B.
-
-        Returns
-        -------
-        Dictionary with flattened dataset and augmentation parameters.
-        """
         summary: dict[str, object] = {
             "data/batch_size": self.batch_size,
+            "data/sample_size": list(self.sample_size),
             "data/num_workers": self.num_workers,
             "data/base_seed": self.base_seed,
             "data/num_datasets": len(self.dataset_configs),
         }
 
-        # List of dataset kinds being trained on
         kinds = [cfg.kind.name for cfg in self.dataset_configs]
         summary["data/dataset_kinds"] = kinds
 
-        # Per-dataset config
         for i, cfg in enumerate(self.dataset_configs):
             prefix = f"data/dataset_{i}"
             summary[f"{prefix}/kind"] = cfg.kind.name
             summary[f"{prefix}/h5_path"] = cfg.h5_path
             summary[f"{prefix}/type"] = cfg.type
-            summary[f"{prefix}/schedule_type"] = cfg.schedule.type
-            summary[f"{prefix}/schedule_weight"] = cfg.schedule.weight
+            summary[f"{prefix}/schedule_type"] = cfg.schedule.type  # type: ignore[union-attr]
+            summary[f"{prefix}/schedule_weight"] = cfg.schedule.weight  # type: ignore[union-attr]
 
             if isinstance(cfg, ComplexDatasetConfig):
                 summary[f"{prefix}/mode"] = cfg.mode
             if isinstance(cfg, MappingDatasetConfig):
                 summary[f"{prefix}/scaling_factor"] = cfg.scaling_factor
 
-            # Augmentation config
             if cfg.augmentation_config is not None:
                 aug = cfg.augmentation_config
                 aug_prefix = f"{prefix}/aug"
@@ -235,27 +243,23 @@ class MRIDataModule(LightningDataModule):
         return summary
 
     def setup(self, stage: str) -> None:
-        """Set up datasets for training."""
         if stage == "fit" or stage is None:
             if not self.dataset_configs:
-                raise ValueError("No datasets configured. Provide at least one dataset_config when initializing MRIDataModule.")
+                raise ValueError("No datasets configured.")
             datasets = [cfg.create() for cfg in self.dataset_configs]
             self.concat_ds = ConcatDataset(datasets)
-            self.size_labels = get_size_labels(datasets)
             self.dataset_lengths = [len(ds) for ds in datasets]
 
     def train_dataloader(self) -> DataLoader:
-        """Create training dataloader with scheduled batch sampler."""
-        if self.concat_ds is None or self.size_labels is None or self.dataset_lengths is None:
-            raise RuntimeError("Datasets not initialized. Ensure setup() was called with valid dataset_configs.")
+        if self.concat_ds is None or self.dataset_lengths is None:
+            raise RuntimeError("Datasets not initialized.")
 
         rank = self.trainer.global_rank if self.trainer is not None else int(os.environ.get("LOCAL_RANK", 0))
 
         batch_sampler = ScheduledBatchSampler(
             self.concat_ds,
-            self.size_labels,
             self.dataset_lengths,
-            [cfg.schedule for cfg in self.dataset_configs],
+            [cfg.schedule for cfg in self.dataset_configs],  # type: ignore[misc]
             batch_size=self.batch_size,
             base_seed=self.base_seed,
             rank=rank,
@@ -264,6 +268,7 @@ class MRIDataModule(LightningDataModule):
         return DataLoader(
             self.concat_ds,
             batch_sampler=batch_sampler,
+            collate_fn=_make_collate_fn(self.sample_size),
             num_workers=self.num_workers,
             persistent_workers=self.num_workers > 0,
             pin_memory=torch.cuda.is_available(),
