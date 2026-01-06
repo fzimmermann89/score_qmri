@@ -45,7 +45,7 @@ def test_base_dataset_getitem_returns_correct_keys(sample_h5_file):
     dataset = DummyDataset(sample_h5_file, kind=DatasetKind.T1W_MAGNITUDE)
     sample = dataset[0]
 
-    assert set(sample.keys()) == {"image", "mask", "kind"}
+    assert set(sample.keys()) == {"image", "mask", "kind", "h5_path"}
     assert sample["image"].shape == (64, 64)
     assert sample["mask"].shape == (64, 64)
     assert sample["mask"].dtype == torch.bool

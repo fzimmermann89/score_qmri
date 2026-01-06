@@ -13,7 +13,8 @@ from torch import Tensor
 
 from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling.ddim_sampler import DDIMSampler, create_fixed_noise
+from score_qmri.sampling.ddim_sampler import DDIMSampler, SamplingStats, create_fixed_noise
+from score_qmri.training.ema import EMA
 from score_qmri.training.losses import l1_loss, noise_loss, ssim_loss
 
 VALIDATION_KINDS: tuple[DatasetKind, ...] = (
@@ -30,7 +31,8 @@ class DiffusionHparams:
     """Type-safe hyperparameter definitions for DiffusionLightningModule."""
 
     base_channels: int
-    num_blocks: int
+    num_res_blocks: int
+    channel_mult: tuple[int, ...]
     cond_dim: int
     beta_min: float
     beta_max: float
@@ -45,6 +47,7 @@ class DiffusionHparams:
     validation_steps: int
     validation_interval: int
     warmup_steps: int
+    ema_decay: float
 
 
 class DiffusionLightningModule(LightningModule):
@@ -55,29 +58,33 @@ class DiffusionLightningModule(LightningModule):
     def __init__(
         self,
         base_channels: int = 64,
-        num_blocks: int = 4,
+        num_res_blocks: int = 2,
+        channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
         cond_dim: int = 128,
         beta_min: float = 0.1,
-        beta_max: float = 20.0,
-        learning_rate: float = 1e-4,
+        beta_max: float = 10.0,
+        learning_rate: float = 5e-5,
         weight_decay: float = 0.01,
         noise_weight: float = 1.0,
         x0_weight: float = 0.1,
         ssim_weight: float = 0.5,
         l1_weight: float = 0.5,
-        mask_weight: float = 1e-3,
+        mask_weight: float = 0.1,
         validation_size: int = 128,
-        validation_steps: int = 100,
+        validation_steps: int = 250,
         validation_interval: int = 1000,
-        warmup_steps: int = 1000,
+        warmup_steps: int = 2000,
+        ema_decay: float = 0.9999,
     ) -> None:
         """
         Parameters
         ----------
         base_channels
             UNet base channel count.
-        num_blocks
-            UNet encoder/decoder depth.
+        num_res_blocks
+            Number of ResBlocks per level.
+        channel_mult
+            Channel multipliers per level (e.g., (1, 2, 4, 8) gives 4 levels).
         cond_dim
             Conditioning embedding dimension.
         beta_min
@@ -106,6 +113,8 @@ class DiffusionLightningModule(LightningModule):
             Steps between validation samples.
         warmup_steps
             Number of warmup steps for linear LR warmup.
+        ema_decay
+            EMA decay rate for weight averaging.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -114,14 +123,18 @@ class DiffusionLightningModule(LightningModule):
             beta_min=beta_min,
             beta_max=beta_max,
             base_channels=base_channels,
-            num_blocks=num_blocks,
+            num_res_blocks=num_res_blocks,
+            channel_mult=channel_mult,
             cond_dim=cond_dim,
             num_kinds=NUM_DATASET_KINDS,
         )
         self.sampler: DDIMSampler = DDIMSampler(self.model, num_steps=validation_steps)
         self._fixed_noise: dict[int, Tensor] | None = None
+        self.ema: EMA[DiffusionModel] | None = None
 
     def on_fit_start(self) -> None:
+        self.ema = EMA[DiffusionModel](self.model, decay=self.hparams.ema_decay)
+
         if not isinstance(self.logger, WandbLogger):
             return
 
@@ -169,9 +182,13 @@ class DiffusionLightningModule(LightningModule):
         mask = batch["mask"]
         kind = batch["kind"]
 
-        x0 = self.model.normalize(x0_raw, kind, mask)
-
-        self._log_normalization_stats(x0_raw, x0, mask, kind)
+        x0_pre_clamp = self.model.normalize(x0_raw, kind, mask)
+        self._log_normalization_stats(x0_raw, x0_pre_clamp, mask, kind)
+        x0 = (
+            torch.complex(x0_pre_clamp.real.clamp(-6, 6), x0_pre_clamp.imag.clamp(-6, 6))
+            if x0_pre_clamp.is_complex()
+            else x0_pre_clamp.clamp(-6, 6)
+        )
 
         t = torch.rand(x0.shape[0], device=self.device)
         noise = torch.randn_like(x0)
@@ -179,11 +196,27 @@ class DiffusionLightningModule(LightningModule):
 
         output = self.model(x_t, t, kind)
 
-        weighted_mask = torch.where(mask, 1.0, self.hparams.mask_weight)
+        valid_counts = mask.sum(dim=(-2, -1))
+        valid_samples = valid_counts >= 1000
+        n_valid = int(valid_samples.sum().item())
 
-        loss_noise = noise_loss(output.noise, noise, weighted_mask)
-        loss_l1 = l1_loss(output.x0, x0, weighted_mask)
-        loss_ssim = ssim_loss(output.x0, x0, weighted_mask)
+        self.log("train/valid_samples", float(n_valid), sync_dist=True)
+
+        if n_valid == 0:
+            self.log("train/skipped_step", 1.0, sync_dist=True)
+            return None
+
+        x0_v = x0[valid_samples]
+        noise_v = noise[valid_samples]
+        mask_v = mask[valid_samples]
+        pred_noise_v = output.noise[valid_samples]
+        pred_x0_v = output.x0[valid_samples]
+
+        weighted_mask = torch.where(mask_v, 1.0, self.hparams.mask_weight)
+
+        loss_noise = noise_loss(pred_noise_v, noise_v, weighted_mask)
+        loss_l1 = l1_loss(pred_x0_v, x0_v, weighted_mask)
+        loss_ssim = ssim_loss(pred_x0_v, x0_v, weighted_mask)
 
         x0_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
         total_loss = self.hparams.noise_weight * loss_noise + self.hparams.x0_weight * x0_loss
@@ -198,41 +231,54 @@ class DiffusionLightningModule(LightningModule):
                 "train/loss": total_loss,
                 "train/noise_mse": loss_noise,
                 "train/x0_l1": loss_l1,
-                "train/x0_ssim": loss_ssim,
+                "train/x0_ssim": 1.0 - loss_ssim,
             },
             prog_bar=True,
             sync_dist=True,
         )
 
         if self.global_step > 0 and self.global_step % 1000 == 0:
-            x0_tweedie = self.model.predict_x0(x_t, t, output.noise)
-            self._log_training_batch(x0, x_t, noise, output.noise, x0_tweedie, output.x0, kind, t)
+            t_v = t[valid_samples]
+            x_t_v = x_t[valid_samples]
+            kind_v = kind[valid_samples]
+            x0_tweedie_v = self.model.predict_x0(x_t_v, t_v, pred_noise_v)
+            self._log_training_batch(x0_v, x_t_v, noise_v, pred_noise_v, x0_tweedie_v, pred_x0_v, kind_v, t_v)
 
         return total_loss
 
     def _log_normalization_stats(self, x0_raw: Tensor, x0_norm: Tensor, mask: Tensor, kind: Tensor) -> None:
-        # TODO: Debug logging for normalization issues - remove once training is stable
-        x_raw = x0_raw.abs() if x0_raw.is_complex() else x0_raw
-        x_norm = x0_norm.abs() if x0_norm.is_complex() else x0_norm
         mask_f = mask.float()
 
-        masked_raw = x_raw * mask_f
-        masked_norm = x_norm * mask_f
-        n_valid = mask_f.sum().clamp(min=1)
+        if x0_raw.is_complex():
+            raw_for_stats = torch.stack([x0_raw.real, x0_raw.imag], dim=1)
+            norm_for_stats = torch.stack([x0_norm.real, x0_norm.imag], dim=1)
+            mask_expanded = mask_f.unsqueeze(1).expand_as(raw_for_stats)
+        else:
+            raw_for_stats = x0_raw.unsqueeze(1) if x0_raw.ndim == 3 else x0_raw
+            norm_for_stats = x0_norm.unsqueeze(1) if x0_norm.ndim == 3 else x0_norm
+            mask_expanded = mask_f.unsqueeze(1) if mask_f.ndim == 3 else mask_f
 
-        raw_mean = masked_raw.sum() / n_valid
-        raw_var = ((masked_raw - raw_mean * mask_f).pow(2) * mask_f).sum() / n_valid
+        n_valid_expanded = mask_expanded.sum().clamp(min=1)
 
-        norm_mean = masked_norm.sum() / n_valid
-        norm_var = ((masked_norm - norm_mean * mask_f).pow(2) * mask_f).sum() / n_valid
+        masked_raw = raw_for_stats * mask_expanded
+        masked_norm = norm_for_stats * mask_expanded
+
+        raw_mean = masked_raw.sum() / n_valid_expanded
+        raw_var = ((masked_raw - raw_mean * mask_expanded).pow(2) * mask_expanded).sum() / n_valid_expanded
+
+        norm_mean = masked_norm.sum() / n_valid_expanded
+        norm_var = ((masked_norm - norm_mean * mask_expanded).pow(2) * mask_expanded).sum() / n_valid_expanded
+
+        x_raw_masked = raw_for_stats[mask_expanded.bool()] if mask_expanded.any() else raw_for_stats.flatten()
+        x_norm_masked = norm_for_stats[mask_expanded.bool()] if mask_expanded.any() else norm_for_stats.flatten()
 
         normalizer_means = []
         normalizer_vars = []
         for k in kind.unique():
             mean_buf, var_buf, n_buf = self.model.normalizer._get_buffers(k.item())
             if n_buf.item() > 0:
-                normalizer_means.append(mean_buf[:1].abs().mean())
-                normalizer_vars.append(var_buf[:1].mean())
+                normalizer_means.append(mean_buf[:2].abs().mean())
+                normalizer_vars.append(var_buf[:2].mean())
 
         avg_normalizer_mean = torch.stack(normalizer_means).mean() if normalizer_means else torch.tensor(0.0)
         avg_normalizer_var = torch.stack(normalizer_vars).mean() if normalizer_vars else torch.tensor(1.0)
@@ -241,12 +287,12 @@ class DiffusionLightningModule(LightningModule):
             {
                 "norm/raw_mean": raw_mean,
                 "norm/raw_var": raw_var,
-                "norm/raw_min": x_raw[mask].min() if mask.any() else x_raw.min(),
-                "norm/raw_max": x_raw[mask].max() if mask.any() else x_raw.max(),
+                "norm/raw_min": x_raw_masked.min(),
+                "norm/raw_max": x_raw_masked.max(),
                 "norm/post_mean": norm_mean,
                 "norm/post_var": norm_var,
-                "norm/post_min": x_norm[mask].min() if mask.any() else x_norm.min(),
-                "norm/post_max": x_norm[mask].max() if mask.any() else x_norm.max(),
+                "norm/post_min": x_norm_masked.min(),
+                "norm/post_max": x_norm_masked.max(),
                 "norm/normalizer_mean": avg_normalizer_mean,
                 "norm/normalizer_var": avg_normalizer_var,
             },
@@ -293,7 +339,15 @@ class DiffusionLightningModule(LightningModule):
                 axes[row, i].imshow(data[i], cmap="gray")
                 axes[row, i].axis("off")
                 if i == 0:
-                    axes[row, i].set_ylabel(row_labels[row], fontsize=8)
+                    axes[row, i].text(
+                        -0.05,
+                        0.5,
+                        row_labels[row],
+                        fontsize=8,
+                        transform=axes[row, i].transAxes,
+                        ha="right",
+                        va="center",
+                    )
             axes[0, i].set_title(f"{kind_names[i]}\nt={t[i].item():.2f}", fontsize=7)
 
         fig.suptitle(f"Training batch @ step {self.global_step}", fontsize=10)
@@ -308,6 +362,9 @@ class DiffusionLightningModule(LightningModule):
         batch: Any,
         batch_idx: int,
     ) -> None:
+        if self.ema is not None:
+            self.ema.update(self.model)
+
         if self.global_step > 0 and self.global_step % self.hparams.validation_interval == 0:
             self._log_samples()
 
@@ -393,25 +450,83 @@ class DiffusionLightningModule(LightningModule):
 
         import wandb
 
-        self.model.eval()
         size = self.hparams.validation_size
 
         if self._fixed_noise is None:
             self._fixed_noise = create_fixed_noise((size, size))
 
+        sample_model: DiffusionModel = self.ema.shadow if self.ema is not None else self.model
+        sample_model.eval()
+        sampler = DDIMSampler(sample_model, num_steps=self.hparams.validation_steps)
+
         with torch.no_grad():
-            for kind_enum in VALIDATION_KINDS:
+            for kind_idx, kind_enum in enumerate(VALIDATION_KINDS):
                 k = int(kind_enum)
                 kind_tensor = torch.tensor([k], device=self.device)
-                sample = self.sampler.sample((1, size, size), kind_tensor, self._fixed_noise[k])
-                sample = self.model.denormalize(sample, kind_tensor)
+                collect = kind_idx == 0
 
-                img_np = sample[0].abs().cpu().numpy() if sample.is_complex() else sample[0].cpu().numpy()
+                sample = sampler.sample((1, size, size), kind_tensor, self._fixed_noise[k], collect_stats=collect)
+                sample_denorm: Tensor = sample_model.denormalize(sample, kind_tensor)
 
+                img_np = sample_denorm[0].abs().cpu().numpy() if sample_denorm.is_complex() else sample_denorm[0].cpu().numpy()
                 image = wandb.Image(img_np, caption=f"step_{self.global_step}")  # type: ignore[attr-defined]
                 self.logger.experiment.log({f"samples/{kind_enum.name}": image, "global_step": self.global_step})
 
-        self.model.train()
+                if collect and sampler.last_stats is not None:
+                    self._log_sampling_stats(kind_enum.name, sampler.last_stats)
+
+        if self.ema is None:
+            sample_model.train()
+
+    def _log_sampling_stats(self, kind_name: str, stats: SamplingStats) -> None:
+        if not isinstance(self.logger, WandbLogger):
+            return
+
+        import matplotlib.pyplot as plt
+
+        import wandb
+
+        n = len(stats.intermediates)
+        if n == 0:
+            return
+
+        fig, axes = plt.subplots(2, n, figsize=(2.5 * n, 5), squeeze=False)
+
+        for j, (inter, step, t_val) in enumerate(zip(stats.intermediates, stats.steps, stats.t_values, strict=True)):
+            img = inter[0].abs().numpy() if inter.is_complex() else inter[0].numpy()
+            axes[0, j].imshow(img, cmap="gray")
+            axes[0, j].axis("off")
+            axes[0, j].set_title(f"step {step}\nt={t_val:.3f}", fontsize=7)
+
+        ax_stats = axes[1, 0]
+        for ax in axes[1, 1:]:
+            ax.axis("off")
+
+        ax_stats.plot(stats.steps, stats.x0_std, "b-", label="x0 std", linewidth=1.5)
+        ax_stats.plot(stats.steps, stats.x_std, "g--", label="x std", linewidth=1.5)
+        ax_stats.plot(stats.steps, stats.noise_std, "r:", label="noise std", linewidth=1.5)
+        ax_stats.set_xlabel("step")
+        ax_stats.set_ylabel("std")
+        ax_stats.legend(fontsize=6)
+        ax_stats.set_title("Sampling statistics", fontsize=8)
+
+        fig.suptitle(f"Sampling progression: {kind_name} @ step {self.global_step}", fontsize=10)
+        fig.tight_layout()
+
+        self.logger.experiment.log({"samples/progression": wandb.Image(fig), "global_step": self.global_step})  # type: ignore[attr-defined]
+        plt.close(fig)
+
+        table_data = [
+            [step, f"{t:.4f}", f"{ab:.6f}", f"{x0_mean:.3f}", f"{x0_std:.3f}", f"{n_std:.3f}"]
+            for step, t, ab, x0_mean, x0_std, n_std in zip(
+                stats.steps, stats.t_values, stats.alpha_bar, stats.x0_mean, stats.x0_std, stats.noise_std, strict=True
+            )
+        ]
+        table = wandb.Table(  # type: ignore[attr-defined]
+            columns=["step", "t", "alpha_bar", "x0_mean", "x0_std", "noise_std"],
+            data=table_data,
+        )
+        self.logger.experiment.log({"samples/stats_table": table, "global_step": self.global_step})
 
     def configure_optimizers(self) -> OptimizerLRSchedulerConfig:
         optimizer = torch.optim.AdamW(
@@ -431,3 +546,11 @@ class DiffusionLightningModule(LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {"scheduler": scheduler, "interval": "step", "frequency": 1},
         }
+
+    def on_save_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        if self.ema is not None:
+            checkpoint["ema"] = self.ema.state_dict()
+
+    def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        if "ema" in checkpoint and self.ema is not None:
+            self.ema.load_state_dict(checkpoint["ema"])

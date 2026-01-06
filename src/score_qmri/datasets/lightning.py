@@ -150,14 +150,15 @@ def _pad_or_crop_centered(tensor: torch.Tensor, target_h: int, target_w: int) ->
     return torch.nn.functional.pad(tensor, (pad_left, pad_right, pad_top, pad_bot))
 
 
-def _make_collate_fn(sample_size: tuple[int, int]) -> Callable[[list[dict[str, Any]]], dict[str, torch.Tensor]]:
+def _make_collate_fn(sample_size: tuple[int, int]) -> Callable[[list[dict[str, Any]]], dict[str, Any]]:
     target_h, target_w = sample_size
 
-    def collate_fn(batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
+    def collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
         images = torch.stack([_pad_or_crop_centered(s["image"], target_h, target_w) for s in batch])
         masks = torch.stack([_pad_or_crop_centered(s["mask"].float(), target_h, target_w).bool() for s in batch])
         kinds = torch.stack([s["kind"] for s in batch])
-        return {"image": images, "mask": masks, "kind": kinds}
+        h5_paths = [s["h5_path"] for s in batch]
+        return {"image": images, "mask": masks, "kind": kinds, "h5_path": h5_paths}
 
     return collate_fn
 

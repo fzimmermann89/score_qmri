@@ -8,7 +8,7 @@ from score_qmri.sampling.ddim_sampler import DDIMSampler, create_fixed_noise
 
 
 def test_ddim_sampler_shape():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=10)
 
     shape = (2, 32, 32)
@@ -18,7 +18,7 @@ def test_ddim_sampler_shape():
 
 
 def test_ddim_sampler_fixed_noise():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=10)
 
     shape = (1, 32, 32)
@@ -30,7 +30,7 @@ def test_ddim_sampler_fixed_noise():
 
 
 def test_ddim_deterministic():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=10, eta=0.0)
 
     shape = (1, 32, 32)
@@ -43,7 +43,7 @@ def test_ddim_deterministic():
 
 
 def test_ddim_complex_input():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=10, eta=0.0)
 
     shape = (1, 32, 32)
@@ -80,7 +80,7 @@ def test_create_fixed_noise_reproducible():
 
 
 def test_ddim_sampler_uses_model_device():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=10)
 
     model = model.to(torch.device("cpu"))
@@ -92,7 +92,7 @@ def test_ddim_sampler_uses_model_device():
 
 
 def test_ddim_sampler_device_changes_with_model():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=10)
 
     shape = (1, 32, 32)
@@ -105,3 +105,24 @@ def test_ddim_sampler_device_changes_with_model():
         model = model.to(torch.device("cuda:0"))
         samples_cuda = sampler.sample(shape, kind)
         assert samples_cuda.device.type == "cuda"
+
+
+def test_ddim_collect_stats():
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
+    sampler = DDIMSampler(model, num_steps=50)
+
+    shape = (1, 32, 32)
+    kind = torch.tensor([0])
+
+    samples = sampler.sample(shape, kind, collect_stats=True)
+    assert samples.shape == shape
+    assert sampler.last_stats is not None
+
+    stats = sampler.last_stats
+    assert len(stats.steps) > 0
+    assert len(stats.intermediates) == len(stats.steps)
+    assert len(stats.x0_std) == len(stats.steps)
+    assert len(stats.t_values) == len(stats.steps)
+
+    for inter in stats.intermediates:
+        assert inter.shape == shape

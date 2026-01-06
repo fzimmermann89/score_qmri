@@ -47,7 +47,8 @@ class DiffusionModel(torch.nn.Module):
         beta_min: float = 0.1,
         beta_max: float = 20.0,
         base_channels: int = 64,
-        num_blocks: int = 4,
+        num_res_blocks: int = 2,
+        channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
         cond_dim: int = 128,
         num_kinds: int = 14,
     ) -> None:
@@ -59,9 +60,11 @@ class DiffusionModel(torch.nn.Module):
         beta_max
             Maximum noise rate β(1).
         base_channels
-            UNet base channel count (doubled at each level).
-        num_blocks
-            UNet encoder/decoder depth.
+            UNet base channel count.
+        num_res_blocks
+            Number of ResBlocks per level.
+        channel_mult
+            Channel multipliers per level (e.g., (1, 2, 4, 8) gives 4 levels).
         cond_dim
             Conditioning embedding dimension.
         num_kinds
@@ -72,11 +75,15 @@ class DiffusionModel(torch.nn.Module):
         self.beta_max = beta_max
 
         self.cond_mlp = ConditioningMLP(cond_dim=cond_dim, num_kinds=num_kinds)
-        self.unet = UNet(
-            in_channels=2,
-            base_channels=base_channels,
-            num_blocks=num_blocks,
-            cond_dim=cond_dim,
+        self.unet = torch.compile(
+            UNet(
+                in_channels=2,
+                base_channels=base_channels,
+                num_res_blocks=num_res_blocks,
+                channel_mult=channel_mult,
+                cond_dim=cond_dim,
+            ),
+            mode="reduce-overhead",
         )
         self.normalizer = RunningNormalizer(num_kinds=num_kinds)
 

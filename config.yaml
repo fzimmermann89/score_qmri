@@ -1,3 +1,13 @@
+model:
+  base_channels: 64
+  num_res_blocks: 2
+  channel_mult:
+    - 1
+    - 2
+    - 4
+    - 8
+    - 16
+
 data:
   class_path: score_qmri.datasets.lightning.MRIDataModule
   init_args:
@@ -44,17 +54,17 @@ data:
         augmentation_config:
           scale_range: [0.7, 0.9]
 
-      - type: complex
-        h5_path: /home/zimmer08/datacheck/data/prepared/cc.h5
-        mode: coilwise
-        kind: COMPLEX_T2W_COILWISE
-        augmentation_config:
-          scale_range: [1.0, 1.2]
+      # - type: complex
+      #   h5_path: /home/zimmer08/datacheck/data/prepared/cc.h5
+      #   mode: coilwise
+      #   kind: COMPLEX_T1W_COILWISE
+      #   augmentation_config:
+      #     scale_range: [1.0, 1.2]
 
       - type: complex
         h5_path: /home/zimmer08/datacheck/data/prepared/cc.h5
         mode: combined
-        kind: COMPLEX_T2W_COIL_COMBINED
+        kind: COMPLEX_T1W_COIL_COMBINED
         augmentation_config:
           scale_range: [1.0, 1.2]
 
@@ -306,6 +316,7 @@ data:
       - type: mapping
         h5_path: /home/zimmer08/datacheck/data/prepared/quiero_m0map.h5
         kind: M0_MAGNITUDE
+        scaling_factor: 0.00005
         schedule:
           type: phase_in
           steps: 50000
@@ -328,10 +339,24 @@ data:
           type: phase_in
           steps: 50000
 
-    batch_size: 8
+    batch_size: 64
     sample_size: [256, 256]
-    num_workers: 4
+    num_workers: 64
     base_seed: 42
 
 trainer:
-  max_steps: 100000
+  max_steps: 500000
+  gradient_clip_val: 0.5
+  precision: 16-mixed
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      project: score_qmri
+      log_model: false
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        save_top_k: 3
+        monitor: train/loss
+        mode: min
+        save_last: true

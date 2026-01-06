@@ -7,7 +7,7 @@ from score_qmri.sampling.ddpm_sampler import DDPMSampler
 
 
 def test_ddpm_sampler_shape():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDPMSampler(model, num_steps=10)
 
     shape = (2, 32, 32)
@@ -17,7 +17,7 @@ def test_ddpm_sampler_shape():
 
 
 def test_ddpm_sampler_default_kind():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDPMSampler(model, num_steps=10)
 
     shape = (2, 32, 32)
@@ -26,7 +26,7 @@ def test_ddpm_sampler_default_kind():
 
 
 def test_ddpm_sampler_num_steps():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDPMSampler(model, num_steps=5)
     assert sampler.num_steps == 5
 
@@ -35,7 +35,7 @@ def test_ddpm_sampler_num_steps():
 
 
 def test_ddpm_sampler_uses_model_device():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDPMSampler(model, num_steps=10)
 
     model = model.to(torch.device("cpu"))
@@ -47,7 +47,7 @@ def test_ddpm_sampler_uses_model_device():
 
 
 def test_ddpm_sampler_device_changes_with_model():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDPMSampler(model, num_steps=10)
 
     shape = (1, 32, 32)
@@ -64,7 +64,7 @@ def test_ddpm_sampler_device_changes_with_model():
 
 
 def test_ddpm_sampler_complex_input():
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDPMSampler(model, num_steps=10)
 
     shape = (1, 32, 32)

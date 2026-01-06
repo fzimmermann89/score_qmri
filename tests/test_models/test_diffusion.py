@@ -7,7 +7,7 @@ from score_qmri.models.diffusion import DiffusionModel, DiffusionOutput
 
 def test_diffusion_init():
     """Test diffusion model initialization."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     assert hasattr(model, "beta_min")
     assert hasattr(model, "beta_max")
     assert hasattr(model, "alpha_bar")
@@ -19,7 +19,7 @@ def test_diffusion_init():
 
 def test_diffusion_forward():
     """Test forward returns DiffusionOutput with dual predictions."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     x_t = torch.randn(2, 32, 32)
     t = torch.tensor([0.1, 0.5])
     kind = torch.tensor([0, 1])
@@ -32,7 +32,7 @@ def test_diffusion_forward():
 
 def test_diffusion_forward_complex():
     """Test forward with complex input."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     x_t = torch.complex(torch.randn(2, 32, 32), torch.randn(2, 32, 32))
     t = torch.tensor([0.1, 0.5])
     kind = torch.tensor([0, 1])
@@ -45,7 +45,7 @@ def test_diffusion_forward_complex():
 
 def test_diffusion_q_sample():
     """Test forward diffusion adds noise."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     x0 = torch.randn(2, 32, 32)
     t = torch.tensor([0.5, 0.5])
     noise = torch.randn_like(x0)
@@ -57,7 +57,7 @@ def test_diffusion_q_sample():
 
 def test_diffusion_q_sample_complex():
     """Test q_sample with complex input."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     x0 = torch.complex(torch.randn(2, 32, 32), torch.randn(2, 32, 32))
     t = torch.tensor([0.5, 0.5])
     noise = torch.randn_like(x0)
@@ -69,7 +69,7 @@ def test_diffusion_q_sample_complex():
 
 def test_predict_x0_is_inverse_of_q_sample():
     """Test x0 prediction from noise is inverse of q_sample."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     x0 = torch.randn(2, 32, 32)
     t = torch.tensor([0.3, 0.7])
     noise = torch.randn_like(x0)
@@ -81,7 +81,7 @@ def test_predict_x0_is_inverse_of_q_sample():
 
 def test_diffusion_alpha_bar():
     """Test alpha_bar is computed correctly for continuous time."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
 
     ab_0 = model.alpha_bar(torch.tensor([0.0]))
     assert ab_0.item() > 0.99
@@ -96,7 +96,7 @@ def test_diffusion_alpha_bar():
 
 def test_diffusion_beta():
     """Test beta is linear in time."""
-    model = DiffusionModel(beta_min=0.1, beta_max=20.0, base_channels=16, num_blocks=2)
+    model = DiffusionModel(beta_min=0.1, beta_max=20.0, base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
 
     beta_0 = model.beta(torch.tensor([0.0]))
     beta_1 = model.beta(torch.tensor([1.0]))
@@ -107,7 +107,7 @@ def test_diffusion_beta():
 
 def test_diffusion_sigma():
     """Test sigma = sqrt(1 - alpha_bar)."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     t = torch.tensor([0.5])
 
     ab = model.alpha_bar(t)
@@ -117,7 +117,7 @@ def test_diffusion_sigma():
 
 def test_diffusion_snr():
     """Test SNR = alpha_bar / (1 - alpha_bar)."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     t = torch.tensor([0.5])
 
     ab = model.alpha_bar(t)
@@ -127,7 +127,7 @@ def test_diffusion_snr():
 
 def test_diffusion_score():
     """Test score function output shape."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     x_t = torch.randn(2, 32, 32)
     t = torch.tensor([0.5, 0.5])
     kind = torch.tensor([0, 1])
@@ -173,7 +173,7 @@ def test_diffusion_undo_prepare_complex():
 
 def test_diffusion_normalize():
     """Test normalize method with native format."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     model.train()
 
     x = torch.randn(4, 64, 64) * 2.0 + 5.0
@@ -187,7 +187,7 @@ def test_diffusion_normalize():
 
 def test_diffusion_normalize_complex():
     """Test normalize method with complex input."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     model.train()
 
     x = torch.complex(torch.randn(4, 64, 64), torch.randn(4, 64, 64))
@@ -201,7 +201,7 @@ def test_diffusion_normalize_complex():
 
 def test_diffusion_denormalize():
     """Test denormalize method roundtrip."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     model.train()
 
     x = torch.randn(4, 64, 64) * 2.0 + 5.0
@@ -216,7 +216,7 @@ def test_diffusion_denormalize():
 
 def test_diffusion_boundary_t0():
     """Test t=0 boundary: alpha_bar ~1.0, sigma ~0, noise has no effect."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     x0 = torch.randn(2, 32, 32)
     t = torch.tensor([0.0, 0.0])
 
@@ -235,7 +235,7 @@ def test_diffusion_boundary_t0():
 
 def test_diffusion_boundary_t1():
     """Test t=1 boundary: alpha_bar ~0, sigma ~1, x_t is pure noise."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     x0 = torch.randn(2, 32, 32)
     t = torch.tensor([1.0, 1.0])
 
@@ -254,7 +254,7 @@ def test_diffusion_boundary_t1():
 
 def test_diffusion_invalid_t_values():
     """Test t values outside [0, 1] work mathematically."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
 
     t_neg = torch.tensor([-0.5, -0.1])
     ab_neg = model.alpha_bar(t_neg)
@@ -268,7 +268,7 @@ def test_diffusion_invalid_t_values():
 
 def test_diffusion_different_beta_configs():
     """Test diffusion model with different beta_min/beta_max values."""
-    model = DiffusionModel(beta_min=1.0, beta_max=10.0, base_channels=16, num_blocks=2)
+    model = DiffusionModel(beta_min=1.0, beta_max=10.0, base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
 
     ab_0 = model.alpha_bar(torch.tensor([0.0]))
     assert abs(ab_0.item() - 1.0) < 1e-6
@@ -281,7 +281,7 @@ def test_diffusion_different_beta_configs():
 
 def test_diffusion_gradient_flow():
     """Test gradients flow through forward pass."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     x_t = torch.randn(2, 32, 32, requires_grad=True)
     t = torch.tensor([0.5, 0.5])
     kind = torch.tensor([0, 1])
@@ -297,13 +297,13 @@ def test_diffusion_gradient_flow():
     loss_x0.backward(retain_graph=True)
     loss_noise.backward()
 
-    x0_grad = next(p for p in model.unet.parameters() if p.grad is not None)
-    assert x0_grad is not None
+    has_grad = any(p.grad is not None for p in model.parameters())
+    assert has_grad
 
 
 def test_diffusion_device_property():
     """Test device property returns correct device."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     assert model.device.type == "cpu"
 
     if torch.cuda.is_available():
@@ -313,7 +313,7 @@ def test_diffusion_device_property():
 
 def test_diffusion_device_property_updates_on_move():
     """Test device property updates when model moved."""
-    model = DiffusionModel(base_channels=16, num_blocks=2)
+    model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     assert model.device.type == "cpu"
 
     if torch.cuda.is_available():

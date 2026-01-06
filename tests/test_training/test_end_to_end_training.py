@@ -26,7 +26,10 @@ def training_yaml_config(sample_h5_file_magnitude: str) -> Generator[str, None, 
     """Create temporary YAML config file for training tests."""
     config_content = f"""model:
   base_channels: 16
-  num_blocks: 2
+  num_res_blocks: 2
+  channel_mult:
+    - 1
+    - 2
   cond_dim: 64
   beta_min: 0.1
   beta_max: 20.0
@@ -116,7 +119,8 @@ def fast_trainer():
 def small_model_kwargs():
     return {
         "base_channels": 16,
-        "num_blocks": 2,
+        "num_res_blocks": 2,
+        "channel_mult": (1, 2),
         "cond_dim": 64,
         "beta_min": 0.1,
         "beta_max": 20.0,

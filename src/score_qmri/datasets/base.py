@@ -74,6 +74,7 @@ class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
             "image": image,
             "mask": mask,
             "kind": torch.tensor(self.kind.value, dtype=torch.long),
+            "h5_path": self.h5_path,
         }
 
     def __del__(self) -> None:

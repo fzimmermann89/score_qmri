@@ -11,7 +11,8 @@ from score_qmri.training.lightning_module import DiffusionLightningModule
 def module():
     return DiffusionLightningModule(
         base_channels=16,
-        num_blocks=2,
+        num_res_blocks=2,
+        channel_mult=(1, 2),
         cond_dim=64,
         validation_size=32,
     )
@@ -50,7 +51,7 @@ def test_configure_optimizers(module):
 
 def test_hparams_saved(module):
     assert module.hparams.base_channels == 16
-    assert module.hparams.num_blocks == 2
+    assert module.hparams.num_res_blocks == 2
 
 
 def test_create_fixed_noise_for_all_kinds(module):
