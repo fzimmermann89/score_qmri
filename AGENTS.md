@@ -22,10 +22,11 @@ Posterior sampling for the inverse problem will be added in a future phase.
 
 ### VP-SDE Diffusion Model
 
-We use the Variance Preserving SDE framework (Song et al., ICLR 2021) with **continuous time** t ∈ [0, 1]:
+We use the Variance Preserving SDE framework (Song et al., ICLR 2021) with **continuous time** t ∈ [ε, 1] where ε = 10⁻⁵:
 - Forward SDE: `dx = -½β(t)x dt + √β(t) dw`
-- Linear noise schedule: `β(t) = β_min + t(β_max - β_min)`
+- Linear noise schedule: `β(t) = β_min + t(β_max - β_min)` with β_min = 0.1, β_max = 10.0
 - Score: `∇_x log p(x_t) = -ε / σ(t)`
+- The lower bound ε avoids numerical singularity at t = 0 where σ(t) → 0
 
 
 ### Dual-Head UNet Architecture
@@ -162,13 +163,15 @@ score-qmri-train fit --config config.yaml
 │       ├── models/
 │       │   ├── diffusion.py      # VP-SDE diffusion model
 │       │   ├── unet.py           # Dual-head UNet with FiLM conditioning
-│       │   └── conditioning.py   # Sinusoidal + kind embeddings
+│       │   ├── conditioning.py   # Sinusoidal + kind embeddings
+│       │   └── normalization.py  # RunningNormalizer (per-kind EMA stats)
 │       ├── sampling/
 │       │   ├── ddpm_sampler.py   # DDPM sampling
 │       │   └── ddim_sampler.py   # DDIM sampling (used for validation)
 │       └── training/
 │           ├── lightning_module.py   # LightningModule for training
-│           └── losses.py             # Noise MSE + SSIM/L1 losses
+│           ├── losses.py             # Noise MSE + SSIM/L1 losses
+│           └── ema.py                # EMA weight averaging
 ├── tests/                        # pytest tests (mirror main structure)
 └── pyproject.toml
 ```

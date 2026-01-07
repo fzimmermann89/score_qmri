@@ -195,7 +195,8 @@ score_qmri/
 ├── models/
 │   ├── diffusion.py      # VP-SDE diffusion model
 │   ├── unet.py           # Dual-head UNet
-│   └── conditioning.py   # Embeddings
+│   ├── conditioning.py   # Embeddings
+│   └── normalization.py  # Per-kind running statistics
 ├── datasets/
 │   ├── complex.py        # Complex MRI datasets
 │   ├── magnitude.py      # Magnitude datasets
@@ -203,7 +204,8 @@ score_qmri/
 │   └── kind.py           # DatasetKind enum
 ├── training/
 │   ├── lightning_module.py
-│   └── losses.py
+│   ├── losses.py
+│   └── ema.py            # EMA weight averaging
 ├── sampling/
 │   ├── ddpm_sampler.py
 │   └── ddim_sampler.py
