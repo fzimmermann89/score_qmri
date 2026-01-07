@@ -1,6 +1,7 @@
 """Per-dataset-kind running normalization with EMA."""
 
 import torch
+import torch.distributed as dist
 from torch import Tensor
 
 from score_qmri.datasets.kind import NUM_DATASET_KINDS
@@ -139,3 +140,29 @@ class RunningNormalizer(torch.nn.Module):
             result[idx] = x[idx] * std[None, :, None, None] + mean[None, :, None, None]
 
         return result
+
+    @torch.no_grad()
+    def sync_stats(self) -> None:
+        """Synchronize running statistics across all DDP ranks.
+
+        Averages mean/var buffers across ranks. Should be called periodically
+        during distributed training to keep statistics consistent.
+        """
+        if not dist.is_initialized():
+            return
+
+        world_size = dist.get_world_size()
+        if world_size == 1:
+            return
+
+        for k in range(self.num_kinds):
+            mean, var, n = self._get_buffers(k)
+
+            if n.item() == 0:
+                continue
+
+            dist.all_reduce(mean, op=dist.ReduceOp.SUM)
+            mean.div_(world_size)
+
+            dist.all_reduce(var, op=dist.ReduceOp.SUM)
+            var.div_(world_size)

@@ -135,7 +135,7 @@ class DiffusionLightningModule(LightningModule):
     def on_fit_start(self) -> None:
         self.ema = EMA[DiffusionModel](self.model, decay=self.hparams.ema_decay)
 
-        if not isinstance(self.logger, WandbLogger):
+        if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
             return
 
         import wandb
@@ -312,7 +312,7 @@ class DiffusionLightningModule(LightningModule):
         kind: Tensor,
         t: Tensor,
     ) -> None:
-        if not isinstance(self.logger, WandbLogger):
+        if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
             return
 
         import matplotlib.pyplot as plt
@@ -365,6 +365,9 @@ class DiffusionLightningModule(LightningModule):
         if self.ema is not None:
             self.ema.update(self.model)
 
+        if self.global_step > 0 and self.global_step % 100 == 0:
+            self.model.normalizer.sync_stats()
+
         if self.global_step > 0 and self.global_step % self.hparams.validation_interval == 0:
             self._log_samples()
 
@@ -409,7 +412,7 @@ class DiffusionLightningModule(LightningModule):
             sync_dist=True,
         )
 
-        if not isinstance(self.logger, WandbLogger):
+        if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
             return
 
         B = min(x0_raw.shape[0], 8)
@@ -445,7 +448,7 @@ class DiffusionLightningModule(LightningModule):
         plt.close(fig)
 
     def _log_samples(self) -> None:
-        if not isinstance(self.logger, WandbLogger):
+        if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
             return
 
         import wandb
@@ -479,7 +482,7 @@ class DiffusionLightningModule(LightningModule):
             sample_model.train()
 
     def _log_sampling_stats(self, kind_name: str, stats: SamplingStats) -> None:
-        if not isinstance(self.logger, WandbLogger):
+        if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
             return
 
         import matplotlib.pyplot as plt
