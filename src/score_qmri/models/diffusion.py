@@ -102,7 +102,7 @@ class DiffusionModel(torch.nn.Module):
 
     def sigma(self, t: Tensor) -> Tensor:
         """Noise standard deviation σ(t) = √(1 - ᾱ(t))."""
-        return (1.0 - self.alpha_bar(t)).sqrt()
+        return (1.0 - self.alpha_bar(t)).clamp(min=0.0).sqrt()
 
     def snr(self, t: Tensor) -> Tensor:
         """Signal-to-noise ratio SNR(t) = ᾱ(t) / (1 - ᾱ(t))."""
@@ -142,7 +142,7 @@ class DiffusionModel(torch.nn.Module):
         if noise is None:
             noise = torch.randn_like(x0)
         ab = self.alpha_bar(t).view(-1, 1, 1)
-        return ab.sqrt() * x0 + (1.0 - ab).sqrt() * noise
+        return ab.clamp(min=0.0).sqrt() * x0 + (1.0 - ab).clamp(min=0.0).sqrt() * noise
 
     def forward(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput:
         """Predict x₀ and noise from noisy input. Output format matches input."""
@@ -159,7 +159,7 @@ class DiffusionModel(torch.nn.Module):
     def predict_x0(self, x_t: Tensor, t: Tensor, noise: Tensor) -> Tensor:
         """Recover x₀ = (xₜ - σ(t)·ε) / √ᾱ(t)."""
         ab = self.alpha_bar(t).view(-1, 1, 1)
-        return (x_t - (1.0 - ab).sqrt() * noise) / ab.sqrt().clamp(min=1e-8)
+        return (x_t - (1.0 - ab).clamp(min=0.0).sqrt() * noise) / ab.clamp(min=0.0).sqrt().clamp(min=1e-8)
 
     def score(self, x_t: Tensor, t: Tensor, kind: Tensor) -> Tensor:
         """Compute score ∇ₓ log p(xₜ) = -ε / σ(t)."""

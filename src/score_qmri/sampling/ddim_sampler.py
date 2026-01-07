@@ -78,10 +78,10 @@ class DDIMSampler:
             for i in range(self.num_steps):
                 t = timesteps[i].expand(B)
                 t_prev = timesteps[i + 1].expand(B)
-                x = self._step(x, t, t_prev, kind, step_idx=i, stats=stats)
+                x, x0_pred = self._step(x, t, t_prev, kind, step_idx=i, stats=stats)
 
         self.last_stats = stats
-        return x
+        return x0_pred
 
     def _step(
         self,
@@ -91,7 +91,7 @@ class DDIMSampler:
         kind: Tensor,
         step_idx: int = 0,
         stats: SamplingStats | None = None,
-    ) -> Tensor:
+    ) -> tuple[Tensor, Tensor]:
         output = self.model(x, t, kind)
         x0_pred = self.model.predict_x0(x, t, output.noise)
         x0_pred = torch.complex(x0_pred.real.clamp(-6, 6), x0_pred.imag.clamp(-6, 6)) if x0_pred.is_complex() else x0_pred.clamp(-6, 6)
@@ -134,7 +134,7 @@ class DDIMSampler:
         if self.eta > 0 and t_prev[0] > 1e-8:
             x_prev = x_prev + sigma * torch.randn_like(x)
 
-        return x_prev
+        return x_prev, x0_pred
 
 
 def create_fixed_noise(image_shape: tuple[int, int], seed: int = 42) -> dict[int, Tensor]:
