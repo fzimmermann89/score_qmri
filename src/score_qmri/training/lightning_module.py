@@ -190,7 +190,8 @@ class DiffusionLightningModule(LightningModule):
             else x0_pre_clamp.clamp(-6, 6)
         )
 
-        t = torch.rand(x0.shape[0], device=self.device)
+        eps = 1e-5
+        t = torch.rand(x0.shape[0], device=self.device) * (1.0 - eps) + eps
         noise = torch.randn_like(x0)
         x_t = self.model.q_sample(x0, t, noise)
 
@@ -202,7 +203,11 @@ class DiffusionLightningModule(LightningModule):
 
         self.log("train/valid_samples", float(n_valid), sync_dist=True)
 
-        if n_valid == 0:
+        should_skip = torch.tensor(1.0 if n_valid == 0 else 0.0, device=self.device)
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(should_skip, op=torch.distributed.ReduceOp.MAX)
+
+        if should_skip > 0.5:
             self.log("train/skipped_step", 1.0, sync_dist=True)
             return None
 
@@ -221,7 +226,14 @@ class DiffusionLightningModule(LightningModule):
         x0_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
         total_loss = self.hparams.noise_weight * loss_noise + self.hparams.x0_weight * x0_loss
 
-        if not torch.isfinite(total_loss) or total_loss > 100.0:
+        loss_anomaly = torch.tensor(
+            1.0 if (not torch.isfinite(total_loss) or total_loss > 100.0) else 0.0,
+            device=self.device,
+        )
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(loss_anomaly, op=torch.distributed.ReduceOp.MAX)
+
+        if loss_anomaly > 0.5:
             self._log_debug_batch(x0_raw, output.x0, noise, output.noise, kind, t, loss_noise, loss_l1, loss_ssim, total_loss)
             self.log("train/skipped_step", 1.0, sync_dist=True)
             return None

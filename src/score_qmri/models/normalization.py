@@ -145,8 +145,9 @@ class RunningNormalizer(torch.nn.Module):
     def sync_stats(self) -> None:
         """Synchronize running statistics across all DDP ranks.
 
-        Averages mean/var buffers across ranks. Should be called periodically
-        during distributed training to keep statistics consistent.
+        All ranks must call this together to avoid deadlock. Uses count-weighted
+        averaging for correct mean/variance merging across ranks with different
+        sample counts.
         """
         if not dist.is_initialized():
             return
@@ -158,11 +159,16 @@ class RunningNormalizer(torch.nn.Module):
         for k in range(self.num_kinds):
             mean, var, n = self._get_buffers(k)
 
-            if n.item() == 0:
+            n_total = n.clone().float()
+            dist.all_reduce(n_total, op=dist.ReduceOp.SUM)
+
+            if n_total.item() == 0:
                 continue
 
-            dist.all_reduce(mean, op=dist.ReduceOp.SUM)
-            mean.div_(world_size)
+            weighted_mean = mean * n.float()
+            weighted_var = var * n.float()
+            dist.all_reduce(weighted_mean, op=dist.ReduceOp.SUM)
+            dist.all_reduce(weighted_var, op=dist.ReduceOp.SUM)
 
-            dist.all_reduce(var, op=dist.ReduceOp.SUM)
-            var.div_(world_size)
+            mean.copy_(weighted_mean / n_total)
+            var.copy_((weighted_var / n_total).clamp(min=self.eps))
