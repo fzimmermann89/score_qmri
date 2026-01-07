@@ -90,12 +90,30 @@ def noise_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tens
     return (diff_sq * mask.float()).sum() / mask.sum().clamp(min=1)
 
 
-def l1_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tensor:
+def l1_loss(
+    pred: Tensor,
+    target: Tensor,
+    mask: Tensor | None = None,
+    reduction: Literal["mean", "none"] = "mean",
+) -> Tensor:
     """L1 loss. Supports complex and real tensors."""
     diff = (pred - target).abs()
+    spatial_dims = (-2, -1)
+
     if mask is None:
-        return diff.mean()
-    return (diff * mask.float()).sum() / mask.sum().clamp(min=1)
+        loss = diff.mean(dim=spatial_dims)
+    else:
+        mask_f = mask.float()
+        if diff.ndim == 4 and mask_f.ndim == 3:
+            mask_f = mask_f.unsqueeze(1)
+        loss = (diff * mask_f).sum(dim=spatial_dims) / mask_f.sum(dim=spatial_dims).clamp(min=1)
+
+    if reduction == "mean":
+        return loss.mean()
+    elif reduction == "none":
+        return loss
+    else:
+        raise ValueError(f"Invalid reduction: {reduction}. Must be 'mean' or 'none'")
 
 
 def _ssim_loss_real(

@@ -162,16 +162,29 @@ class DiffusionLightningModule(LightningModule):
             )
 
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
-        grads = [p.grad.detach().flatten() for p in self.model.parameters() if p.grad is not None]
-        if not grads:
-            return
+        x0_grads, noise_grads, backbone_grads = [], [], []
 
-        all_grads = torch.cat(grads)
-        grad_norm = all_grads.norm()
-        grad_variance = all_grads.var()
+        for name, p in self.model.named_parameters():
+            if p.grad is None:
+                continue
+            grad = p.grad.detach().flatten()
+            if "x0_head" in name:
+                x0_grads.append(grad)
+            elif "noise_head" in name:
+                noise_grads.append(grad)
+            else:
+                backbone_grads.append(grad)
+
+        def norm(grads: list[Tensor]) -> Tensor:
+            return torch.cat(grads).norm() if grads else torch.tensor(0.0, device=self.device)
 
         self.log_dict(
-            {"gradients/norm": grad_norm, "gradients/variance": grad_variance},
+            {
+                "gradients/total_norm": norm(x0_grads + noise_grads + backbone_grads),
+                "gradients/x0_head_norm": norm(x0_grads),
+                "gradients/noise_head_norm": norm(noise_grads),
+                "gradients/backbone_norm": norm(backbone_grads),
+            },
             on_step=True,
             on_epoch=False,
             sync_dist=True,
@@ -219,9 +232,16 @@ class DiffusionLightningModule(LightningModule):
 
         weighted_mask = torch.where(mask_v, 1.0, self.hparams.mask_weight)
 
+        t_v = t[valid_samples]
+        signal_weight = self.model.alpha_bar(t_v)
+        self.log("train/x0_weight_mean", signal_weight.mean(), sync_dist=True)
+
         loss_noise = noise_loss(pred_noise_v, noise_v, weighted_mask)
-        loss_l1 = l1_loss(pred_x0_v, x0_v, weighted_mask)
-        loss_ssim = ssim_loss(pred_x0_v, x0_v, weighted_mask)
+        loss_l1 = l1_loss(pred_x0_v, x0_v, weighted_mask, reduction="none")
+        loss_ssim = ssim_loss(pred_x0_v, x0_v, weighted_mask, reduction="none").squeeze(-1)
+
+        loss_l1 = (loss_l1 * signal_weight).mean()
+        loss_ssim = (loss_ssim * signal_weight).mean()
 
         x0_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
         total_loss = self.hparams.noise_weight * loss_noise + self.hparams.x0_weight * x0_loss

@@ -18,7 +18,7 @@ class RunningNormalizer(torch.nn.Module):
         self,
         num_kinds: int = NUM_DATASET_KINDS,
         momentum: float = 0.001,
-        eps: float = 1e-6,
+        eps: float = 1e-5,
     ) -> None:
         """
         Parameters
@@ -66,12 +66,13 @@ class RunningNormalizer(torch.nn.Module):
             batch_mean = (x_k * m_k).sum(dim=(0, 2, 3)) / n_valid
             centered = x_k - batch_mean[None, :, None, None]
             batch_var = (centered.pow(2) * m_k).sum(dim=(0, 2, 3)) / n_valid
+            batch_var = batch_var.clamp(min=self.eps)
 
             mean, var, n = self._get_buffers(k_val)
 
             if n.item() == 0:
                 mean[:C].copy_(batch_mean)
-                var[:C].copy_(batch_var.clamp(min=self.eps))
+                var[:C].copy_(batch_var)
             else:
                 mean[:C].lerp_(batch_mean, self.momentum)
                 var[:C].lerp_(batch_var, self.momentum)
