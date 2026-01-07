@@ -71,8 +71,7 @@ class BaseDatasetConfig(ABC):
             self.schedule = ConstantSchedule()
 
     @abstractmethod
-    def create(self) -> MRIDataset:
-        ...
+    def create(self) -> MRIDataset: ...
 
 
 @dataclass(kw_only=True)
