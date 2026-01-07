@@ -27,9 +27,11 @@ class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
         h5_path: str,
         augmentation_config: AugmentationConfig | None = None,
         kind: DatasetKind = DatasetKind.COMPLEX_T1W_COILWISE,
+        scaling_factor: float = 1.0,
     ) -> None:
         self.h5_path = str(Path(h5_path).resolve())
         self.kind = kind
+        self.scaling_factor = scaling_factor
         self.augmentation = AugmentationPipeline(augmentation_config) if augmentation_config else None
         self._h5_file: h5py.File | None = None
 
@@ -66,6 +68,9 @@ class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
         image = self._load_slice(self._get_h5_file(), idx)
         # For complex: compare complex number to 0. For real: use small epsilon for float comparison.
         mask = image != 0 if image.is_complex() else image.abs() > 1e-6
+
+        if self.scaling_factor != 1.0:
+            image = image * self.scaling_factor
 
         if self.augmentation is not None:
             image, mask = self.augmentation(image, mask)

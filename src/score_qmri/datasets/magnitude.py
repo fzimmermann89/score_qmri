@@ -22,15 +22,6 @@ class MagnitudeImageDataset(FlatH5Dataset):
         h5_path: str,
         augmentation_config: AugmentationConfig | None = None,
         kind: DatasetKind = DatasetKind.T1W_MAGNITUDE,
+        scaling_factor: float = 1.0,
     ) -> None:
-        """
-        Parameters
-        ----------
-        h5_path
-            Path to H5 file with subject datasets at root.
-        augmentation_config
-            Augmentation configuration.
-        kind
-            DatasetKind for conditioning.
-        """
-        super().__init__(h5_path, augmentation_config, kind)
+        super().__init__(h5_path, augmentation_config, kind, scaling_factor)

@@ -7,8 +7,6 @@ Handles H5 files with flat subject datasets at root level:
 Applies scaling factor to normalize quantitative values (e.g., T1 in ms) to ~[0, 1].
 """
 
-from torch import Tensor
-
 from .config import AugmentationConfig
 from .flat_h5 import FlatH5Dataset
 from .kind import DatasetKind
@@ -27,25 +25,8 @@ class MappingDataset(FlatH5Dataset):
     def __init__(
         self,
         h5_path: str,
-        scaling_factor: float,
+        scaling_factor: float = 1.0,
         augmentation_config: AugmentationConfig | None = None,
         kind: DatasetKind = DatasetKind.T1MAP,
     ) -> None:
-        """
-        Parameters
-        ----------
-        h5_path
-            Path to H5 file with subject datasets at root.
-        scaling_factor
-            Factor to multiply values by (e.g., 1/3000 for T1 in ms).
-        augmentation_config
-            Augmentation configuration.
-        kind
-            DatasetKind for conditioning.
-        """
-        self.scaling_factor = scaling_factor
-        super().__init__(h5_path, augmentation_config, kind)
-
-    def _process_slice(self, tensor: Tensor) -> Tensor:
-        """Apply scaling factor to normalize values."""
-        return tensor * self.scaling_factor
+        super().__init__(h5_path, augmentation_config, kind, scaling_factor)

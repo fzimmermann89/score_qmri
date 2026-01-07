@@ -27,6 +27,7 @@ class FlatH5Dataset(BaseMRIDataset):
         h5_path: str,
         augmentation_config: AugmentationConfig | None = None,
         kind: DatasetKind = DatasetKind.T1W_MAGNITUDE,
+        scaling_factor: float = 1.0,
     ) -> None:
         """
         Parameters
@@ -37,10 +38,12 @@ class FlatH5Dataset(BaseMRIDataset):
             Augmentation configuration.
         kind
             DatasetKind for conditioning.
+        scaling_factor
+            Factor to multiply values by for normalization.
         """
         self._subject_keys: list[str] = []
         self._slice_index: list[tuple[str, int]] = []
-        super().__init__(h5_path, augmentation_config, kind)
+        super().__init__(h5_path, augmentation_config, kind, scaling_factor)
 
     def _count_slices_in_file(self, h5_file: h5py.File) -> int:
         """Count total slices across all subjects."""

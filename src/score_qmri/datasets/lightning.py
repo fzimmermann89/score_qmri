@@ -81,6 +81,7 @@ class ComplexDatasetConfig(BaseDatasetConfig):
     type: Literal["complex"] = "complex"
     mode: Literal["flat", "combined", "coilwise"] = "flat"
     kind: DatasetKind = DatasetKind.COMPLEX_T1W_COILWISE
+    scaling_factor: float = 1.0
 
     def create(self) -> ComplexImageDataset:
         return ComplexImageDataset(
@@ -88,6 +89,7 @@ class ComplexDatasetConfig(BaseDatasetConfig):
             mode=self.mode,
             kind=self.kind,
             augmentation_config=self.augmentation_config,
+            scaling_factor=self.scaling_factor,
         )
 
 
@@ -97,12 +99,14 @@ class MagnitudeDatasetConfig(BaseDatasetConfig):
 
     type: Literal["magnitude"] = "magnitude"
     kind: DatasetKind = DatasetKind.T1W_MAGNITUDE
+    scaling_factor: float = 1.0
 
     def create(self) -> MagnitudeImageDataset:
         return MagnitudeImageDataset(
             h5_path=self.h5_path,
             kind=self.kind,
             augmentation_config=self.augmentation_config,
+            scaling_factor=self.scaling_factor,
         )
 
 
@@ -223,7 +227,7 @@ class MRIDataModule(LightningDataModule):
 
             if isinstance(cfg, ComplexDatasetConfig):
                 summary[f"{prefix}/mode"] = cfg.mode
-            if isinstance(cfg, MappingDatasetConfig):
+            if hasattr(cfg, "scaling_factor") and cfg.scaling_factor != 1.0:
                 summary[f"{prefix}/scaling_factor"] = cfg.scaling_factor
 
             if cfg.augmentation_config is not None:

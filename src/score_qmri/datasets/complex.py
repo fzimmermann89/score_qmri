@@ -21,11 +21,12 @@ class ComplexImageDataset(BaseMRIDataset):
         mode: Literal["flat", "combined", "coilwise"] = "flat",
         augmentation_config: AugmentationConfig | None = None,
         kind: DatasetKind = DatasetKind.COMPLEX_T1W_COILWISE,
+        scaling_factor: float = 1.0,
     ):
         self.mode = mode
         self._subject_keys: list[str] = []
         self._slice_index: list[tuple[str, int, int]] = []
-        super().__init__(h5_path, augmentation_config, kind)
+        super().__init__(h5_path, augmentation_config, kind, scaling_factor)
 
     def _count_slices_in_file(self, h5_file: h5py.File) -> int:
         container: h5py.File | h5py.Group = h5_file
