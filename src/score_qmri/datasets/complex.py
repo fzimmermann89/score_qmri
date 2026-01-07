@@ -41,6 +41,9 @@ class ComplexImageDataset(BaseMRIDataset):
                     raise ValueError(f"'{self.mode}' must be a group")
                 self._subject_keys = list(container.keys())
 
+        if not self._subject_keys:
+            raise ValueError(f"No datasets found in {self.h5_path} for mode '{self.mode}'")
+
         self._slice_index = []
         for subject_key in self._subject_keys:
             data = container[subject_key]
