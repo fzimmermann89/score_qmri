@@ -54,12 +54,12 @@ data:
         augmentation_config:
           scale_range: [0.7, 0.9]
 
-      # - type: complex
-      #   h5_path: ./datasets/cc.h5
-      #   mode: coilwise
-      #   kind: COMPLEX_T1W_COILWISE
-      #   augmentation_config:
-      #     scale_range: [1.0, 1.2]
+      - type: complex
+        h5_path: ./datasets/cc.h5
+        mode: coilwise
+        kind: COMPLEX_T1W_COILWISE
+        augmentation_config:
+          scale_range: [1.0, 1.2]
 
       - type: complex
         h5_path: ./datasets/cc.h5
@@ -92,11 +92,16 @@ data:
         h5_path: ./datasets/ds000221_gre.h5
         mode: flat
         kind: M0_COMPLEX
+        scaling_factor: 7
+        schedule:
+          type: phase_out
+          steps: 50000
 
       - type: complex
         h5_path: ./datasets/delics_complexm0.h5
         mode: flat
         kind: M0_COMPLEX
+        scaling_factor: 3
 
       - type: magnitude
         h5_path: ./datasets/ds000221_mprage.h5
@@ -299,6 +304,7 @@ data:
       - type: mapping
         h5_path: ./datasets/ibc_relaxo_s0map_t2.h5
         kind: M0_MAGNITUDE
+        scaling_factor: 1.5
         schedule:
           type: phase_in
           steps: 50000
@@ -315,6 +321,7 @@ data:
       - type: mapping
         h5_path: ./datasets/ibc_relaxo_m0map.h5
         kind: M0_MAGNITUDE
+        scaling_factor: 1.5
         schedule:
           type: phase_in
           steps: 50000
@@ -322,7 +329,7 @@ data:
       - type: mapping
         h5_path: ./datasets/quiero_m0map.h5
         kind: M0_MAGNITUDE
-        scaling_factor: 0.00005
+        scaling_factor: 1
         schedule:
           type: phase_in
           steps: 50000
@@ -332,6 +339,7 @@ data:
       - type: mapping
         h5_path: ./datasets/mrf_nist_m0map.h5
         kind: M0_MAGNITUDE
+        scaling_factor: 8
         schedule:
           type: phase_in
           steps: 50000
@@ -341,6 +349,7 @@ data:
       - type: mapping
         h5_path: ./datasets/ibc_relaxo_s0map.h5
         kind: M0_MAGNITUDE
+        scaling_factor: 1.5
         schedule:
           type: phase_in
           steps: 50000
