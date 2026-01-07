@@ -9,7 +9,7 @@ This project addresses the inverse problem in quantitative MRI:
 ```
 k-data = F(signal(θ)) + Noise
 ```
-with signal an non-linear signal mdoel and F an undersampled multicoil Fouriertransformation
+with signal a non-linear signal model and F an undersampled multicoil Fourier transformation
 where we aim to recover tissue parameters θ (T1, T2, etc.) from undersampled k-space measurements using a learned image prior /
 a learned score ∇p(θ).
 
@@ -132,10 +132,10 @@ pip install -e ".[dev]"
 source .venv/bin/activate
 
 # Train with config file
-python train.py fit --config configs/train.yaml
+score-qmri-train fit --config config.yaml
 
 # Or with CLI arguments
-python train.py fit \
+score-qmri-train fit \
     --model.base_channels 64 \
     --model.num_blocks 4 \
     --data.batch_size 16 \
