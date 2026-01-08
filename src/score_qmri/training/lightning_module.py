@@ -348,7 +348,6 @@ class DiffusionLightningModule(LightningModule):
             return
 
         import matplotlib.pyplot as plt
-
         import wandb
 
         B = min(x0_gt.shape[0], 8)
@@ -418,7 +417,6 @@ class DiffusionLightningModule(LightningModule):
     ) -> None:
         """Log debug info for batches with anomalous loss values."""
         import matplotlib.pyplot as plt
-
         import wandb
 
         kind_names = [DatasetKind(k.item()).name for k in kind]
@@ -518,7 +516,6 @@ class DiffusionLightningModule(LightningModule):
             return
 
         import matplotlib.pyplot as plt
-
         import wandb
 
         n = len(stats.intermediates)

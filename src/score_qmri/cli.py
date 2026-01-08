@@ -7,9 +7,11 @@ from pathlib import Path
 
 import jsonargparse
 import torch
+from jsonargparse import lazy_instance
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, ModelSummary
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
+from pytorch_lightning.strategies import DDPStrategy
 
 from score_qmri.datasets.lightning import MRIDataModule
 from score_qmri.training.lightning_module import DiffusionLightningModule
@@ -17,6 +19,13 @@ from score_qmri.training.lightning_module import DiffusionLightningModule
 if not sys.warnoptions:
     warnings.simplefilter("ignore")
     os.environ["PYTHONWARNINGS"] = "ignore"
+
+torch.set_float32_matmul_precision("high")
+torch._inductor.config.worker_start_method = "fork"
+torch._inductor.config.compile_threads = 4
+torch._dynamo.config.capture_scalar_outputs = True
+torch._functorch.config.activation_memory_budget = 0.6
+ddp_strategy = DDPStrategy(find_unused_parameters=True)
 
 
 class WandbSaveConfigCallback(SaveConfigCallback):
@@ -186,6 +195,7 @@ def main() -> None:
             "log_every_n_steps": 10,
             "gradient_clip_val": 1.0,
             "enable_checkpointing": True,
+            "strategy": lazy_instance(DDPStrategy, find_unused_parameters=True),
             "enable_progress_bar": True,
         },
     )

@@ -37,11 +37,7 @@ class DDPMSampler:
     def _step(self, x: Tensor, t: Tensor, t_prev: Tensor, kind: Tensor) -> Tensor:
         output = self.model(x, t, kind)
         x0_pred = self.model.predict_x0(x, t, output.noise)
-        x0_pred = (
-            torch.complex(x0_pred.real.clamp(-6, 6), x0_pred.imag.clamp(-6, 6))
-            if x0_pred.is_complex()
-            else x0_pred.clamp(-6, 6)
-        )
+        x0_pred = torch.complex(x0_pred.real.clamp(-6, 6), x0_pred.imag.clamp(-6, 6)) if x0_pred.is_complex() else x0_pred.clamp(-6, 6)
 
         if t_prev[0] <= 0.0:
             return x0_pred
