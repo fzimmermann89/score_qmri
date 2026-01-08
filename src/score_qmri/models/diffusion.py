@@ -75,16 +75,13 @@ class DiffusionModel(torch.nn.Module):
         self.beta_max = beta_max
 
         self.cond_mlp = ConditioningMLP(cond_dim=cond_dim, num_kinds=num_kinds)
-        self.unet = torch.compile(
-            UNet(
+        self.unet = UNet(
                 in_channels=2,
                 base_channels=base_channels,
                 num_res_blocks=num_res_blocks,
                 channel_mult=channel_mult,
                 cond_dim=cond_dim,
-            ),
-            mode="reduce-overhead",
-        )
+            )
         self.normalizer = RunningNormalizer(num_kinds=num_kinds)
 
     @property

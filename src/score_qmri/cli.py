@@ -11,7 +11,7 @@ from jsonargparse import lazy_instance
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, ModelSummary
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
-from pytorch_lightning.strategies import DDPStrategy
+from lightning.pytorch.strategies import DDPStrategy
 
 from score_qmri.datasets.lightning import MRIDataModule
 from score_qmri.training.lightning_module import DiffusionLightningModule
