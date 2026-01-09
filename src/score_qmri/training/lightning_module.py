@@ -154,9 +154,9 @@ class DiffusionLightningModule(LightningModule):
 
         self.logger.log_hyperparams(hparams)
 
-        if wandb.run is not None:  # type: ignore[attr-defined]
+        if wandb.run is not None:
             project_root = Path(__file__).parent.parent
-            wandb.run.log_code(  # type: ignore[attr-defined]
+            wandb.run.log_code(
                 str(project_root),
                 include_fn=lambda p: p.endswith(".py") or p.endswith(".yaml") or p.endswith(".toml"),
             )
@@ -384,7 +384,7 @@ class DiffusionLightningModule(LightningModule):
         fig.suptitle(f"Training batch @ step {self.global_step}", fontsize=10)
         fig.tight_layout()
 
-        self.logger.experiment.log({"train/batch_visualization": wandb.Image(fig)})  # type: ignore[attr-defined]
+        self.logger.experiment.log({"train/batch_visualization": wandb.Image(fig)})
         plt.close(fig)
 
     def on_train_batch_end(
@@ -474,7 +474,7 @@ class DiffusionLightningModule(LightningModule):
         fig.suptitle(f"Step {self.global_step} | Loss: {loss_str}", fontsize=10)
         fig.tight_layout()
 
-        self.logger.experiment.log({"debug/high_loss_batch": wandb.Image(fig)})  # type: ignore[attr-defined]
+        self.logger.experiment.log({"debug/high_loss_batch": wandb.Image(fig)})
         plt.close(fig)
 
     def _log_samples(self) -> None:
@@ -502,7 +502,7 @@ class DiffusionLightningModule(LightningModule):
                 sample_denorm: Tensor = sample_model.denormalize(sample, kind_tensor)
 
                 img_np = sample_denorm[0].abs().cpu().numpy() if sample_denorm.is_complex() else sample_denorm[0].cpu().numpy()
-                image = wandb.Image(img_np, caption=f"step_{self.global_step}")  # type: ignore[attr-defined]
+                image = wandb.Image(img_np, caption=f"step_{self.global_step}")
                 self.logger.experiment.log({f"samples/{kind_enum.name}": image, "global_step": self.global_step})
 
                 if collect and sampler.last_stats is not None:
@@ -545,7 +545,7 @@ class DiffusionLightningModule(LightningModule):
         fig.suptitle(f"Sampling progression: {kind_name} @ step {self.global_step}", fontsize=10)
         fig.tight_layout()
 
-        self.logger.experiment.log({"samples/progression": wandb.Image(fig), "global_step": self.global_step})  # type: ignore[attr-defined]
+        self.logger.experiment.log({"samples/progression": wandb.Image(fig), "global_step": self.global_step})
         plt.close(fig)
 
         table_data = [
@@ -554,7 +554,7 @@ class DiffusionLightningModule(LightningModule):
                 stats.steps, stats.t_values, stats.alpha_bar, stats.x0_mean, stats.x0_std, stats.noise_std, strict=True
             )
         ]
-        table = wandb.Table(  # type: ignore[attr-defined]
+        table = wandb.Table(
             columns=["step", "t", "alpha_bar", "x0_mean", "x0_std", "noise_std"],
             data=table_data,
         )
