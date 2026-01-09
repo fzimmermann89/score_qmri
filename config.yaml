@@ -309,15 +309,3 @@ trainer:
   max_steps: 500000
   gradient_clip_val: 0.5
   precision: 16-mixed
-  logger:
-    class_path: lightning.pytorch.loggers.WandbLogger
-    init_args:
-      project: score_qmri
-      log_model: false
-  callbacks:
-    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
-      init_args:
-        save_top_k: 3
-        monitor: train/loss
-        mode: min
-        save_last: true
