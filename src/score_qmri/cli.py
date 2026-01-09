@@ -7,11 +7,9 @@ from pathlib import Path
 
 import jsonargparse
 import torch
-from jsonargparse import lazy_instance
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, ModelSummary
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
-from lightning.pytorch.strategies import DDPStrategy
 
 from score_qmri.datasets.lightning import MRIDataModule
 from score_qmri.training.lightning_module import DiffusionLightningModule
@@ -21,17 +19,17 @@ if not sys.warnoptions:
     os.environ["PYTHONWARNINGS"] = "ignore"
 
 torch.set_float32_matmul_precision("high")
-torch._inductor.config.worker_start_method = "fork"
-torch._inductor.config.compile_threads = 4
-torch._dynamo.config.capture_scalar_outputs = True
-torch._functorch.config.activation_memory_budget = 0.6
-ddp_strategy = DDPStrategy(find_unused_parameters=True)
 
 
 class WandbSaveConfigCallback(SaveConfigCallback):
     """Save config and log as W&B artifact."""
 
-    def save_config(self, trainer: "lightning.Trainer", pl_module: "lightning.LightningModule", stage: str) -> None:  # type: ignore[name-defined]  # noqa: F821
+    def save_config(
+        self,
+        trainer: "lightning.Trainer",  # type: ignore[name-defined]  # noqa: F821
+        pl_module: "lightning.LightningModule",  # type: ignore[name-defined]  # noqa: F821
+        stage: str,
+    ) -> None:
         """Save config to file and log as W&B artifact."""
         super().save_config(trainer, pl_module, stage)
 
@@ -43,11 +41,11 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         config_path = Path(trainer.log_dir) / self.config_filename if trainer.log_dir else None
         if config_path is None or not config_path.exists():
             return
-        if wandb.run is None:  # type: ignore[attr-defined]
+        if wandb.run is None:
             return
-        artifact = wandb.Artifact(f"config-{wandb.run.id}", type="config")  # type: ignore[attr-defined]
+        artifact = wandb.Artifact(f"config-{wandb.run.id}", type="config")
         artifact.add_file(str(config_path))
-        wandb.run.log_artifact(artifact)  # type: ignore[attr-defined]
+        wandb.run.log_artifact(artifact)
 
 
 class DiffusionLightningCLI(LightningCLI):
@@ -55,51 +53,41 @@ class DiffusionLightningCLI(LightningCLI):
 
     def add_arguments_to_parser(self, parser: jsonargparse.ArgumentParser) -> None:
         """Add custom arguments to the parser."""
-        parser.add_argument("--job_name", type=str | None, default=None, help="Unique job name for resumption. Random ID if omitted.")
+        parser.add_argument(
+            "--job_name",
+            type=str | None,
+            default=None,
+            help="Unique job name for resumption. WandB auto-generates if omitted.",
+        )
         parser.add_argument("--wandb_project", type=str, default="mri-diffusion", help="WandB project name.")
         parser.add_argument("--wandb_entity", type=str | None, default=None, help="WandB entity name.")
-        parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Path for checkpoints.")
+        parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Base path for checkpoints.")
         parser.set_defaults({"data": {"class_path": "score_qmri.datasets.lightning.MRIDataModule"}})
 
     def before_instantiate_classes(self) -> None:
         """Set up logger and callbacks before instantiating classes."""
-        if self.subcommand is None or self.subcommand != "fit":
+        if self.subcommand != "fit":
             return
 
         config = getattr(self.config, self.subcommand)
 
-        if config.job_name is None:
-            import secrets
-
-            config.job_name = secrets.token_hex(4)
-
-        run_id = config.job_name
-        run_dir = Path(config.checkpoint_dir) / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        config.trainer.default_root_dir = str(run_dir)
-
         logger = WandbLogger(
-            id=run_id,
-            resume="allow",
+            id=config.job_name,
+            name=config.job_name,
+            resume="allow" if config.job_name else None,
             project=config.wandb_project,
             entity=config.wandb_entity,
             log_model=False,
             save_dir="logs",
         )
-
         config.trainer.logger = logger
 
-        last_ckpt_path = run_dir / "last.ckpt"
-        if last_ckpt_path.exists() and last_ckpt_path.is_file() and not config.ckpt_path:
-            print(f"Resuming from checkpoint: {last_ckpt_path}")
-            config.ckpt_path = str(last_ckpt_path)
-
         checkpoint_callback = ModelCheckpoint(
+            dirpath=config.checkpoint_dir,
             monitor="train/loss",
             mode="min",
             save_top_k=3,
             save_last=True,
-            dirpath=str(run_dir),
             filename="{step:06d}-{train_loss:.4f}",
             every_n_train_steps=1000,
         )
@@ -111,41 +99,79 @@ class DiffusionLightningCLI(LightningCLI):
         ]
 
     def after_instantiate_classes(self) -> None:
-        """Log flattened hyperparams to W&B after instantiation."""
-        if self.subcommand is None:
+        """Set checkpoint directory using WandB's run name (synced across ranks)."""
+        if self.subcommand != "fit":
             return
 
+        config = getattr(self.config, self.subcommand)
+        logger = self.trainer.logger
+
+        if not isinstance(logger, WandbLogger):
+            return
+
+        run_name = self._get_synced_run_name(config.job_name)
+        run_dir = Path(config.checkpoint_dir) / run_name
+
+        if self.trainer.global_rank == 0:
+            run_dir.mkdir(parents=True, exist_ok=True)
+        self.trainer.strategy.barrier()
+
+        self.trainer.default_root_dir = str(run_dir)  # type: ignore[misc]
+        for callback in self.trainer.callbacks:  # type: ignore[attr-defined]
+            if isinstance(callback, ModelCheckpoint):
+                callback.dirpath = str(run_dir)
+                break
+
+        last_ckpt = run_dir / "last.ckpt"
+        if last_ckpt.exists() and not config.ckpt_path:
+            print(f"Auto-resuming from: {last_ckpt}")
+            self.trainer.ckpt_path = str(last_ckpt)
+
+        self._log_hyperparams(config, run_name)
+
+    def _get_synced_run_name(self, job_name: str | None) -> str:
+        """Get WandB run name, synchronized across all DDP ranks."""
+        if job_name:
+            return job_name
+
+        if self.trainer.global_rank == 0:
+            logger = self.trainer.logger
+            assert isinstance(logger, WandbLogger)
+            run_name: str | None = logger.experiment.name
+        else:
+            run_name = None
+
+        synced_name = self.trainer.strategy.broadcast(run_name, src=0)
+        assert isinstance(synced_name, str)
+        return synced_name
+
+    def _log_hyperparams(self, config: jsonargparse.Namespace, run_name: str) -> None:
+        """Log hyperparams to WandB. Safe to call from all ranks."""
         logger = self.trainer.logger
         if not isinstance(logger, WandbLogger):
             return
 
-        config = getattr(self.config, self.subcommand)
         experiment = logger.experiment
-
-        # Log full CLI config
         if hasattr(experiment, "config"):
             update = getattr(experiment.config, "update", None)
             if callable(update):
                 update({"cli_config": config.as_dict()})
 
-        # Log flattened datamodule config
         if isinstance(self.datamodule, MRIDataModule):
-            data_summary = self.datamodule.get_config_summary()
-            logger.log_hyperparams(data_summary)
+            logger.log_hyperparams(self.datamodule.get_config_summary())
 
-        # Log trainer config
-        trainer_hparams = {
-            "trainer/max_steps": self.trainer.max_steps,
-            "trainer/max_epochs": self.trainer.max_epochs,
-            "trainer/precision": str(self.trainer.precision),
-            "trainer/gradient_clip_val": self.trainer.gradient_clip_val,
-            "trainer/accumulate_grad_batches": self.trainer.accumulate_grad_batches,
-            "trainer/num_devices": self.trainer.num_devices,
-            "trainer/accelerator": str(self.trainer.accelerator),
-        }
-        logger.log_hyperparams(trainer_hparams)
+        logger.log_hyperparams(
+            {
+                "trainer/max_steps": self.trainer.max_steps,
+                "trainer/max_epochs": self.trainer.max_epochs,
+                "trainer/precision": str(self.trainer.precision),
+                "trainer/gradient_clip_val": self.trainer.gradient_clip_val,
+                "trainer/accumulate_grad_batches": self.trainer.accumulate_grad_batches,
+                "trainer/num_devices": self.trainer.num_devices,
+                "trainer/accelerator": str(self.trainer.accelerator),
+            }
+        )
 
-        # Log system info
         system_info = {
             "system/cuda_available": torch.cuda.is_available(),
             "system/cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
@@ -157,15 +183,16 @@ class DiffusionLightningCLI(LightningCLI):
                 system_info[f"system/gpu_{i}_name"] = torch.cuda.get_device_name(i)
                 mem = torch.cuda.get_device_properties(i).total_memory / 1e9
                 system_info[f"system/gpu_{i}_memory_gb"] = round(mem, 2)
-
         logger.log_hyperparams(system_info)
 
-        experiment_hparams = {
-            "experiment/job_name": config.job_name,
-            "experiment/wandb_project": config.wandb_project,
-            "experiment/checkpoint_dir": config.checkpoint_dir,
-        }
-        logger.log_hyperparams(experiment_hparams)
+        logger.log_hyperparams(
+            {
+                "experiment/job_name": config.job_name,
+                "experiment/run_name": run_name,
+                "experiment/wandb_project": config.wandb_project,
+                "experiment/checkpoint_dir": config.checkpoint_dir,
+            }
+        )
 
     @staticmethod
     def subcommands() -> dict[str, set[str]]:
@@ -175,8 +202,6 @@ class DiffusionLightningCLI(LightningCLI):
 
 def main() -> None:
     """Run the training CLI."""
-    torch.set_float32_matmul_precision("high")
-
     if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1].startswith("-")):
         sys.argv.insert(1, "fit")
 
@@ -195,7 +220,7 @@ def main() -> None:
             "log_every_n_steps": 10,
             "gradient_clip_val": 1.0,
             "enable_checkpointing": True,
-            "strategy": lazy_instance(DDPStrategy, find_unused_parameters=True),
+            "strategy": "ddp_find_unused_parameters_true",
             "enable_progress_bar": True,
         },
     )
