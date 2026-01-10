@@ -66,6 +66,15 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         pl_module: "lightning.LightningModule",  # type: ignore[name-defined]  # noqa: F821
     ) -> None:
         _dbg("WandbSaveConfigCallback.on_train_start: ENTER")
+
+        # trainer.log_dir triggers a broadcast internally, so ALL ranks must call it
+        log_dir = trainer.log_dir
+        _dbg(f"  log_dir={log_dir} (all ranks called)")
+
+        # Barrier to ensure all ranks sync before rank 0 does W&B work
+        trainer.strategy.barrier("on_train_start_log_dir")
+        _dbg("  barrier passed")
+
         _dbg(f"  is_global_zero={trainer.is_global_zero}")
 
         if not trainer.is_global_zero:
@@ -78,7 +87,7 @@ class WandbSaveConfigCallback(SaveConfigCallback):
 
         import wandb
 
-        config_path = Path(trainer.log_dir) / self.config_filename if trainer.log_dir else None
+        config_path = Path(log_dir) / self.config_filename if log_dir else None
         _dbg(f"  config_path={config_path}")
 
         if config_path is None or not config_path.exists():
