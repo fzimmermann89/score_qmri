@@ -17,6 +17,7 @@ dependencies = [
     "pytorch-msssim>=1.0.0",
     "einops>=0.7.0",
     "kornia>=0.7.0",
+    "matplotlib>3.9",
 ]
 
 [project.optional-dependencies]
