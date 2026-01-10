@@ -1,6 +1,7 @@
 """Custom BatchSampler with step-based probability scheduling."""
 
 from collections.abc import Callable, Iterator
+from typing import Any
 
 import torch
 from torch.utils.data import BatchSampler, ConcatDataset
@@ -10,6 +11,10 @@ class ScheduledBatchSampler(BatchSampler):
     """Batch sampler with size-proportional, schedule-modulated sampling.
 
     Final weight = schedule_fn(step) * dataset_length
+
+    Note: The `sampler` parameter exists for Lightning DDP compatibility.
+    Lightning's dataloader wrapper checks for this parameter; we handle
+    distribution ourselves via rank-based seeding.
     """
 
     def __init__(
@@ -20,6 +25,7 @@ class ScheduledBatchSampler(BatchSampler):
         batch_size: int,
         base_seed: int = 42,
         rank: int = 0,
+        sampler: "torch.utils.data.Sampler | None" = None,
     ):
         n_ds = len(dataset.datasets)
         if not (len(dataset_lengths) == len(schedules) == n_ds):
@@ -29,6 +35,7 @@ class ScheduledBatchSampler(BatchSampler):
         self.schedules = schedules
         self.batch_size = batch_size
         self.step = 0
+        self.sampler: Any = sampler
 
         self.rng = torch.Generator()
         self.rng.manual_seed(base_seed + rank)

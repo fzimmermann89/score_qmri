@@ -2,7 +2,6 @@
 
 import os
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -153,17 +152,19 @@ def _pad_or_crop_centered(tensor: torch.Tensor, target_h: int, target_w: int) ->
     return torch.nn.functional.pad(tensor, (pad_left, pad_right, pad_top, pad_bot))
 
 
-def _make_collate_fn(sample_size: tuple[int, int]) -> Callable[[list[dict[str, Any]]], dict[str, Any]]:
-    target_h, target_w = sample_size
+class _CollateWithResize:
+    """Picklable collate function for DataLoader with spawn multiprocessing."""
 
-    def collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
-        images = torch.stack([_pad_or_crop_centered(s["image"], target_h, target_w) for s in batch])
-        masks = torch.stack([_pad_or_crop_centered(s["mask"].float(), target_h, target_w).bool() for s in batch])
+    def __init__(self, target_h: int, target_w: int) -> None:
+        self.target_h = target_h
+        self.target_w = target_w
+
+    def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
+        images = torch.stack([_pad_or_crop_centered(s["image"], self.target_h, self.target_w) for s in batch])
+        masks = torch.stack([_pad_or_crop_centered(s["mask"].float(), self.target_h, self.target_w).bool() for s in batch])
         kinds = torch.stack([s["kind"] for s in batch])
         h5_paths = [s["h5_path"] for s in batch]
         return {"image": images, "mask": masks, "kind": kinds, "h5_path": h5_paths}
-
-    return collate_fn
 
 
 class MRIDataModule(LightningDataModule):
@@ -176,7 +177,7 @@ class MRIDataModule(LightningDataModule):
         dataset_configs: list[DatasetConfig] | None = None,
         batch_size: int = 8,
         sample_size: tuple[int, int] = (256, 256),
-        num_workers: int = 4,
+        num_workers: int = 8,
         base_seed: int = 42,
     ) -> None:
         """
@@ -273,10 +274,11 @@ class MRIDataModule(LightningDataModule):
         return DataLoader(
             self.concat_ds,
             batch_sampler=batch_sampler,
-            collate_fn=_make_collate_fn(self.sample_size),
+            collate_fn=_CollateWithResize(*self.sample_size),
             num_workers=self.num_workers,
             persistent_workers=self.num_workers > 0,
             pin_memory=torch.cuda.is_available(),
             prefetch_factor=4 if self.num_workers > 0 else None,
             multiprocessing_context="spawn" if self.num_workers > 0 else None,
+            timeout=120,
         )
