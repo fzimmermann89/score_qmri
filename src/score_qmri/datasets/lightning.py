@@ -1,7 +1,6 @@
 """PyTorch Lightning DataModule for MRI datasets."""
 
 import os
-import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,22 +17,21 @@ from .kind import DatasetKind
 from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
 
-_START_TIME = time.time()
-
 
 def _dm_dbg(msg: str) -> None:
-    elapsed = time.time() - _START_TIME
+    import datetime
+    ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", 0)))
-    world = int(os.environ.get("WORLD_SIZE", 1))
     pid = os.getpid()
-    print(f"[DATA][r{rank}/{world}][pid={pid}][{elapsed:8.3f}s] {msg}", flush=True)
+    print(f"[{ts}][DATA][r{rank}][pid={pid}] {msg}", flush=True)
 
 
 def _worker_init_fn(worker_id: int) -> None:
+    import datetime
+    ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", 0)))
-    world = int(os.environ.get("WORLD_SIZE", 1))
     pid = os.getpid()
-    print(f"[WORKER][r{rank}/{world}][pid={pid}] worker_id={worker_id} init", flush=True)
+    print(f"[{ts}][WORKER][r{rank}][pid={pid}] worker_id={worker_id} init", flush=True)
 
 MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset
 

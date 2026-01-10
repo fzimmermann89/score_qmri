@@ -1,0 +1,51 @@
+"""Quantitative mapping dataset for MRI data.
+
+Handles H5 files with flat subject datasets at root level:
+- <subject_001>: (N_z, H, W) float32
+- <subject_002>: (N_z, H, W) float32
+
+Applies scaling factor to normalize quantitative values (e.g., T1 in ms) to ~[0, 1].
+"""
+
+from torch import Tensor
+
+from .config import AugmentationConfig
+from .flat_h5 import FlatH5Dataset
+from .kind import DatasetKind
+
+
+class MappingDataset(FlatH5Dataset):
+    """Dataset for quantitative MRI parameter maps (T1, T2, etc.).
+
+    Expects H5 files with subject datasets at root level (no groups).
+    Each dataset has shape (N_z, H, W) float32.
+
+    Applies a scaling factor to normalize values to ~[0, 1] range.
+    For example, T1 values in ms (0-3000) can be scaled by 1/3000.
+    """
+
+    def __init__(
+        self,
+        h5_path: str,
+        scaling_factor: float,
+        augmentation_config: AugmentationConfig | None = None,
+        kind: DatasetKind = DatasetKind.T1MAP,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        h5_path
+            Path to H5 file with subject datasets at root.
+        scaling_factor
+            Factor to multiply values by (e.g., 1/3000 for T1 in ms).
+        augmentation_config
+            Augmentation configuration.
+        kind
+            DatasetKind for conditioning.
+        """
+        self.scaling_factor = scaling_factor
+        super().__init__(h5_path, augmentation_config, kind)
+
+    def _process_slice(self, tensor: Tensor) -> Tensor:
+        """Apply scaling factor to normalize values."""
+        return tensor * self.scaling_factor

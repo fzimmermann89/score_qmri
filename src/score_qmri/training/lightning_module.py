@@ -1,7 +1,6 @@
 """PyTorch Lightning module for diffusion training."""
 
 import os
-import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,13 +18,12 @@ from score_qmri.sampling.ddim_sampler import DDIMSampler, SamplingStats, create_
 from score_qmri.training.ema import EMA
 from score_qmri.training.losses import l1_loss, noise_loss, ssim_loss
 
-_START = time.time()
-
 
 def _lm_dbg(msg: str) -> None:
-    elapsed = time.time() - _START
+    import datetime
+    ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", 0)))
-    print(f"[LM][r{rank}][{elapsed:8.3f}s] {msg}", flush=True)
+    print(f"[{ts}][LM][r{rank}] {msg}", flush=True)
 
 VALIDATION_KINDS: tuple[DatasetKind, ...] = (
     DatasetKind.T1W_MAGNITUDE,

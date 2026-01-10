@@ -2,7 +2,6 @@
 
 import os
 import sys
-import time
 import warnings
 from pathlib import Path
 
@@ -21,20 +20,17 @@ if not sys.warnoptions:
 
 torch.set_float32_matmul_precision("high")
 
-_START_TIME = time.time()
-
 
 def _dbg(msg: str) -> None:
+    import datetime
     import torch.distributed as dist
 
-    elapsed = time.time() - _START_TIME
+    ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     if dist.is_initialized():
         rank = dist.get_rank()
-        world = dist.get_world_size()
     else:
         rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", 0)))
-        world = int(os.environ.get("WORLD_SIZE", 1))
-    print(f"[DDP][r{rank}/{world}][{elapsed:8.3f}s] {msg}", flush=True)
+    print(f"[{ts}][DDP][r{rank}] {msg}", flush=True)
 
 
 class WandbSaveConfigCallback(SaveConfigCallback):
