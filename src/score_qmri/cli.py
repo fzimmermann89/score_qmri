@@ -167,7 +167,7 @@ class DiffusionLightningCLI(LightningCLI):
         if hasattr(experiment, "config"):
             update = getattr(experiment.config, "update", None)
             if callable(update):
-                update({"cli_config": config.as_dict()})
+                update({"cli_config": config.as_dict()}, allow_val_change=True)
 
         if isinstance(self.datamodule, MRIDataModule):
             logger.log_hyperparams(self.datamodule.get_config_summary())
