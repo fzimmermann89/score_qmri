@@ -232,7 +232,7 @@ def main() -> None:
             "log_every_n_steps": 10,
             "gradient_clip_val": 1.0,
             "enable_checkpointing": True,
-            "strategy": "ddp_find_unused_parameters_true",
+            "strategy": "ddp",
             "enable_progress_bar": True,
         },
     )
