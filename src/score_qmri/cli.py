@@ -116,7 +116,6 @@ class DiffusionLightningCLI(LightningCLI):
             run_dir.mkdir(parents=True, exist_ok=True)
         self.trainer.strategy.barrier()
 
-        self.trainer.default_root_dir = str(run_dir)  # type: ignore[misc]
         for callback in self.trainer.callbacks:  # type: ignore[attr-defined]
             if isinstance(callback, ModelCheckpoint):
                 callback.dirpath = str(run_dir)
