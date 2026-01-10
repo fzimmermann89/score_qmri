@@ -302,7 +302,6 @@ data:
 
     batch_size: 64
     sample_size: [256, 256]
-    num_workers: 64
     base_seed: 42
 
 trainer:

@@ -82,12 +82,30 @@ def _sliding_window(
     return x.as_strided(size=out_shape, stride=out_stride)
 
 
-def noise_loss(pred: Tensor, target: Tensor, mask: Tensor | None = None) -> Tensor:
+def noise_loss(
+    pred: Tensor,
+    target: Tensor,
+    mask: Tensor | None = None,
+    reduction: Literal["mean", "none"] = "mean",
+) -> Tensor:
     """MSE loss on noise prediction. Supports complex and real tensors."""
     diff_sq = (pred - target).abs().square()
+    spatial_dims = tuple(range(1, diff_sq.ndim))
+
     if mask is None:
-        return diff_sq.mean()
-    return (diff_sq * mask.float()).sum() / mask.sum().clamp(min=1)
+        loss = diff_sq.mean(dim=spatial_dims)
+    else:
+        mask_f = mask.float()
+        if diff_sq.ndim == 4 and mask_f.ndim == 3:
+            mask_f = mask_f.unsqueeze(1)
+        loss = (diff_sq * mask_f).sum(dim=spatial_dims) / mask_f.sum(dim=spatial_dims).clamp(min=1)
+
+    if reduction == "mean":
+        return loss.mean()
+    elif reduction == "none":
+        return loss
+    else:
+        raise ValueError(f"Invalid reduction: {reduction}. Must be 'mean' or 'none'")
 
 
 def l1_loss(

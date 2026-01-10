@@ -30,15 +30,28 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         pl_module: "lightning.LightningModule",  # type: ignore[name-defined]  # noqa: F821
         stage: str,
     ) -> None:
-        """Save config to file and log as W&B artifact."""
+        """Save config to file."""
         super().save_config(trainer, pl_module, stage)
 
+    def on_train_start(
+        self,
+        trainer: "lightning.Trainer",  # type: ignore[name-defined]  # noqa: F821
+        pl_module: "lightning.LightningModule",  # type: ignore[name-defined]  # noqa: F821
+    ) -> None:
+        """Log config as W&B artifact after training starts (DDP-safe)."""
         if not isinstance(trainer.logger, WandbLogger):
+            return
+
+        # All ranks must call log_dir (triggers internal broadcast)
+        log_dir = trainer.log_dir
+        trainer.strategy.barrier("on_train_start_log_dir")
+
+        if not trainer.is_global_zero:
             return
 
         import wandb
 
-        config_path = Path(trainer.log_dir) / self.config_filename if trainer.log_dir else None
+        config_path = Path(log_dir) / self.config_filename if log_dir else None
         if config_path is None or not config_path.exists():
             return
         if wandb.run is None:
@@ -114,7 +127,7 @@ class DiffusionLightningCLI(LightningCLI):
 
         if self.trainer.global_rank == 0:
             run_dir.mkdir(parents=True, exist_ok=True)
-        self.trainer.strategy.barrier()
+        self.trainer.strategy.barrier("after_instantiate_mkdir")
 
         for callback in self.trainer.callbacks:  # type: ignore[attr-defined]
             if isinstance(callback, ModelCheckpoint):
