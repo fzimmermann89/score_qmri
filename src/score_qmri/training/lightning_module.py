@@ -25,6 +25,8 @@ VALIDATION_KINDS: tuple[DatasetKind, ...] = (
     DatasetKind.M0_MAGNITUDE,
 )
 
+LOSS_ANOMALY_THRESHOLD = 100.0
+
 
 @dataclass
 class DiffusionHparams:
@@ -162,6 +164,9 @@ class DiffusionLightningModule(LightningModule):
             )
 
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
+        if self.global_step % 100 != 0:
+            return
+
         x0_grads, noise_grads, backbone_grads = [], [], []
 
         for name, p in self.model.named_parameters():
@@ -187,16 +192,15 @@ class DiffusionLightningModule(LightningModule):
             },
             on_step=True,
             on_epoch=False,
-            sync_dist=True,
+            rank_zero_only=True,
         )
 
-    def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor | None:
+    def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:
         x0_raw = batch["image"]
         mask = batch["mask"]
         kind = batch["kind"]
 
         x0_pre_clamp = self.model.normalize(x0_raw, kind, mask)
-        self._log_normalization_stats(x0_raw, x0_pre_clamp, mask, kind)
         x0 = (
             torch.complex(x0_pre_clamp.real.clamp(-6, 6), x0_pre_clamp.imag.clamp(-6, 6))
             if x0_pre_clamp.is_complex()
@@ -214,15 +218,9 @@ class DiffusionLightningModule(LightningModule):
         valid_samples = valid_counts >= 1000
         n_valid = int(valid_samples.sum().item())
 
-        self.log("train/valid_samples", float(n_valid), sync_dist=True)
-
-        should_skip = torch.tensor(1.0 if n_valid == 0 else 0.0, device=self.device)
-        if torch.distributed.is_initialized():
-            torch.distributed.all_reduce(should_skip, op=torch.distributed.ReduceOp.MAX)
-
-        if should_skip > 0.5:
-            self.log("train/skipped_step", 1.0, sync_dist=True)
-            return None
+        if n_valid == 0:
+            print(f"[Rank {self.global_rank}] Skipping step {self.global_step}: no valid samples")
+            return (output.x0.sum() + output.noise.sum()).nan_to_num() * 0.0
 
         x0_v = x0[valid_samples]
         noise_v = noise[valid_samples]
@@ -234,7 +232,6 @@ class DiffusionLightningModule(LightningModule):
 
         t_v = t[valid_samples]
         signal_weight = self.model.alpha_bar(t_v)
-        self.log("train/x0_weight_mean", signal_weight.mean(), sync_dist=True)
 
         loss_noise = noise_loss(pred_noise_v, noise_v, weighted_mask)
         loss_l1 = l1_loss(pred_x0_v, x0_v, weighted_mask, reduction="none")
@@ -246,27 +243,20 @@ class DiffusionLightningModule(LightningModule):
         x0_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
         total_loss = self.hparams.noise_weight * loss_noise + self.hparams.x0_weight * x0_loss
 
-        loss_anomaly = torch.tensor(
-            1.0 if (not torch.isfinite(total_loss) or total_loss > 100.0) else 0.0,
-            device=self.device,
-        )
-        if torch.distributed.is_initialized():
-            torch.distributed.all_reduce(loss_anomaly, op=torch.distributed.ReduceOp.MAX)
+        if not torch.isfinite(total_loss) or total_loss > LOSS_ANOMALY_THRESHOLD:
+            loss_val = total_loss.item() if torch.isfinite(total_loss) else float("nan")
+            print(f"[Rank {self.global_rank}] Skipping step {self.global_step}: loss={loss_val:.2f}")
+            return (output.x0.sum() + output.noise.sum()).nan_to_num() * 0.0
 
-        if loss_anomaly > 0.5:
-            self._log_debug_batch(x0_raw, output.x0, noise, output.noise, kind, t, loss_noise, loss_l1, loss_ssim, total_loss)
-            self.log("train/skipped_step", 1.0, sync_dist=True)
-            return None
-
+        self.log("train/loss", total_loss, prog_bar=True, sync_dist=True)
         self.log_dict(
             {
-                "train/loss": total_loss,
                 "train/noise_mse": loss_noise,
                 "train/x0_l1": loss_l1,
                 "train/x0_ssim": 1.0 - loss_ssim,
             },
             prog_bar=True,
-            sync_dist=True,
+            rank_zero_only=True,
         )
 
         if self.global_step > 0 and self.global_step % 1000 == 0:
@@ -277,61 +267,6 @@ class DiffusionLightningModule(LightningModule):
             self._log_training_batch(x0_v, x_t_v, noise_v, pred_noise_v, x0_tweedie_v, pred_x0_v, kind_v, t_v)
 
         return total_loss
-
-    def _log_normalization_stats(self, x0_raw: Tensor, x0_norm: Tensor, mask: Tensor, kind: Tensor) -> None:
-        mask_f = mask.float()
-
-        if x0_raw.is_complex():
-            raw_for_stats = torch.stack([x0_raw.real, x0_raw.imag], dim=1)
-            norm_for_stats = torch.stack([x0_norm.real, x0_norm.imag], dim=1)
-            mask_expanded = mask_f.unsqueeze(1).expand_as(raw_for_stats)
-        else:
-            raw_for_stats = x0_raw.unsqueeze(1) if x0_raw.ndim == 3 else x0_raw
-            norm_for_stats = x0_norm.unsqueeze(1) if x0_norm.ndim == 3 else x0_norm
-            mask_expanded = mask_f.unsqueeze(1) if mask_f.ndim == 3 else mask_f
-
-        n_valid_expanded = mask_expanded.sum().clamp(min=1)
-
-        masked_raw = raw_for_stats * mask_expanded
-        masked_norm = norm_for_stats * mask_expanded
-
-        raw_mean = masked_raw.sum() / n_valid_expanded
-        raw_var = ((masked_raw - raw_mean * mask_expanded).pow(2) * mask_expanded).sum() / n_valid_expanded
-
-        norm_mean = masked_norm.sum() / n_valid_expanded
-        norm_var = ((masked_norm - norm_mean * mask_expanded).pow(2) * mask_expanded).sum() / n_valid_expanded
-
-        x_raw_masked = raw_for_stats[mask_expanded.bool()] if mask_expanded.any() else raw_for_stats.flatten()
-        x_norm_masked = norm_for_stats[mask_expanded.bool()] if mask_expanded.any() else norm_for_stats.flatten()
-
-        normalizer_means = []
-        normalizer_vars = []
-        for k in kind.unique():
-            mean_buf, var_buf, n_buf = self.model.normalizer._get_buffers(k.item())
-            if n_buf.item() > 0:
-                normalizer_means.append(mean_buf[:2].abs().mean())
-                normalizer_vars.append(var_buf[:2].mean())
-
-        avg_normalizer_mean = torch.stack(normalizer_means).mean() if normalizer_means else torch.tensor(0.0)
-        avg_normalizer_var = torch.stack(normalizer_vars).mean() if normalizer_vars else torch.tensor(1.0)
-
-        self.log_dict(
-            {
-                "norm/raw_mean": raw_mean,
-                "norm/raw_var": raw_var,
-                "norm/raw_min": x_raw_masked.min(),
-                "norm/raw_max": x_raw_masked.max(),
-                "norm/post_mean": norm_mean,
-                "norm/post_var": norm_var,
-                "norm/post_min": x_norm_masked.min(),
-                "norm/post_max": x_norm_masked.max(),
-                "norm/normalizer_mean": avg_normalizer_mean,
-                "norm/normalizer_var": avg_normalizer_var,
-            },
-            on_step=True,
-            on_epoch=False,
-            sync_dist=True,
-        )
 
     def _log_training_batch(
         self,
@@ -402,81 +337,6 @@ class DiffusionLightningModule(LightningModule):
         if self.global_step > 0 and self.global_step % self.hparams.validation_interval == 0:
             self._log_samples()
 
-    def _log_debug_batch(
-        self,
-        x0_raw: Tensor,
-        x0_pred: Tensor,
-        noise: Tensor,
-        noise_pred: Tensor,
-        kind: Tensor,
-        t: Tensor,
-        loss_noise: Tensor,
-        loss_l1: Tensor,
-        loss_ssim: Tensor,
-        total_loss: Tensor,
-    ) -> None:
-        """Log debug info for batches with anomalous loss values."""
-        import matplotlib.pyplot as plt
-        import wandb
-
-        kind_names = [DatasetKind(k.item()).name for k in kind]
-        self.log_dict(
-            {
-                "debug/total_loss": total_loss.detach() if torch.isfinite(total_loss) else 999.0,
-                "debug/noise_loss": loss_noise.detach() if torch.isfinite(loss_noise) else 999.0,
-                "debug/l1_loss": loss_l1.detach() if torch.isfinite(loss_l1) else 999.0,
-                "debug/ssim_loss": loss_ssim.detach() if torch.isfinite(loss_ssim) else 999.0,
-                "debug/t_mean": t.mean(),
-                "debug/t_min": t.min(),
-                "debug/t_max": t.max(),
-                "debug/x0_raw_min": x0_raw.abs().min() if x0_raw.is_complex() else x0_raw.min(),
-                "debug/x0_raw_max": x0_raw.abs().max() if x0_raw.is_complex() else x0_raw.max(),
-                "debug/x0_raw_std": x0_raw.abs().std() if x0_raw.is_complex() else x0_raw.std(),
-                "debug/x0_pred_min": x0_pred.abs().min() if x0_pred.is_complex() else x0_pred.min(),
-                "debug/x0_pred_max": x0_pred.abs().max() if x0_pred.is_complex() else x0_pred.max(),
-                "debug/x0_pred_has_nan": x0_pred.isnan().any().float(),
-                "debug/x0_pred_has_inf": x0_pred.isinf().any().float(),
-                "debug/noise_pred_has_nan": noise_pred.isnan().any().float(),
-                "debug/noise_pred_has_inf": noise_pred.isinf().any().float(),
-            },
-            sync_dist=True,
-        )
-
-        if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
-            return
-
-        B = min(x0_raw.shape[0], 8)
-        fig, axes = plt.subplots(4, B, figsize=(2.5 * B, 10), squeeze=False)
-
-        for i in range(B):
-            gt = x0_raw[i].abs().cpu().numpy() if x0_raw.is_complex() else x0_raw[i].cpu().numpy()
-            pred = x0_pred[i].abs().detach().cpu().numpy() if x0_pred.is_complex() else x0_pred[i].detach().cpu().numpy()
-            noise_gt = noise[i].abs().cpu().numpy() if noise.is_complex() else noise[i].cpu().numpy()
-            noise_p = noise_pred[i].abs().detach().cpu().numpy() if noise_pred.is_complex() else noise_pred[i].detach().cpu().numpy()
-
-            axes[0, i].imshow(gt, cmap="gray")
-            axes[0, i].set_title(f"GT\n{kind_names[i]}\nt={t[i].item():.3f}", fontsize=8)
-            axes[0, i].axis("off")
-
-            axes[1, i].imshow(pred, cmap="gray")
-            axes[1, i].set_title("x0 pred", fontsize=8)
-            axes[1, i].axis("off")
-
-            axes[2, i].imshow(noise_gt, cmap="gray")
-            axes[2, i].set_title("noise GT", fontsize=8)
-            axes[2, i].axis("off")
-
-            axes[3, i].imshow(noise_p, cmap="gray")
-            axes[3, i].set_title("noise pred", fontsize=8)
-            axes[3, i].axis("off")
-
-        loss_str = f"{total_loss.item():.2f}" if torch.isfinite(total_loss) else "NaN/Inf"
-        fig.suptitle(f"Step {self.global_step} | Loss: {loss_str}", fontsize=10)
-        fig.tight_layout()
-
-        self.logger.experiment.log({"debug/high_loss_batch": wandb.Image(fig)})
-        plt.close(fig)
-
     def _log_samples(self) -> None:
         if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
             return
@@ -493,10 +353,10 @@ class DiffusionLightningModule(LightningModule):
         sampler = DDIMSampler(sample_model, num_steps=self.hparams.validation_steps)
 
         with torch.no_grad():
-            for kind_idx, kind_enum in enumerate(VALIDATION_KINDS):
+            for kind_enum in VALIDATION_KINDS:
                 k = int(kind_enum)
                 kind_tensor = torch.tensor([k], device=self.device)
-                collect = kind_idx == 0
+                collect = kind_enum == DatasetKind.T1W_MAGNITUDE
 
                 sample = sampler.sample((1, size, size), kind_tensor, self._fixed_noise[k], collect_stats=collect)
                 sample_denorm: Tensor = sample_model.denormalize(sample, kind_tensor)
