@@ -10,6 +10,10 @@ class ScheduledBatchSampler(BatchSampler):
     """Batch sampler with size-proportional, schedule-modulated sampling.
 
     Final weight = schedule_fn(step) * dataset_length
+
+    DDP handling: This sampler is already rank-aware via the `rank` parameter
+    which seeds each rank's RNG differently. The `sampler` parameter exists
+    for Lightning compatibility but is ignored.
     """
 
     def __init__(
@@ -20,7 +24,12 @@ class ScheduledBatchSampler(BatchSampler):
         batch_size: int,
         base_seed: int = 42,
         rank: int = 0,
+        sampler: "torch.utils.data.Sampler | None" = None,
     ):
+        # sampler is accepted for Lightning DDP compatibility but ignored
+        # We handle rank-aware sampling internally via base_seed + rank
+        self.sampler = sampler
+
         n_ds = len(dataset.datasets)
         if not (len(dataset_lengths) == len(schedules) == n_ds):
             raise ValueError("Length mismatch between datasets and config lists")
@@ -29,6 +38,7 @@ class ScheduledBatchSampler(BatchSampler):
         self.schedules = schedules
         self.batch_size = batch_size
         self.step = 0
+        self.rank = rank
 
         self.rng = torch.Generator()
         self.rng.manual_seed(base_seed + rank)
