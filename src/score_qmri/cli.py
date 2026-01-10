@@ -13,6 +13,7 @@ from lightning.pytorch.loggers import WandbLogger
 
 from score_qmri.datasets.lightning import MRIDataModule
 from score_qmri.training.lightning_module import DiffusionLightningModule
+from score_qmri.utils.config import normalize_config
 
 if not sys.warnoptions:
     warnings.simplefilter("ignore")
@@ -167,7 +168,10 @@ class DiffusionLightningCLI(LightningCLI):
         if hasattr(experiment, "config"):
             update = getattr(experiment.config, "update", None)
             if callable(update):
-                update({"cli_config": config.as_dict()}, allow_val_change=True)
+                # Normalize config to ensure stability across runs (e.g. object addresses, int vs float)
+                # We do NOT use allow_val_change=True, so W&B will error if the effective config changes.
+                normalized_config = normalize_config(config.as_dict())
+                update({"cli_config": normalized_config})
 
         if isinstance(self.datamodule, MRIDataModule):
             logger.log_hyperparams(self.datamodule.get_config_summary())
