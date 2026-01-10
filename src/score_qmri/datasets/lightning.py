@@ -1,6 +1,7 @@
 """PyTorch Lightning DataModule for MRI datasets."""
 
 import os
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,6 +17,23 @@ from .config import AugmentationConfig
 from .kind import DatasetKind
 from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
+
+_START_TIME = time.time()
+
+
+def _dm_dbg(msg: str) -> None:
+    elapsed = time.time() - _START_TIME
+    rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", 0)))
+    world = int(os.environ.get("WORLD_SIZE", 1))
+    pid = os.getpid()
+    print(f"[DATA][r{rank}/{world}][pid={pid}][{elapsed:8.3f}s] {msg}", flush=True)
+
+
+def _worker_init_fn(worker_id: int) -> None:
+    rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", 0)))
+    world = int(os.environ.get("WORLD_SIZE", 1))
+    pid = os.getpid()
+    print(f"[WORKER][r{rank}/{world}][pid={pid}] worker_id={worker_id} init", flush=True)
 
 MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset
 
@@ -249,18 +267,24 @@ class MRIDataModule(LightningDataModule):
         return summary
 
     def setup(self, stage: str) -> None:
+        _dm_dbg(f"setup: ENTER stage={stage}")
         if stage == "fit" or stage is None:
             if not self.dataset_configs:
                 raise ValueError("No datasets configured.")
+            _dm_dbg(f"setup: creating {len(self.dataset_configs)} datasets")
             datasets = [cfg.create() for cfg in self.dataset_configs]
             self.concat_ds = ConcatDataset(datasets)
             self.dataset_lengths = [len(ds) for ds in datasets]
+            _dm_dbg(f"setup: total slices={sum(self.dataset_lengths)}")
+        _dm_dbg("setup: EXIT")
 
     def train_dataloader(self) -> DataLoader:
+        _dm_dbg("train_dataloader: ENTER")
         if self.concat_ds is None or self.dataset_lengths is None:
             raise RuntimeError("Datasets not initialized.")
 
         rank = self.trainer.global_rank if self.trainer is not None else int(os.environ.get("LOCAL_RANK", 0))
+        _dm_dbg(f"train_dataloader: rank={rank}, batch_size={self.batch_size}, num_workers={self.num_workers}")
 
         batch_sampler = ScheduledBatchSampler(
             self.concat_ds,
@@ -270,8 +294,9 @@ class MRIDataModule(LightningDataModule):
             base_seed=self.base_seed,
             rank=rank,
         )
+        _dm_dbg("train_dataloader: batch_sampler created")
 
-        return DataLoader(
+        dl = DataLoader(
             self.concat_ds,
             batch_sampler=batch_sampler,
             collate_fn=_CollateWithResize(*self.sample_size),
@@ -280,4 +305,8 @@ class MRIDataModule(LightningDataModule):
             pin_memory=torch.cuda.is_available(),
             prefetch_factor=4 if self.num_workers > 0 else None,
             multiprocessing_context="spawn" if self.num_workers > 0 else None,
+            worker_init_fn=_worker_init_fn,
+            timeout=120,
         )
+        _dm_dbg("train_dataloader: DataLoader created, EXIT")
+        return dl

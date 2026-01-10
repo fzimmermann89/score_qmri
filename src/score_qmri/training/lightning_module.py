@@ -1,5 +1,7 @@
 """PyTorch Lightning module for diffusion training."""
 
+import os
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +18,14 @@ from score_qmri.models.diffusion import DiffusionModel
 from score_qmri.sampling.ddim_sampler import DDIMSampler, SamplingStats, create_fixed_noise
 from score_qmri.training.ema import EMA
 from score_qmri.training.losses import l1_loss, noise_loss, ssim_loss
+
+_START = time.time()
+
+
+def _lm_dbg(msg: str) -> None:
+    elapsed = time.time() - _START
+    rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", 0)))
+    print(f"[LM][r{rank}][{elapsed:8.3f}s] {msg}", flush=True)
 
 VALIDATION_KINDS: tuple[DatasetKind, ...] = (
     DatasetKind.T1W_MAGNITUDE,
@@ -133,9 +143,11 @@ class DiffusionLightningModule(LightningModule):
         self.ema: EMA[DiffusionModel] | None = None
 
     def on_fit_start(self) -> None:
+        _lm_dbg("on_fit_start: ENTER")
         self.ema = EMA[DiffusionModel](self.model, decay=self.hparams.ema_decay)
 
         if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
+            _lm_dbg("on_fit_start: EXIT (not logging)")
             return
 
         import wandb
@@ -160,6 +172,7 @@ class DiffusionLightningModule(LightningModule):
                 str(project_root),
                 include_fn=lambda p: p.endswith(".py") or p.endswith(".yaml") or p.endswith(".toml"),
             )
+        _lm_dbg("on_fit_start: EXIT")
 
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
         x0_grads, noise_grads, backbone_grads = [], [], []
@@ -191,6 +204,8 @@ class DiffusionLightningModule(LightningModule):
         )
 
     def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor | None:
+        if batch_idx < 3:
+            _lm_dbg(f"training_step: batch_idx={batch_idx} ENTER")
         x0_raw = batch["image"]
         mask = batch["mask"]
         kind = batch["kind"]
