@@ -48,6 +48,7 @@ class DiffusionHparams:
     validation_size: int
     validation_steps: int
     validation_interval: int
+    log_batch_interval: int
     warmup_steps: int
     ema_decay: float
 
@@ -75,6 +76,7 @@ class DiffusionLightningModule(LightningModule):
         validation_size: int = 128,
         validation_steps: int = 250,
         validation_interval: int = 1000,
+        log_batch_interval: int = 200,
         warmup_steps: int = 2000,
         ema_decay: float = 0.9999,
     ) -> None:
@@ -113,6 +115,8 @@ class DiffusionLightningModule(LightningModule):
             DDIM sampling steps for validation.
         validation_interval
             Steps between validation samples.
+        log_batch_interval
+            Steps between training batch visualizations.
         warmup_steps
             Number of warmup steps for linear LR warmup.
         ema_decay
@@ -259,7 +263,7 @@ class DiffusionLightningModule(LightningModule):
             rank_zero_only=True,
         )
 
-        if self.global_step > 0 and self.global_step % 1000 == 0:
+        if self.global_step > 0 and self.global_step % self.hparams.log_batch_interval == 0:
             t_v = t[valid_samples]
             x_t_v = x_t[valid_samples]
             kind_v = kind[valid_samples]
