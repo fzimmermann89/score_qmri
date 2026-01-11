@@ -10,6 +10,7 @@ The model predicts both:
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 from torch import Tensor
@@ -170,3 +171,16 @@ class DiffusionModel(torch.nn.Module):
         """Forward pass."""
         ret: DiffusionOutput = super().__call__(x_t, t, kind)
         return ret
+
+    def load_checkpoint(self, checkpoint_path: Path | str) -> None:
+        """Load weights from checkpoint, preferring EMA shadow weights if available."""
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+        if "ema" in checkpoint:
+            self.load_state_dict(checkpoint["ema"]["shadow"])
+        else:
+            state_dict = checkpoint["state_dict"]
+            model_state = {
+                k.removeprefix("model."): v for k, v in state_dict.items() if k.startswith("model.")
+            }
+            self.load_state_dict(model_state)

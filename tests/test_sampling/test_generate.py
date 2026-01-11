@@ -5,7 +5,8 @@ import torch
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling.generate import generate_samples, load_ema_weights, plot_samples_grid
+from score_qmri.sampling.generate import generate_samples
+from score_qmri.utils.plot import plot_samples_grid
 
 
 @pytest.fixture
@@ -143,8 +144,8 @@ class TestPlotSamplesGrid:
         assert output.exists()
 
 
-class TestLoadEmaWeights:
-    """Tests for load_ema_weights."""
+class TestLoadCheckpoint:
+    """Tests for DiffusionModel.load_checkpoint."""
 
     def test_loads_ema_weights(self, tmp_path, small_model: DiffusionModel) -> None:
         ckpt_path = tmp_path / "test.ckpt"
@@ -158,7 +159,7 @@ class TestLoadEmaWeights:
             cond_dim=32,
         )
 
-        load_ema_weights(fresh_model, ckpt_path)
+        fresh_model.load_checkpoint(ckpt_path)
 
         for (n1, p1), (_n2, p2) in zip(
             small_model.named_parameters(),
@@ -179,7 +180,7 @@ class TestLoadEmaWeights:
             cond_dim=32,
         )
 
-        load_ema_weights(fresh_model, ckpt_path)
+        fresh_model.load_checkpoint(ckpt_path)
 
         for (n1, p1), (_n2, p2) in zip(
             small_model.named_parameters(),

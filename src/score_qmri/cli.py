@@ -106,11 +106,8 @@ class DiffusionTrainer(Trainer):
             Device for generation ("cuda" or "cpu").
         """
         from score_qmri.datasets.kind import DatasetKind
-        from score_qmri.sampling.generate import (
-            generate_samples,
-            load_ema_weights,
-            plot_samples_grid,
-        )
+        from score_qmri.sampling.generate import generate_samples
+        from score_qmri.utils.plot import plot_samples_grid
 
         try:
             kind_enum = DatasetKind[kind.upper()]
@@ -119,7 +116,7 @@ class DiffusionTrainer(Trainer):
             raise SystemExit(f"Unknown kind: {kind!r}. Valid: {valid}") from None
 
         diffusion_model = model.model
-        load_ema_weights(diffusion_model, Path(ckpt_path))
+        diffusion_model.load_checkpoint(Path(ckpt_path))
 
         diffusion_model.to(device)
         diffusion_model.eval()
