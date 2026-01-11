@@ -104,27 +104,6 @@ class TestGenerateSamples:
         assert samples.shape == (1, 32, 32)
 
 
-class TestDatasetKindFromString:
-    """Tests for DatasetKind.from_string."""
-
-    def test_exact_match(self) -> None:
-        assert DatasetKind.from_string("T1W_MAGNITUDE") == DatasetKind.T1W_MAGNITUDE
-        assert DatasetKind.from_string("T1MAP") == DatasetKind.T1MAP
-
-    def test_case_insensitive(self) -> None:
-        assert DatasetKind.from_string("t1w_magnitude") == DatasetKind.T1W_MAGNITUDE
-        assert DatasetKind.from_string("T1map") == DatasetKind.T1MAP
-        assert DatasetKind.from_string("complex_t1w_coilwise") == DatasetKind.COMPLEX_T1W_COILWISE
-
-    def test_invalid_name_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown DatasetKind"):
-            DatasetKind.from_string("INVALID_KIND")
-
-    def test_error_message_includes_valid_kinds(self) -> None:
-        with pytest.raises(ValueError, match="Valid:"):
-            DatasetKind.from_string("not_a_kind")
-
-
 class TestPlotSamplesGrid:
     """Tests for plot_samples_grid."""
 

@@ -26,30 +26,7 @@ class DatasetKind(IntEnum):
         """Check if this kind represents complex-valued data."""
         return self in _COMPLEX_KINDS
 
-    @classmethod
-    def from_string(cls, name: str) -> "DatasetKind":
-        """Get DatasetKind from string name (case-insensitive).
 
-        Parameters
-        ----------
-        name
-            Name of the dataset kind (e.g., "T1W_MAGNITUDE", "t1map").
-
-        Returns
-        -------
-        Matching DatasetKind enum value.
-
-        Raises
-        ------
-        ValueError
-            If name doesn't match any known kind.
-        """
-        name_upper = name.upper()
-        for kind in cls:
-            if kind.name == name_upper:
-                return kind
-        valid = ", ".join(k.name for k in cls)
-        raise ValueError(f"Unknown DatasetKind: {name!r}. Valid: {valid}")
 
 
 _COMPLEX_KINDS = frozenset(

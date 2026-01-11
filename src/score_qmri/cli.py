@@ -112,7 +112,11 @@ class DiffusionTrainer(Trainer):
             plot_samples_grid,
         )
 
-        kind_enum = DatasetKind.from_string(kind)
+        try:
+            kind_enum = DatasetKind[kind.upper()]
+        except KeyError:
+            valid = ", ".join(k.name for k in DatasetKind)
+            raise SystemExit(f"Unknown kind: {kind!r}. Valid: {valid}") from None
 
         diffusion_model = model.model
         load_ema_weights(diffusion_model, Path(ckpt_path))
