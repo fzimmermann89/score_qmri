@@ -63,9 +63,9 @@ def _normalize_value(value: Any) -> Any:
         return normalize_config(value)
     if isinstance(value, list):
         return [_normalize_value(v) for v in value]
-    
+
     # Normalize numbers: treat 1 and 1.0 as 1.0
     if isinstance(value, int) and not isinstance(value, bool):
         return float(value)
-    
+
     return value
