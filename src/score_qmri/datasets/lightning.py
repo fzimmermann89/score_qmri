@@ -138,6 +138,7 @@ class MRIDataModuleHparams:
     sample_size: tuple[int, int]
     num_workers: int
     base_seed: int
+    kind_normalization: float
 
 
 def _pad_or_crop_centered(tensor: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
@@ -179,6 +180,7 @@ class MRIDataModule(LightningDataModule):
         sample_size: tuple[int, int] = (256, 256),
         num_workers: int = 8,
         base_seed: int = 42,
+        kind_normalization: float = 0.5,
     ) -> None:
         """
         Parameters
@@ -193,6 +195,8 @@ class MRIDataModule(LightningDataModule):
             DataLoader workers.
         base_seed
             Random seed for reproducibility.
+        kind_normalization
+            Interpolation between size-proportional (0.0) and kind-uniform (1.0) sampling.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -202,6 +206,7 @@ class MRIDataModule(LightningDataModule):
         self.sample_size = sample_size
         self.num_workers = num_workers
         self.base_seed = base_seed
+        self.kind_normalization = kind_normalization
 
         self.concat_ds: ConcatDataset | None = None
         self.dataset_lengths: list[int] | None = None
@@ -212,6 +217,7 @@ class MRIDataModule(LightningDataModule):
             "data/sample_size": list(self.sample_size),
             "data/num_workers": self.num_workers,
             "data/base_seed": self.base_seed,
+            "data/kind_normalization": self.kind_normalization,
             "data/num_datasets": len(self.dataset_configs),
         }
 
@@ -265,8 +271,10 @@ class MRIDataModule(LightningDataModule):
         batch_sampler = ScheduledBatchSampler(
             self.concat_ds,
             self.dataset_lengths,
-            [cfg.schedule for cfg in self.dataset_configs],  # type: ignore[misc]
+            dataset_kinds=[cfg.kind for cfg in self.dataset_configs],
+            schedules=[cfg.schedule for cfg in self.dataset_configs],  # type: ignore[misc]
             batch_size=self.batch_size,
+            kind_normalization=self.kind_normalization,
             base_seed=self.base_seed,
             rank=rank,
         )
