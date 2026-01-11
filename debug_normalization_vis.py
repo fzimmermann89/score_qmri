@@ -169,6 +169,16 @@ def to_display(x: torch.Tensor, is_complex: bool) -> torch.Tensor:
     return x[:, 0]
 
 
+def center_crop(x: torch.Tensor, target_h: int = 256, target_w: int = 256) -> torch.Tensor:
+    """Center crop a tensor to target size. Works with (H, W) or (B, H, W) or (B, C, H, W)."""
+    h, w = x.shape[-2], x.shape[-1]
+    start_h = max(0, (h - target_h) // 2)
+    start_w = max(0, (w - target_w) // 2)
+    end_h = start_h + min(target_h, h)
+    end_w = start_w + min(target_w, w)
+    return x[..., start_h:end_h, start_w:end_w]
+
+
 # %% Argument parsing (if run as script)
 if __name__ == "__main__":
     try:
@@ -258,6 +268,9 @@ for idx in vis_idxs:
     img: torch.Tensor = sample["image"].unsqueeze(0)  # type: ignore[union-attr]
     mask_t: torch.Tensor = sample["mask"].unsqueeze(0)  # type: ignore[union-attr]
     kind_t: torch.Tensor = sample["kind"].unsqueeze(0)  # type: ignore[union-attr]
+
+    img = center_crop(img)
+    mask_t = center_crop(mask_t)
 
     is_complex = img.is_complex()
     x_in = prepare_input(img)
