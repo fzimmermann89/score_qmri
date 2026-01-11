@@ -5,52 +5,87 @@ import torch
 from torch.utils.data import ConcatDataset, TensorDataset
 
 from score_qmri.datasets.batch_sampler import ScheduledBatchSampler
+from score_qmri.datasets.kind import DatasetKind
 
 
 def test_batch_sampler_produces_correct_batch_size():
-    """Test sampler produces batches of correct size."""
     ds = TensorDataset(torch.randn(20, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds])
 
-    sampler = ScheduledBatchSampler(concat, [20], [lambda s: 1.0], batch_size=4, base_seed=42, rank=0)
+    sampler = ScheduledBatchSampler(
+        concat,
+        [20],
+        [DatasetKind.T1MAP],
+        [lambda s: 1.0],
+        batch_size=4,
+        base_seed=42,
+        rank=0,
+    )
 
     batch = next(iter(sampler))
     assert len(batch) == 4
 
 
 def test_batch_sampler_indices_in_valid_range():
-    """Test sampler produces valid indices."""
     ds1 = TensorDataset(torch.randn(10, 3, 32, 32))
     ds2 = TensorDataset(torch.randn(15, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds1, ds2])
 
-    sampler = ScheduledBatchSampler(concat, [10, 15], [lambda s: 1.0] * 2, batch_size=4, base_seed=42, rank=0)
+    sampler = ScheduledBatchSampler(
+        concat,
+        [10, 15],
+        [DatasetKind.T1MAP, DatasetKind.T2MAP],
+        [lambda s: 1.0] * 2,
+        batch_size=4,
+        base_seed=42,
+        rank=0,
+    )
 
     batch = next(iter(sampler))
     assert all(0 <= idx < len(concat) for idx in batch)
 
 
 def test_batch_sampler_respects_zero_weight():
-    """Test sampler skips datasets with zero weight."""
     ds1 = TensorDataset(torch.randn(10, 3, 32, 32))
     ds2 = TensorDataset(torch.randn(15, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds1, ds2])
 
-    # First dataset has weight 0
-    sampler = ScheduledBatchSampler(concat, [10, 15], [lambda s: 0.0, lambda s: 1.0], batch_size=4, base_seed=42, rank=0)
+    sampler = ScheduledBatchSampler(
+        concat,
+        [10, 15],
+        [DatasetKind.T1MAP, DatasetKind.T2MAP],
+        [lambda s: 0.0, lambda s: 1.0],
+        batch_size=4,
+        base_seed=42,
+        rank=0,
+    )
 
     batch = next(iter(sampler))
-    # All indices should be from second dataset (offset 10)
     assert all(idx >= 10 for idx in batch)
 
 
 def test_batch_sampler_different_ranks_differ():
-    """Test different ranks produce different batches."""
     ds = TensorDataset(torch.randn(100, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds])
 
-    sampler0 = ScheduledBatchSampler(concat, [100], [lambda s: 1.0], batch_size=8, base_seed=42, rank=0)
-    sampler1 = ScheduledBatchSampler(concat, [100], [lambda s: 1.0], batch_size=8, base_seed=42, rank=1)
+    sampler0 = ScheduledBatchSampler(
+        concat,
+        [100],
+        [DatasetKind.T1MAP],
+        [lambda s: 1.0],
+        batch_size=8,
+        base_seed=42,
+        rank=0,
+    )
+    sampler1 = ScheduledBatchSampler(
+        concat,
+        [100],
+        [DatasetKind.T1MAP],
+        [lambda s: 1.0],
+        batch_size=8,
+        base_seed=42,
+        rank=1,
+    )
 
     batch0 = next(iter(sampler0))
     batch1 = next(iter(sampler1))
@@ -58,11 +93,18 @@ def test_batch_sampler_different_ranks_differ():
 
 
 def test_batch_sampler_increments_step():
-    """Test sampler increments step counter."""
     ds = TensorDataset(torch.randn(20, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds])
 
-    sampler = ScheduledBatchSampler(concat, [20], [lambda s: 1.0], batch_size=4, base_seed=42, rank=0)
+    sampler = ScheduledBatchSampler(
+        concat,
+        [20],
+        [DatasetKind.T1MAP],
+        [lambda s: 1.0],
+        batch_size=4,
+        base_seed=42,
+        rank=0,
+    )
 
     assert sampler.step == 0
     next(iter(sampler))
@@ -70,13 +112,19 @@ def test_batch_sampler_increments_step():
 
 
 def test_batch_sampler_all_weights_zero():
-    """Test sampler raises RuntimeError when all weights are zero."""
     ds1 = TensorDataset(torch.randn(10, 3, 32, 32))
     ds2 = TensorDataset(torch.randn(15, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds1, ds2])
 
-    # Both datasets have weight 0
-    sampler = ScheduledBatchSampler(concat, [10, 15], [lambda s: 0.0, lambda s: 0.0], batch_size=4, base_seed=42, rank=0)
+    sampler = ScheduledBatchSampler(
+        concat,
+        [10, 15],
+        [DatasetKind.T1MAP, DatasetKind.T2MAP],
+        [lambda s: 0.0, lambda s: 0.0],
+        batch_size=4,
+        base_seed=42,
+        rank=0,
+    )
 
     iterator = iter(sampler)
     with pytest.raises(RuntimeError, match="All dataset weights are zero"):
@@ -84,11 +132,18 @@ def test_batch_sampler_all_weights_zero():
 
 
 def test_batch_sampler_single_dataset():
-    """Test sampler works correctly with single dataset."""
     ds = TensorDataset(torch.randn(30, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds])
 
-    sampler = ScheduledBatchSampler(concat, [30], [lambda s: 1.0], batch_size=4, base_seed=42, rank=0)
+    sampler = ScheduledBatchSampler(
+        concat,
+        [30],
+        [DatasetKind.T1MAP],
+        [lambda s: 1.0],
+        batch_size=4,
+        base_seed=42,
+        rank=0,
+    )
 
     batch = next(iter(sampler))
     assert len(batch) == 4
@@ -96,13 +151,19 @@ def test_batch_sampler_single_dataset():
 
 
 def test_batch_sampler_negative_weights():
-    """Test sampler handles negative weights by raising RuntimeError when combined weight is zero or negative."""
     ds1 = TensorDataset(torch.randn(10, 3, 32, 32))
     ds2 = TensorDataset(torch.randn(15, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds1, ds2])
 
-    # Both datasets in same bucket: 1.0*10 + (-1.0)*15 = -5 < 0
-    sampler = ScheduledBatchSampler(concat, [10, 15], [lambda s: 1.0, lambda s: -1.0], batch_size=4, base_seed=42, rank=0)
+    sampler = ScheduledBatchSampler(
+        concat,
+        [10, 15],
+        [DatasetKind.T1MAP, DatasetKind.T2MAP],
+        [lambda s: 1.0, lambda s: -1.0],
+        batch_size=4,
+        base_seed=42,
+        rank=0,
+    )
 
     iterator = iter(sampler)
     with pytest.raises(RuntimeError, match="All dataset weights are zero"):
@@ -110,24 +171,209 @@ def test_batch_sampler_negative_weights():
 
 
 def test_batch_sampler_handles_large_steps():
-    """Test sampler properly handles large step values that drop weight to zero."""
     ds = TensorDataset(torch.randn(10, 3, 32, 32))
     concat: ConcatDataset = ConcatDataset([ds])
 
-    # Schedule drops weight to zero after step 2
     def step_schedule(step: int) -> float:
         return 1.0 if step < 2 else 0.0
 
-    sampler = ScheduledBatchSampler(concat, [10], [step_schedule], batch_size=4, base_seed=42, rank=0)
+    sampler = ScheduledBatchSampler(
+        concat,
+        [10],
+        [DatasetKind.T1MAP],
+        [step_schedule],
+        batch_size=4,
+        base_seed=42,
+        rank=0,
+    )
 
-    # At step 0, should sample normally
     batch1 = next(iter(sampler))
     assert len(batch1) == 4
 
-    # At step 1, should still sample normally
     batch2 = next(iter(sampler))
     assert len(batch2) == 4
 
-    # After step 2, weight becomes zero, should raise RuntimeError
     with pytest.raises(RuntimeError, match="All dataset weights are zero"):
         next(iter(sampler))
+
+
+def test_batch_produces_mixed_kinds():
+    # given: two datasets with different kinds, large batch
+    ds1 = TensorDataset(torch.randn(100, 3, 32, 32))
+    ds2 = TensorDataset(torch.randn(100, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds1, ds2])
+
+    sampler = ScheduledBatchSampler(
+        concat,
+        [100, 100],
+        [DatasetKind.T1MAP, DatasetKind.T2MAP],
+        [lambda s: 1.0, lambda s: 1.0],
+        batch_size=32,
+        kind_normalization=0.5,
+        base_seed=42,
+        rank=0,
+    )
+
+    # when: sample a batch
+    batch = next(iter(sampler))
+
+    # then: batch should contain indices from both datasets
+    from_ds1 = [idx for idx in batch if idx < 100]
+    from_ds2 = [idx for idx in batch if idx >= 100]
+    assert len(from_ds1) > 0, "Expected some indices from dataset 1"
+    assert len(from_ds2) > 0, "Expected some indices from dataset 2"
+
+
+def test_kind_normalization_zero_is_size_proportional():
+    # given: two datasets with different sizes, kind_normalization=0
+    ds1 = TensorDataset(torch.randn(100, 3, 32, 32))
+    ds2 = TensorDataset(torch.randn(900, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds1, ds2])
+
+    sampler = ScheduledBatchSampler(
+        concat,
+        [100, 900],
+        [DatasetKind.T1MAP, DatasetKind.T2MAP],
+        [lambda s: 1.0, lambda s: 1.0],
+        batch_size=1000,
+        kind_normalization=0.0,
+        base_seed=42,
+        rank=0,
+    )
+
+    # when: sample many batches
+    counts = [0, 0]
+    for _ in range(10):
+        batch = sampler._next_batch()
+        for idx in batch:
+            counts[0 if idx < 100 else 1] += 1
+
+    # then: ratio should be approximately 1:9 (10% vs 90%)
+    total = sum(counts)
+    ratio_ds1 = counts[0] / total
+    assert 0.05 < ratio_ds1 < 0.15, f"Expected ~10% from ds1, got {ratio_ds1:.1%}"
+
+
+def test_kind_normalization_one_is_kind_uniform():
+    # given: two datasets with different sizes but different kinds, kind_normalization=1
+    ds1 = TensorDataset(torch.randn(100, 3, 32, 32))
+    ds2 = TensorDataset(torch.randn(900, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds1, ds2])
+
+    sampler = ScheduledBatchSampler(
+        concat,
+        [100, 900],
+        [DatasetKind.T1MAP, DatasetKind.T2MAP],
+        [lambda s: 1.0, lambda s: 1.0],
+        batch_size=1000,
+        kind_normalization=1.0,
+        base_seed=42,
+        rank=0,
+    )
+
+    # when: sample many batches
+    counts = [0, 0]
+    for _ in range(10):
+        batch = sampler._next_batch()
+        for idx in batch:
+            counts[0 if idx < 100 else 1] += 1
+
+    # then: ratio should be approximately 1:1 (50% each) since each kind gets equal probability
+    total = sum(counts)
+    ratio_ds1 = counts[0] / total
+    assert 0.40 < ratio_ds1 < 0.60, f"Expected ~50% from ds1, got {ratio_ds1:.1%}"
+
+
+def test_schedule_with_kind_normalization_one():
+    # given: one dataset phased out at step 0, kind_normalization=1
+    ds1 = TensorDataset(torch.randn(100, 3, 32, 32))
+    ds2 = TensorDataset(torch.randn(100, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds1, ds2])
+
+    sampler = ScheduledBatchSampler(
+        concat,
+        [100, 100],
+        [DatasetKind.T1MAP, DatasetKind.T2MAP],
+        [lambda s: 0.0, lambda s: 1.0],
+        batch_size=16,
+        kind_normalization=1.0,
+        base_seed=42,
+        rank=0,
+    )
+
+    # when: sample a batch
+    batch = next(iter(sampler))
+
+    # then: all indices should be from dataset 2 (phased-out dataset has zero weight)
+    assert all(idx >= 100 for idx in batch), "Expected all indices from ds2"
+
+
+def test_multiple_datasets_same_kind_with_kind_normalization_one():
+    # given: 3 datasets - 2 of kind T1MAP (sizes 100, 300), 1 of kind T2MAP (size 200)
+    ds1 = TensorDataset(torch.randn(100, 3, 32, 32))
+    ds2 = TensorDataset(torch.randn(300, 3, 32, 32))
+    ds3 = TensorDataset(torch.randn(200, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds1, ds2, ds3])
+
+    sampler = ScheduledBatchSampler(
+        concat,
+        [100, 300, 200],
+        [DatasetKind.T1MAP, DatasetKind.T1MAP, DatasetKind.T2MAP],
+        [lambda s: 1.0, lambda s: 1.0, lambda s: 1.0],
+        batch_size=1000,
+        kind_normalization=1.0,
+        base_seed=42,
+        rank=0,
+    )
+
+    # when: sample many batches
+    counts = [0, 0, 0]
+    for _ in range(10):
+        batch = sampler._next_batch()
+        for idx in batch:
+            if idx < 100:
+                counts[0] += 1
+            elif idx < 400:
+                counts[1] += 1
+            else:
+                counts[2] += 1
+
+    # then: T1MAP kind gets 50%, T2MAP kind gets 50%
+    # Within T1MAP, ds1:ds2 should be 100:300 = 1:3 (so ds1=12.5%, ds2=37.5%)
+    total = sum(counts)
+    ratio_t1map = (counts[0] + counts[1]) / total
+    ratio_t2map = counts[2] / total
+
+    assert 0.40 < ratio_t1map < 0.60, f"Expected ~50% T1MAP, got {ratio_t1map:.1%}"
+    assert 0.40 < ratio_t2map < 0.60, f"Expected ~50% T2MAP, got {ratio_t2map:.1%}"
+
+    # Within T1MAP kind, ds1 should be ~25% of T1MAP (100/(100+300))
+    t1map_total = counts[0] + counts[1]
+    if t1map_total > 0:
+        ds1_within_t1 = counts[0] / t1map_total
+        assert 0.15 < ds1_within_t1 < 0.35, f"Expected ~25% ds1 within T1MAP, got {ds1_within_t1:.1%}"
+
+
+def test_kind_normalization_validation():
+    ds = TensorDataset(torch.randn(10, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds])
+
+    with pytest.raises(ValueError, match="kind_normalization must be in"):
+        ScheduledBatchSampler(
+            concat,
+            [10],
+            [DatasetKind.T1MAP],
+            [lambda s: 1.0],
+            batch_size=4,
+            kind_normalization=1.5,
+        )
+
+    with pytest.raises(ValueError, match="kind_normalization must be in"):
+        ScheduledBatchSampler(
+            concat,
+            [10],
+            [DatasetKind.T1MAP],
+            [lambda s: 1.0],
+            batch_size=4,
+            kind_normalization=-0.1,
+        )
