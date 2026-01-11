@@ -280,5 +280,5 @@ class MRIDataModule(LightningDataModule):
             pin_memory=torch.cuda.is_available(),
             prefetch_factor=4 if self.num_workers > 0 else None,
             multiprocessing_context="spawn" if self.num_workers > 0 else None,
-            timeout=120,
+            timeout=120 if self.num_workers > 0 else 0,
         )

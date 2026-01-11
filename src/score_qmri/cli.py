@@ -7,7 +7,7 @@ from pathlib import Path
 
 import jsonargparse
 import torch
-from lightning.pytorch import Trainer
+from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, ModelSummary
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
@@ -28,16 +28,16 @@ class WandbSaveConfigCallback(SaveConfigCallback):
 
     def save_config(
         self,
-        trainer: "Trainer",
-        pl_module: "DiffusionLightningModule",
+        trainer: Trainer,
+        pl_module: LightningModule,
         stage: str,
     ) -> None:
         super().save_config(trainer, pl_module, stage)
 
     def on_train_start(
         self,
-        trainer: "Trainer",
-        pl_module: "DiffusionLightningModule",
+        trainer: Trainer,
+        pl_module: LightningModule,
     ) -> None:
         """Log config as W&B artifact after training starts (DDP-safe)."""
         if not isinstance(trainer.logger, WandbLogger):
@@ -205,7 +205,7 @@ class DiffusionLightningCLI(LightningCLI):
             run_dir.mkdir(parents=True, exist_ok=True)
         self.trainer.strategy.barrier("after_instantiate_mkdir")
 
-        for callback in self.trainer.callbacks:
+        for callback in self.trainer.callbacks:  # type: ignore[attr-defined]
             if isinstance(callback, ModelCheckpoint):
                 callback.dirpath = str(run_dir)
                 break

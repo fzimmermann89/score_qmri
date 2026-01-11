@@ -129,7 +129,7 @@ def l1_loss(
     if reduction == "mean":
         return loss.mean()
     elif reduction == "none":
-        return loss
+        return loss.mean(dim=1) if loss.ndim > 1 else loss
     else:
         raise ValueError(f"Invalid reduction: {reduction}. Must be 'mean' or 'none'")
 
@@ -211,7 +211,8 @@ def _ssim_loss_real(
     if reduction == "mean":
         return 1.0 - ssim_weighted.mean()
     elif reduction == "none":
-        return 1.0 - ssim_weighted
+        loss_per_channel = 1.0 - ssim_weighted
+        return loss_per_channel.mean(dim=1) if loss_per_channel.ndim > 1 else loss_per_channel
     else:
         raise ValueError(f"Invalid reduction: {reduction}. Must be 'mean' or 'none'")
 

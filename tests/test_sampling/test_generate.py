@@ -1,5 +1,7 @@
 """Tests for sample generation utilities."""
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -108,7 +110,7 @@ class TestGenerateSamples:
 class TestPlotSamplesGrid:
     """Tests for plot_samples_grid."""
 
-    def test_saves_png(self, tmp_path) -> None:
+    def test_saves_png(self, tmp_path: Path) -> None:
         samples = torch.randn(4, 32, 32)
         output = tmp_path / "test.png"
 
@@ -117,7 +119,7 @@ class TestPlotSamplesGrid:
         assert output.exists()
         assert output.stat().st_size > 0
 
-    def test_handles_complex(self, tmp_path) -> None:
+    def test_handles_complex(self, tmp_path: Path) -> None:
         samples = torch.complex(
             torch.randn(4, 32, 32),
             torch.randn(4, 32, 32),
@@ -128,14 +130,14 @@ class TestPlotSamplesGrid:
 
         assert output.exists()
 
-    def test_auto_grid_layout(self, tmp_path) -> None:
+    def test_auto_grid_layout(self, tmp_path: Path) -> None:
         for n in [1, 3, 4, 7, 9, 16]:
             samples = torch.randn(n, 32, 32)
             output = tmp_path / f"grid_{n}.png"
             plot_samples_grid(samples, output)
             assert output.exists()
 
-    def test_single_sample(self, tmp_path) -> None:
+    def test_single_sample(self, tmp_path: Path) -> None:
         samples = torch.randn(1, 64, 64)
         output = tmp_path / "single.png"
 
@@ -147,7 +149,7 @@ class TestPlotSamplesGrid:
 class TestLoadCheckpoint:
     """Tests for DiffusionModel.load_checkpoint."""
 
-    def test_loads_ema_weights(self, tmp_path, small_model: DiffusionModel) -> None:
+    def test_loads_ema_weights(self, tmp_path: Path, small_model: DiffusionModel) -> None:
         ckpt_path = tmp_path / "test.ckpt"
         ema_state = {"shadow": small_model.state_dict(), "decay": 0.9999}
         torch.save({"ema": ema_state}, ckpt_path)
@@ -168,7 +170,7 @@ class TestLoadCheckpoint:
         ):
             assert torch.allclose(p1, p2), f"Parameter {n1} mismatch"
 
-    def test_fallback_to_state_dict(self, tmp_path, small_model: DiffusionModel) -> None:
+    def test_fallback_to_state_dict(self, tmp_path: Path, small_model: DiffusionModel) -> None:
         ckpt_path = tmp_path / "test.ckpt"
         state_dict = {f"model.{k}": v for k, v in small_model.state_dict().items()}
         torch.save({"state_dict": state_dict}, ckpt_path)

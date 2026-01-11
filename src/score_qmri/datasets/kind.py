@@ -27,8 +27,6 @@ class DatasetKind(IntEnum):
         return self in _COMPLEX_KINDS
 
 
-
-
 _COMPLEX_KINDS = frozenset(
     {
         DatasetKind.COMPLEX_T1W_COILWISE,

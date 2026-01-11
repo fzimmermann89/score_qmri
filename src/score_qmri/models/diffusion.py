@@ -180,7 +180,5 @@ class DiffusionModel(torch.nn.Module):
             self.load_state_dict(checkpoint["ema"]["shadow"])
         else:
             state_dict = checkpoint["state_dict"]
-            model_state = {
-                k.removeprefix("model."): v for k, v in state_dict.items() if k.startswith("model.")
-            }
+            model_state = {k.removeprefix("model."): v for k, v in state_dict.items() if k.startswith("model.")}
             self.load_state_dict(model_state)
