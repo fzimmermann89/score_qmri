@@ -23,6 +23,7 @@ class DatasetKind(IntEnum):
 
     @property
     def is_complex(self) -> bool:
+        """Check if this kind represents complex-valued data."""
         return self in _COMPLEX_KINDS
 
 

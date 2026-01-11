@@ -1,4 +1,4 @@
-"""CLI application for MRI diffusion model training."""
+"""CLI application for MRI diffusion model training and generation."""
 
 import os
 import sys
@@ -7,6 +7,7 @@ from pathlib import Path
 
 import jsonargparse
 import torch
+from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, ModelSummary
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
@@ -27,23 +28,21 @@ class WandbSaveConfigCallback(SaveConfigCallback):
 
     def save_config(
         self,
-        trainer: "lightning.Trainer",  # type: ignore[name-defined]  # noqa: F821
-        pl_module: "lightning.LightningModule",  # type: ignore[name-defined]  # noqa: F821
+        trainer: Trainer,
+        pl_module: LightningModule,
         stage: str,
     ) -> None:
-        """Save config to file."""
         super().save_config(trainer, pl_module, stage)
 
     def on_train_start(
         self,
-        trainer: "lightning.Trainer",  # type: ignore[name-defined]  # noqa: F821
-        pl_module: "lightning.LightningModule",  # type: ignore[name-defined]  # noqa: F821
+        trainer: Trainer,
+        pl_module: LightningModule,
     ) -> None:
         """Log config as W&B artifact after training starts (DDP-safe)."""
         if not isinstance(trainer.logger, WandbLogger):
             return
 
-        # All ranks must call log_dir (triggers internal broadcast)
         log_dir = trainer.log_dir
         trainer.strategy.barrier("on_train_start_log_dir")
 
@@ -62,11 +61,89 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         wandb.run.log_artifact(artifact)
 
 
+class DiffusionTrainer(Trainer):
+    """Trainer with generate subcommand for sample generation."""
+
+    def generate(
+        self,
+        model: DiffusionLightningModule,
+        ckpt_path: str,
+        kind: str = "T1W_MAGNITUDE",
+        n: int = 4,
+        size: int = 256,
+        sampler: str = "ddim",
+        steps: int = 100,
+        eta: float = 0.0,
+        seed: int | None = None,
+        output: str | None = None,
+        device: str = "cuda",
+    ) -> None:
+        """Generate samples from a trained diffusion model.
+
+        Parameters
+        ----------
+        model
+            The model instance (instantiated from config).
+        ckpt_path
+            Path to trained model checkpoint (.ckpt file).
+        kind
+            Dataset kind name for conditioning (e.g., T1W_MAGNITUDE, T1MAP).
+        n
+            Number of samples to generate.
+        size
+            Image size (height = width).
+        sampler
+            Sampling algorithm: "ddim" or "ddpm".
+        steps
+            Number of denoising steps.
+        eta
+            DDIM stochasticity (0 = deterministic, 1 = full stochastic).
+        seed
+            Random seed for reproducibility.
+        output
+            Output PNG path. If None, displays interactive window.
+        device
+            Device for generation ("cuda" or "cpu").
+        """
+        from score_qmri.datasets.kind import DatasetKind
+        from score_qmri.sampling.generate import generate_samples
+        from score_qmri.utils.plot import plot_samples_grid
+
+        try:
+            kind_enum = DatasetKind[kind.upper()]
+        except KeyError:
+            valid = ", ".join(k.name for k in DatasetKind)
+            raise SystemExit(f"Unknown kind: {kind!r}. Valid: {valid}") from None
+
+        diffusion_model = model.model
+        diffusion_model.load_checkpoint(Path(ckpt_path))
+
+        diffusion_model.to(device)
+        diffusion_model.eval()
+
+        print(f"Generating {n} samples of {kind_enum.name}...")
+        print(f"  Sampler: {sampler.upper()}, Steps: {steps}, Size: {size}x{size}")
+
+        samples = generate_samples(
+            model=diffusion_model,
+            kind=kind_enum,
+            n_samples=n,
+            size=size,
+            sampler_type=sampler,
+            num_steps=steps,
+            eta=eta,
+            seed=seed,
+        )
+
+        title = f"{kind_enum.name} ({sampler.upper()}, {steps} steps)"
+        output_path = Path(output) if output else None
+        plot_samples_grid(samples, output_path, title)
+
+
 class DiffusionLightningCLI(LightningCLI):
-    """Custom CLI for diffusion model training with WandB logging."""
+    """Custom CLI for diffusion model training and generation."""
 
     def add_arguments_to_parser(self, parser: jsonargparse.ArgumentParser) -> None:
-        """Add custom arguments to the parser."""
         parser.add_argument(
             "--job_name",
             type=str | None,
@@ -79,7 +156,6 @@ class DiffusionLightningCLI(LightningCLI):
         parser.set_defaults({"data": {"class_path": "score_qmri.datasets.lightning.MRIDataModule"}})
 
     def before_instantiate_classes(self) -> None:
-        """Set up logger and callbacks before instantiating classes."""
         if self.subcommand != "fit":
             return
 
@@ -113,7 +189,6 @@ class DiffusionLightningCLI(LightningCLI):
         ]
 
     def after_instantiate_classes(self) -> None:
-        """Set checkpoint directory using WandB's run name (synced across ranks)."""
         if self.subcommand != "fit":
             return
 
@@ -143,7 +218,6 @@ class DiffusionLightningCLI(LightningCLI):
         self._log_hyperparams(config, run_name)
 
     def _get_synced_run_name(self, job_name: str | None) -> str:
-        """Get WandB run name, synchronized across all DDP ranks."""
         if job_name:
             return job_name
 
@@ -159,7 +233,6 @@ class DiffusionLightningCLI(LightningCLI):
         return synced_name
 
     def _log_hyperparams(self, config: jsonargparse.Namespace, run_name: str) -> None:
-        """Log hyperparams to WandB. Safe to call from all ranks."""
         logger = self.trainer.logger
         if not isinstance(logger, WandbLogger):
             return
@@ -168,8 +241,6 @@ class DiffusionLightningCLI(LightningCLI):
         if hasattr(experiment, "config"):
             update = getattr(experiment.config, "update", None)
             if callable(update):
-                # Normalize config to ensure stability across runs (e.g. object addresses, int vs float)
-                # We do NOT use allow_val_change=True, so W&B will error if the effective config changes.
                 normalized_config = normalize_config(config.as_dict())
                 update({"cli_config": normalized_config})
 
@@ -188,7 +259,7 @@ class DiffusionLightningCLI(LightningCLI):
             }
         )
 
-        system_info = {
+        system_info: dict[str, object] = {
             "system/cuda_available": torch.cuda.is_available(),
             "system/cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
             "system/torch_version": torch.__version__,
@@ -212,18 +283,23 @@ class DiffusionLightningCLI(LightningCLI):
 
     @staticmethod
     def subcommands() -> dict[str, set[str]]:
-        """Define trainer functions to use as subcommands of the CLI."""
-        return {"fit": {"model", "train_dataloaders", "datamodule"}}
+        return {
+            "fit": {"model", "train_dataloaders", "datamodule"},
+            "generate": {"model"},
+        }
 
 
 def main() -> None:
-    """Run the training CLI."""
-    if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1].startswith("-")):
+    """Run the CLI."""
+    if len(sys.argv) == 1:
+        sys.argv.append("--help")
+    elif len(sys.argv) > 1 and sys.argv[1].startswith("-"):
         sys.argv.insert(1, "fit")
 
     DiffusionLightningCLI(
         DiffusionLightningModule,
         MRIDataModule,
+        trainer_class=DiffusionTrainer,
         save_config_callback=WandbSaveConfigCallback,
         subclass_mode_data=True,
         seed_everything_default=42,
