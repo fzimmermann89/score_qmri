@@ -2,6 +2,7 @@
 
 import h5py
 import numpy as np
+import pytest
 import torch
 
 from score_qmri.datasets.base import BaseMRIDataset
@@ -20,13 +21,39 @@ class DummyDataset(BaseMRIDataset):
         return h5_file[first_key].shape[1], h5_file[first_key].shape[2]
 
     def _load_slice(self, h5_file, idx):
-        # Simple sequential access
         keys = [k for k in h5_file if isinstance(h5_file[k], h5py.Dataset)]
         offset = 0
         for k in keys:
             n_slices = h5_file[k].shape[0]
             if idx < offset + n_slices:
-                return torch.from_numpy(h5_file[k][idx - offset, :, :].astype(np.float32))
+                data = h5_file[k][idx - offset, :, :]
+                if np.iscomplexobj(data):
+                    return torch.from_numpy(data)
+                return torch.from_numpy(data.astype(np.float32))
+            offset += n_slices
+        raise IndexError(f"Index {idx} out of bounds")
+
+
+class DummyComplexDataset(BaseMRIDataset):
+    """Dummy dataset for testing complex grouped structure (combined/ group)."""
+
+    def _count_slices_in_file(self, h5_file):
+        combined = h5_file["combined"]
+        return sum(combined[k].shape[0] for k in combined)
+
+    def _get_slice_shape(self, h5_file):
+        combined = h5_file["combined"]
+        first_key = next(iter(combined))
+        return combined[first_key].shape[1], combined[first_key].shape[2]
+
+    def _load_slice(self, h5_file, idx):
+        combined = h5_file["combined"]
+        offset = 0
+        for k in combined:
+            n_slices = combined[k].shape[0]
+            if idx < offset + n_slices:
+                data = combined[k][idx - offset, :, :]
+                return torch.from_numpy(data)
             offset += n_slices
         raise IndexError(f"Index {idx} out of bounds")
 
@@ -58,7 +85,7 @@ def test_base_dataset_mask_is_nonzero_pixels(sample_h5_file):
     sample = dataset[0]
 
     image, mask = sample["image"], sample["mask"]
-    assert torch.all((image != 0) == mask)
+    assert torch.all((image.abs() > 1e-6) == mask)
 
 
 def test_base_dataset_h5_caching(sample_h5_file):
@@ -75,3 +102,17 @@ def test_base_dataset_h5_caching(sample_h5_file):
     # Second access reuses same handle
     _ = dataset[1]
     assert dataset._h5_file is first_handle
+
+
+def test_dtype_kind_mismatch_complex_to_magnitude(sample_h5_file_complex):
+    """Complex H5 data with magnitude kind raises ValueError."""
+    dataset = DummyComplexDataset(sample_h5_file_complex, kind=DatasetKind.T1W_MAGNITUDE)
+    with pytest.raises(ValueError, match="Kind/dtype mismatch"):
+        _ = dataset[0]
+
+
+def test_dtype_kind_mismatch_magnitude_to_complex(sample_h5_file_magnitude):
+    """Magnitude H5 data with complex kind raises ValueError."""
+    dataset = DummyDataset(sample_h5_file_magnitude, kind=DatasetKind.COMPLEX_T1W_COILWISE)
+    with pytest.raises(ValueError, match="Kind/dtype mismatch"):
+        _ = dataset[0]

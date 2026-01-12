@@ -40,3 +40,7 @@ _COMPLEX_KINDS = frozenset(
 )
 
 NUM_DATASET_KINDS: int = len(DatasetKind)
+
+
+def is_complex_kind(kind_index: int) -> bool:
+    return kind_index in _COMPLEX_KINDS

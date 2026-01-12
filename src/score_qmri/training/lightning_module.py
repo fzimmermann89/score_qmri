@@ -11,11 +11,15 @@ from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.utilities.types import OptimizerLRSchedulerConfig
 from torch import Tensor
 
-from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind
-from score_qmri.models.diffusion import DiffusionModel
+from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind, is_complex_kind
+from score_qmri.models.diffusion import (
+    DiffusionModel,
+    _apply_kind_constraints,
+    _create_noise,
+)
 from score_qmri.sampling.ddim_sampler import DDIMSampler, SamplingStats, create_fixed_noise
 from score_qmri.training.ema import EMA
-from score_qmri.training.losses import l1_loss, noise_loss, ssim_loss
+from score_qmri.training.losses import create_channel_mask, l1_loss, noise_loss, ssim_loss
 
 VALIDATION_KINDS: tuple[DatasetKind, ...] = (
     DatasetKind.T1W_MAGNITUDE,
@@ -204,17 +208,16 @@ class DiffusionLightningModule(LightningModule):
         mask = batch["mask"]
         kind = batch["kind"]
 
+        x0_raw = _apply_kind_constraints(x0_raw, kind)
+
         x0_pre_clamp = self.model.normalize(x0_raw, kind, mask)
-        x0 = (
-            torch.complex(x0_pre_clamp.real.clamp(-6, 6), x0_pre_clamp.imag.clamp(-6, 6))
-            if x0_pre_clamp.is_complex()
-            else x0_pre_clamp.clamp(-6, 6)
-        )
+        x0 = x0_pre_clamp.clamp(-6, 6)
 
         eps = 1e-5
         t = torch.rand(x0.shape[0], device=self.device) * (1.0 - eps) + eps
-        noise = torch.randn_like(x0)
-        x_t = self.model.q_sample(x0, t, noise)
+
+        noise = _create_noise(x0.shape, kind, self.device, x0.dtype)
+        x_t = self.model.q_sample(x0, t, kind, noise)
 
         output = self.model(x_t, t, kind)
 
@@ -229,17 +232,19 @@ class DiffusionLightningModule(LightningModule):
         x0_v = x0[valid_samples]
         noise_v = noise[valid_samples]
         mask_v = mask[valid_samples]
+        kind_v = kind[valid_samples]
         pred_noise_v = output.noise[valid_samples]
         pred_x0_v = output.x0[valid_samples]
 
-        weighted_mask = torch.where(mask_v, 1.0, self.hparams.mask_weight)
+        weighted_mask = torch.where(mask_v.unsqueeze(1), 1.0, self.hparams.mask_weight)
+        channel_mask = create_channel_mask(kind_v, self.device)
 
         t_v = t[valid_samples]
         signal_weight = self.model.alpha_bar(t_v)
 
-        loss_noise = noise_loss(pred_noise_v, noise_v, weighted_mask)
-        loss_l1 = l1_loss(pred_x0_v, x0_v, weighted_mask, reduction="none")
-        loss_ssim = ssim_loss(pred_x0_v, x0_v, weighted_mask, reduction="none").squeeze(-1)
+        loss_noise = noise_loss(pred_noise_v, noise_v, weighted_mask, channel_mask)
+        loss_l1 = l1_loss(pred_x0_v, x0_v, weighted_mask, channel_mask, reduction="none")
+        loss_ssim = ssim_loss(pred_x0_v, x0_v, weighted_mask, channel_mask, reduction="none").squeeze(-1)
 
         loss_l1 = (loss_l1 * signal_weight).mean()
         loss_ssim = (loss_ssim * signal_weight).mean()
@@ -264,10 +269,8 @@ class DiffusionLightningModule(LightningModule):
         )
 
         if self.global_step > 0 and self.global_step % self.hparams.log_batch_interval == 0:
-            t_v = t[valid_samples]
             x_t_v = x_t[valid_samples]
-            kind_v = kind[valid_samples]
-            x0_tweedie_v = self.model.predict_x0(x_t_v, t_v, pred_noise_v)
+            x0_tweedie_v = self.model.predict_x0(x_t_v, t_v, pred_noise_v, kind_v)
             self._log_training_batch(x0_v, x_t_v, noise_v, pred_noise_v, x0_tweedie_v, pred_x0_v, kind_v, t_v)
 
         return total_loss
@@ -292,15 +295,21 @@ class DiffusionLightningModule(LightningModule):
         B = min(x0_gt.shape[0], 8)
         fig, axes = plt.subplots(6, B, figsize=(2.5 * B, 15), squeeze=False)
 
-        def to_np(x: Tensor) -> list:
-            return [(x[i].abs() if x.is_complex() else x[i]).detach().cpu().numpy() for i in range(B)]
+        def to_np(x: Tensor, kind_tensor: Tensor) -> list:
+            result = []
+            for i in range(B):
+                sample = x[i]
+                k_idx = int(kind_tensor[i].item())
+                mag = (sample[0] ** 2 + sample[1] ** 2).sqrt() if is_complex_kind(k_idx) else sample[0]
+                result.append(mag.detach().cpu().numpy())
+            return result
 
-        gt = to_np(x0_gt)
-        noised = to_np(x_t)
-        n_gt = to_np(noise_gt)
-        n_pred = to_np(noise_pred)
-        x0_tw = to_np(x0_tweedie)
-        x0_p = to_np(x0_pred)
+        gt = to_np(x0_gt, kind)
+        noised = to_np(x_t, kind)
+        n_gt = to_np(noise_gt, kind)
+        n_pred = to_np(noise_pred, kind)
+        x0_tw = to_np(x0_tweedie, kind)
+        x0_p = to_np(x0_pred, kind)
         kind_names = [DatasetKind(int(kind[i].item())).name for i in range(B)]
 
         row_labels = ["x0 GT", "x_t (noised)", "noise GT", "noise pred", "x0 Tweedie", "x0 pred"]
@@ -362,10 +371,14 @@ class DiffusionLightningModule(LightningModule):
                 kind_tensor = torch.tensor([k], device=self.device)
                 collect = kind_enum == DatasetKind.T1W_MAGNITUDE
 
-                sample = sampler.sample((1, size, size), kind_tensor, self._fixed_noise[k], collect_stats=collect)
-                sample_denorm: Tensor = sample_model.denormalize(sample, kind_tensor)
+                sample = sampler.sample((1, 2, size, size), kind_tensor, self._fixed_noise[k], collect_stats=collect)
+                sample_denorm = sample_model.denormalize(sample, kind_tensor)
 
-                img_np = sample_denorm[0].abs().cpu().numpy() if sample_denorm.is_complex() else sample_denorm[0].cpu().numpy()
+                if is_complex_kind(k):
+                    img_np = (sample_denorm[0, 0] ** 2 + sample_denorm[0, 1] ** 2).sqrt().cpu().numpy()
+                else:
+                    img_np = sample_denorm[0, 0].cpu().numpy()
+
                 image = wandb.Image(img_np, caption=f"step_{self.global_step}")
                 self.logger.experiment.log({f"samples/{kind_enum.name}": image, "global_step": self.global_step})
 
@@ -389,7 +402,7 @@ class DiffusionLightningModule(LightningModule):
         fig, axes = plt.subplots(2, n, figsize=(2.5 * n, 5), squeeze=False)
 
         for j, (inter, step, t_val) in enumerate(zip(stats.intermediates, stats.steps, stats.t_values, strict=True)):
-            img = inter[0].abs().numpy() if inter.is_complex() else inter[0].numpy()
+            img = (inter[0, 0] ** 2 + inter[0, 1] ** 2).sqrt().numpy() if inter.shape[1] == 2 else inter[0, 0].numpy()
             axes[0, j].imshow(img, cmap="gray")
             axes[0, j].axis("off")
             axes[0, j].set_title(f"step {step}\nt={t_val:.3f}", fontsize=7)

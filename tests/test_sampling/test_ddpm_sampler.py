@@ -10,7 +10,7 @@ def test_ddpm_sampler_shape():
     model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDPMSampler(model, num_steps=10)
 
-    shape = (2, 32, 32)
+    shape = (2, 2, 32, 32)
     kind = torch.tensor([0, 1])
     samples = sampler.sample(shape, kind)
     assert samples.shape == shape
@@ -20,7 +20,7 @@ def test_ddpm_sampler_default_kind():
     model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDPMSampler(model, num_steps=10)
 
-    shape = (2, 32, 32)
+    shape = (2, 2, 32, 32)
     samples = sampler.sample(shape)
     assert samples.shape == shape
 
@@ -39,7 +39,7 @@ def test_ddpm_sampler_uses_model_device():
     sampler = DDPMSampler(model, num_steps=10)
 
     model = model.to(torch.device("cpu"))
-    shape = (1, 32, 32)
+    shape = (1, 2, 32, 32)
     kind = torch.tensor([0])
 
     samples = sampler.sample(shape, kind)
@@ -50,7 +50,7 @@ def test_ddpm_sampler_device_changes_with_model():
     model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDPMSampler(model, num_steps=10)
 
-    shape = (1, 32, 32)
+    shape = (1, 2, 32, 32)
     kind = torch.tensor([0])
 
     model = model.to(torch.device("cpu"))
@@ -63,14 +63,14 @@ def test_ddpm_sampler_device_changes_with_model():
         assert samples_cuda.device.type == "cuda"
 
 
-def test_ddpm_sampler_complex_input():
+def test_ddpm_real_kind_imag_stays_zero():
     model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDPMSampler(model, num_steps=10)
 
-    shape = (1, 32, 32)
-    kind = torch.tensor([0])
-    noise = torch.complex(torch.randn(shape), torch.randn(shape))
+    shape = (1, 2, 32, 32)
+    # T1MAP is a real kind (index 6)
+    kind = torch.tensor([6])
+    samples = sampler.sample(shape, kind)
 
-    samples = sampler.sample(shape, kind, initial_noise=noise)
     assert samples.shape == shape
-    assert samples.is_complex()
+    assert torch.allclose(samples[:, 1], torch.zeros_like(samples[:, 1]))

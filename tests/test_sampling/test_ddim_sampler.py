@@ -2,7 +2,7 @@
 
 import torch
 
-from score_qmri.datasets.kind import DatasetKind
+from score_qmri.datasets.kind import DatasetKind, is_complex_kind
 from score_qmri.models.diffusion import DiffusionModel
 from score_qmri.sampling.ddim_sampler import DDIMSampler, create_fixed_noise
 
@@ -11,7 +11,7 @@ def test_ddim_sampler_shape():
     model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=10)
 
-    shape = (2, 32, 32)
+    shape = (2, 2, 32, 32)
     kind = torch.tensor([0, 1])
     samples = sampler.sample(shape, kind)
     assert samples.shape == shape
@@ -21,7 +21,7 @@ def test_ddim_sampler_fixed_noise():
     model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=10)
 
-    shape = (1, 32, 32)
+    shape = (1, 2, 32, 32)
     kind = torch.tensor([0])
     noise = torch.randn(shape)
 
@@ -33,7 +33,7 @@ def test_ddim_deterministic():
     model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=10, eta=0.0)
 
-    shape = (1, 32, 32)
+    shape = (1, 2, 32, 32)
     kind = torch.tensor([0])
     noise = torch.randn(shape)
 
@@ -42,17 +42,17 @@ def test_ddim_deterministic():
     assert torch.allclose(s1, s2)
 
 
-def test_ddim_complex_input():
+def test_ddim_real_kind_imag_stays_zero():
     model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=10, eta=0.0)
 
-    shape = (1, 32, 32)
-    kind = torch.tensor([0])
-    noise = torch.complex(torch.randn(shape), torch.randn(shape))
+    shape = (1, 2, 32, 32)
+    # T1MAP is a real kind (index 6)
+    kind = torch.tensor([6])
+    samples = sampler.sample(shape, kind)
 
-    samples = sampler.sample(shape, kind, noise)
     assert samples.shape == shape
-    assert samples.is_complex()
+    assert torch.allclose(samples[:, 1], torch.zeros_like(samples[:, 1]))
 
 
 def test_create_fixed_noise():
@@ -63,11 +63,11 @@ def test_create_fixed_noise():
 
     for kind in DatasetKind:
         n = noise[int(kind)]
-        assert n.shape == (1, 64, 64)
-        if kind.is_complex:
-            assert n.is_complex()
+        assert n.shape == (1, 2, 64, 64)
+        if is_complex_kind(int(kind)):
+            assert not torch.allclose(n[:, 1], torch.zeros_like(n[:, 1]))
         else:
-            assert not n.is_complex()
+            assert torch.allclose(n[:, 1], torch.zeros_like(n[:, 1]))
 
 
 def test_create_fixed_noise_reproducible():
@@ -84,7 +84,7 @@ def test_ddim_sampler_uses_model_device():
     sampler = DDIMSampler(model, num_steps=10)
 
     model = model.to(torch.device("cpu"))
-    shape = (1, 32, 32)
+    shape = (1, 2, 32, 32)
     kind = torch.tensor([0])
 
     samples = sampler.sample(shape, kind)
@@ -95,7 +95,7 @@ def test_ddim_sampler_device_changes_with_model():
     model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=10)
 
-    shape = (1, 32, 32)
+    shape = (1, 2, 32, 32)
     kind = torch.tensor([0])
 
     samples_cpu = sampler.sample(shape, kind)
@@ -111,7 +111,7 @@ def test_ddim_collect_stats():
     model = DiffusionModel(base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
     sampler = DDIMSampler(model, num_steps=50)
 
-    shape = (1, 32, 32)
+    shape = (1, 2, 32, 32)
     kind = torch.tensor([0])
 
     samples = sampler.sample(shape, kind, collect_stats=True)

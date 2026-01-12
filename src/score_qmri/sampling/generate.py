@@ -4,7 +4,7 @@ import torch
 from torch import Tensor
 
 from score_qmri.datasets.kind import DatasetKind
-from score_qmri.models.diffusion import DiffusionModel
+from score_qmri.models.diffusion import DiffusionModel, _create_noise
 
 from .ddim_sampler import DDIMSampler
 from .ddpm_sampler import DDPMSampler
@@ -44,23 +44,16 @@ def generate_samples(
     Returns
     -------
     Generated samples of shape (N, H, W), denormalized.
+    Complex kinds return complex64, real kinds return float32.
     """
     device = model.device
 
-    # Use device-specific generator for reproducibility on CUDA
-    gen = torch.Generator(device=device)
-    if seed is not None:
-        gen.manual_seed(seed)
-
-    if kind.is_complex:
-        noise = torch.complex(
-            torch.randn(n_samples, size, size, device=device, generator=gen),
-            torch.randn(n_samples, size, size, device=device, generator=gen),
-        )
-    else:
-        noise = torch.randn(n_samples, size, size, device=device, generator=gen)
-
     kind_tensor = torch.full((n_samples,), int(kind), dtype=torch.long, device=device)
+
+    if seed is not None:
+        torch.manual_seed(seed)
+    shape = (n_samples, 2, size, size)
+    noise = _create_noise(shape, kind_tensor, device, torch.float32)
 
     sampler: DDIMSampler | DDPMSampler
     if sampler_type.lower() == "ddim":
@@ -71,7 +64,10 @@ def generate_samples(
         raise ValueError(f"Unknown sampler: {sampler_type!r}. Use 'ddim' or 'ddpm'.")
 
     with torch.no_grad():
-        samples = sampler.sample((n_samples, size, size), kind_tensor, noise)
+        samples = sampler.sample(shape, kind_tensor, noise)
         samples_denorm = model.denormalize(samples, kind_tensor)
 
-    return samples_denorm
+    if kind.is_complex:
+        return torch.complex(samples_denorm[:, 0], samples_denorm[:, 1])
+    else:
+        return samples_denorm[:, 0]

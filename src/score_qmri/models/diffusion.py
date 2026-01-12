@@ -9,23 +9,138 @@ The model predicts both:
 - Clean image x0 (trained with SSIM + L1, auxiliary denoising task)
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import IntEnum, auto
 from pathlib import Path
+from typing import cast, overload
 
 import torch
 from torch import Tensor
+
+from score_qmri.datasets.kind import is_complex_kind
 
 from .conditioning import ConditioningMLP
 from .normalization import RunningNormalizer
 from .unet import UNet
 
 
+class InputFormat(IntEnum):
+    REAL_1CH = auto()
+    COMPLEX_1CH = auto()
+    REAL_2CH = auto()
+    LIST_2CH = auto()
+
+
+@dataclass
+class ListMetadata:
+    """Metadata for reconstructing list outputs from concatenated 2ch tensor."""
+
+    formats: list[InputFormat]
+    batch_sizes: list[int]
+
+
 @dataclass
 class DiffusionOutput:
-    """Output from diffusion model forward pass."""
+    x0: Tensor
+    noise: Tensor
 
-    x0: Tensor  # (B, H, W)
-    noise: Tensor  # (B, H, W)
+
+@dataclass
+class DiffusionOutputList:
+    x0: list[Tensor]
+    noise: list[Tensor]
+
+
+def _to_2ch_single(x: Tensor) -> tuple[Tensor, InputFormat]:
+    """Convert single tensor to canonical (B, 2, H, W) format."""
+    match (x.ndim, x.is_complex()):
+        case (4, False) if x.shape[1] == 2:
+            return x, InputFormat.REAL_2CH
+        case (3, True):
+            return torch.moveaxis(torch.view_as_real(x), -1, 1), InputFormat.COMPLEX_1CH
+        case (3, False):
+            return torch.stack([x, torch.zeros_like(x)], dim=1), InputFormat.REAL_1CH
+        case _:
+            raise ValueError(f"Unsupported input shape/dtype: {x.shape}, complex={x.is_complex()}")
+
+
+def _to_2ch(x: Tensor | Sequence[Tensor], kind: Tensor | None = None) -> tuple[Tensor, InputFormat, ListMetadata | None]:
+    """Convert input to canonical (B, 2, H, W) format.
+
+    For list/sequence inputs, tensors are concatenated along the batch dimension.
+    Each element can be real (B_i, H, W), complex (B_i, H, W), or 2ch (B_i, 2, H, W).
+
+    Returns
+    -------
+    x_2ch
+        Tensor in canonical format (B, 2, H, W).
+    fmt
+        Input format (for reconstruction).
+    metadata
+        For list inputs, contains per-element formats and batch sizes.
+        None for single tensor inputs.
+    """
+    if isinstance(x, (list, tuple)):
+        if not all(isinstance(tensor, Tensor) for tensor in x):
+            bad = next(tensor for tensor in x if not isinstance(tensor, Tensor))
+            raise TypeError(f"List elements must be Tensors, got {type(bad)}")
+        converted = [_to_2ch_single(tensor) for tensor in x]
+        chunks_2ch = [tensor for tensor, _ in converted]
+        formats = [fmt for _, fmt in converted]
+        batch_sizes = [tensor.shape[0] for tensor in chunks_2ch]
+        x_2ch = torch.cat(chunks_2ch, dim=0)
+        if kind is not None:
+            x_2ch = _apply_kind_constraints(x_2ch, kind)
+        return x_2ch, InputFormat.LIST_2CH, ListMetadata(formats, batch_sizes)
+    x_2ch, fmt = _to_2ch_single(cast(Tensor, x))
+    if kind is not None:
+        x_2ch = _apply_kind_constraints(x_2ch, kind)
+    return x_2ch, fmt, None
+
+
+def _from_2ch_single(x_2ch: Tensor, fmt: InputFormat) -> Tensor:
+    match fmt:
+        case InputFormat.REAL_2CH:
+            return x_2ch
+        case InputFormat.COMPLEX_1CH:
+            return torch.view_as_complex(torch.moveaxis(x_2ch, 1, -1).contiguous())
+        case InputFormat.REAL_1CH:
+            return x_2ch[:, 0]
+        case _:
+            raise ValueError(f"Unsupported format: {fmt}")
+
+
+def _from_2ch(x_2ch: Tensor, fmt: InputFormat, kind: Tensor | None = None, metadata: ListMetadata | None = None) -> Tensor | list[Tensor]:
+    """Convert canonical (B, 2, H, W) back to original format."""
+    if kind is not None:
+        x_2ch = _apply_kind_constraints(x_2ch, kind)
+
+    match fmt:
+        case InputFormat.LIST_2CH:
+            if metadata is None:
+                raise ValueError("LIST_2CH format requires metadata")
+            chunks = x_2ch.split(metadata.batch_sizes, dim=0)
+            return [_from_2ch_single(chunk, elem_fmt) for chunk, elem_fmt in zip(chunks, metadata.formats, strict=True)]
+        case _:
+            return _from_2ch_single(x_2ch, fmt)
+
+
+def _apply_kind_constraints(x_2ch: Tensor, kind: Tensor) -> Tensor:
+    """Zero out imaginary channel for real kinds."""
+    result = x_2ch.clone()
+    for k in kind.unique():
+        k_idx = int(k.item())
+        if not is_complex_kind(k_idx):
+            idx = kind == k
+            result[idx, 1] = 0.0
+    return result
+
+
+def _create_noise(shape: tuple[int, ...], kind: Tensor, device: torch.device, dtype: torch.dtype) -> Tensor:
+    """Create noise with imag=0 for real kinds."""
+    noise = torch.randn(shape, device=device, dtype=dtype)
+    return _apply_kind_constraints(noise, kind)
 
 
 class DiffusionModel(torch.nn.Module):
@@ -89,7 +204,6 @@ class DiffusionModel(torch.nn.Module):
 
     @property
     def device(self) -> torch.device:
-        """Get device of the model (inferred from first parameter)."""
         return next(self.parameters()).device
 
     def beta(self, t: Tensor) -> Tensor:
@@ -109,68 +223,159 @@ class DiffusionModel(torch.nn.Module):
         ab = self.alpha_bar(t)
         return ab / (1.0 - ab).clamp(min=1e-8)
 
-    @staticmethod
-    def prepare_input(image: Tensor) -> Tensor:
-        """Convert native (B, H, W) to 2-channel (B, 2, H, W) for UNet."""
-        if image.is_complex():
-            return torch.moveaxis(torch.view_as_real(image), -1, 1)
-        return torch.stack([image, torch.zeros_like(image)], dim=1)
+    @overload
+    def normalize(self, x: Tensor, kind: Tensor, mask: Tensor) -> Tensor: ...
+    @overload
+    def normalize(self, x: Sequence[Tensor], kind: Tensor, mask: Tensor) -> list[Tensor]: ...
+    def normalize(self, x: Tensor | Sequence[Tensor], kind: Tensor, mask: Tensor) -> Tensor | list[Tensor]:
+        """Normalize input using per-kind running stats.
 
-    @staticmethod
-    def undo_prepare(image: Tensor, to_complex: bool) -> Tensor:
-        """Convert 2-channel (B, 2, H, W) back to native (B, H, W) format."""
-        if to_complex:
-            return torch.view_as_complex(torch.moveaxis(image, 1, -1).contiguous())
-        return image[:, 0]
-
-    def normalize(self, x: Tensor, kind: Tensor, mask: Tensor) -> Tensor:
-        """Normalize native (B, H, W) input using per-kind running stats."""
-        was_complex = x.is_complex()
-        x_2ch = self.prepare_input(x)
+        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
+        Returns same format as input (list returns list).
+        """
+        x_2ch, fmt, metadata = _to_2ch(x, kind)
         x_norm = self.normalizer.normalize(x_2ch, mask, kind)
-        return self.undo_prepare(x_norm, was_complex)
+        return _from_2ch(x_norm, fmt, kind, metadata)
 
-    def denormalize(self, x: Tensor, kind: Tensor) -> Tensor:
-        """Denormalize native (B, H, W) output back to original scale."""
-        was_complex = x.is_complex()
-        x_2ch = self.prepare_input(x)
+    @overload
+    def denormalize(self, x: Tensor, kind: Tensor) -> Tensor: ...
+    @overload
+    def denormalize(self, x: Sequence[Tensor], kind: Tensor) -> list[Tensor]: ...
+    def denormalize(self, x: Tensor | Sequence[Tensor], kind: Tensor) -> Tensor | list[Tensor]:
+        """Denormalize output back to original scale.
+
+        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
+        Returns same format as input (list returns list).
+        """
+        x_2ch, fmt, metadata = _to_2ch(x, kind)
         x_denorm = self.normalizer.denormalize(x_2ch, kind)
-        return self.undo_prepare(x_denorm, was_complex)
+        return _from_2ch(x_denorm, fmt, kind, metadata)
 
-    def q_sample(self, x0: Tensor, t: Tensor, noise: Tensor | None = None) -> Tensor:
-        """Sample from q(xₜ | x₀): xₜ = √ᾱ(t)·x₀ + √(1-ᾱ(t))·ε."""
+    @overload
+    def q_sample(
+        self,
+        x0: Tensor,
+        t: Tensor,
+        kind: Tensor,
+        noise: Tensor | None = None,
+    ) -> Tensor: ...
+    @overload
+    def q_sample(
+        self,
+        x0: Sequence[Tensor],
+        t: Tensor,
+        kind: Tensor,
+        noise: Sequence[Tensor] | None = None,
+    ) -> list[Tensor]: ...
+    def q_sample(
+        self,
+        x0: Tensor | Sequence[Tensor],
+        t: Tensor,
+        kind: Tensor,
+        noise: Tensor | Sequence[Tensor] | None = None,
+    ) -> Tensor | list[Tensor]:
+        """Sample from q(xₜ | x₀): xₜ = √ᾱ(t)·x₀ + √(1-ᾱ(t))·ε.
+
+        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
+        Returns same format as input (list returns list).
+        For real kinds, noise has zero imaginary component.
+        """
+        x0_2ch, fmt, metadata = _to_2ch(x0, kind)
+
         if noise is None:
-            noise = torch.randn_like(x0)
-        ab = self.alpha_bar(t).view(-1, 1, 1)
-        return ab.clamp(min=0.0).sqrt() * x0 + (1.0 - ab).clamp(min=0.0).sqrt() * noise
+            noise_2ch = _create_noise(x0_2ch.shape, kind, x0_2ch.device, x0_2ch.dtype)
+        else:
+            noise_2ch, _, _ = _to_2ch(noise, kind)
 
-    def forward(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput:
-        """Predict x₀ and noise from noisy input. Output format matches input."""
-        is_native = x_t.ndim == 3
-        was_complex = x_t.is_complex()
-        x_t_2ch = self.prepare_input(x_t)
+        ab = self.alpha_bar(t).view(-1, 1, 1, 1)
+        x_t_2ch = ab.clamp(min=0.0).sqrt() * x0_2ch + (1.0 - ab).clamp(min=0.0).sqrt() * noise_2ch
+
+        return _from_2ch(x_t_2ch, fmt, kind, metadata)
+
+    @overload
+    def forward(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput: ...
+    @overload
+    def forward(self, x_t: Sequence[Tensor], t: Tensor, kind: Tensor) -> DiffusionOutputList: ...
+    def forward(self, x_t: Tensor | Sequence[Tensor], t: Tensor, kind: Tensor) -> DiffusionOutput | DiffusionOutputList:
+        """Predict x₀ and noise from noisy input.
+
+        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
+        Returns DiffusionOutputList for list inputs, DiffusionOutput otherwise.
+        For real kinds, imaginary channel of outputs is zeroed.
+        """
+        x_t_2ch, fmt, metadata = _to_2ch(x_t, kind)
         cond = self.cond_mlp(t, kind)
-        x0_pred, noise_pred = self.unet(x_t_2ch, cond)
-        if is_native:
-            x0_pred = self.undo_prepare(x0_pred, was_complex)
-            noise_pred = self.undo_prepare(noise_pred, was_complex)
-        return DiffusionOutput(x0=x0_pred, noise=noise_pred)
+        x0_pred_2ch, noise_pred_2ch = self.unet(x_t_2ch, cond)
 
-    def predict_x0(self, x_t: Tensor, t: Tensor, noise: Tensor) -> Tensor:
-        """Recover x₀ = (xₜ - σ(t)·ε) / √ᾱ(t)."""
-        ab = self.alpha_bar(t).view(-1, 1, 1)
-        return (x_t - (1.0 - ab).clamp(min=0.0).sqrt() * noise) / ab.clamp(min=0.0).sqrt().clamp(min=1e-8)
+        x0_pred = _from_2ch(x0_pred_2ch, fmt, kind, metadata)
+        noise_pred = _from_2ch(noise_pred_2ch, fmt, kind, metadata)
 
-    def score(self, x_t: Tensor, t: Tensor, kind: Tensor) -> Tensor:
-        """Compute score ∇ₓ log p(xₜ) = -ε / σ(t)."""
+        if fmt == InputFormat.LIST_2CH:
+            return DiffusionOutputList(x0=cast(list[Tensor], x0_pred), noise=cast(list[Tensor], noise_pred))
+        return DiffusionOutput(x0=cast(Tensor, x0_pred), noise=cast(Tensor, noise_pred))
+
+    @overload
+    def predict_x0(
+        self,
+        x_t: Tensor,
+        t: Tensor,
+        noise: Tensor,
+        kind: Tensor,
+    ) -> Tensor: ...
+    @overload
+    def predict_x0(
+        self,
+        x_t: Sequence[Tensor],
+        t: Tensor,
+        noise: Sequence[Tensor],
+        kind: Tensor,
+    ) -> list[Tensor]: ...
+    def predict_x0(
+        self,
+        x_t: Tensor | Sequence[Tensor],
+        t: Tensor,
+        noise: Tensor | Sequence[Tensor],
+        kind: Tensor,
+    ) -> Tensor | list[Tensor]:
+        """Recover x₀ = (xₜ - σ(t)·ε) / √ᾱ(t).
+
+        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
+        Returns same format as input (list returns list).
+        """
+        x_t_2ch, fmt, metadata = _to_2ch(x_t, kind)
+        noise_2ch, _, _ = _to_2ch(noise, kind)
+
+        ab = self.alpha_bar(t).view(-1, 1, 1, 1)
+        x0_2ch = (x_t_2ch - (1.0 - ab).clamp(min=0.0).sqrt() * noise_2ch) / ab.clamp(min=0.0).sqrt().clamp(min=1e-8)
+
+        return _from_2ch(x0_2ch, fmt, kind, metadata)
+
+    @overload
+    def score(self, x_t: Tensor, t: Tensor, kind: Tensor) -> Tensor: ...
+    @overload
+    def score(self, x_t: Sequence[Tensor], t: Tensor, kind: Tensor) -> list[Tensor]: ...
+    def score(self, x_t: Tensor | Sequence[Tensor], t: Tensor, kind: Tensor) -> Tensor | list[Tensor]:
+        """Compute score ∇ₓ log p(xₜ) = -ε / σ(t).
+
+        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
+        Returns same format as input (list returns list).
+        """
         output = self.forward(x_t, t, kind)
-        sigma_t = self.sigma(t).view(-1, 1, 1)
-        return -output.noise / sigma_t.clamp(min=1e-8)
 
-    def __call__(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput:
-        """Forward pass."""
-        ret: DiffusionOutput = super().__call__(x_t, t, kind)
-        return ret
+        x_t_2ch, fmt, metadata = _to_2ch(x_t, kind)
+        noise_2ch, _, _ = _to_2ch(output.noise, kind)
+
+        sigma_t = self.sigma(t).view(-1, 1, 1, 1)
+        score_2ch = -noise_2ch / sigma_t.clamp(min=1e-8)
+
+        return _from_2ch(score_2ch, fmt, kind, metadata)
+
+    @overload
+    def __call__(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput: ...
+    @overload
+    def __call__(self, x_t: Sequence[Tensor], t: Tensor, kind: Tensor) -> DiffusionOutputList: ...
+    def __call__(self, x_t: Tensor | Sequence[Tensor], t: Tensor, kind: Tensor) -> DiffusionOutput | DiffusionOutputList:
+        return self.forward(x_t, t, kind)
 
     def load_checkpoint(self, checkpoint_path: Path | str) -> None:
         """Load weights from checkpoint, preferring EMA shadow weights if available."""

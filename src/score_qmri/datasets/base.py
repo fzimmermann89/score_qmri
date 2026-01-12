@@ -66,8 +66,14 @@ class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
     def __getitem__(self, idx: int) -> dict[str, Any]:
         """Get sample with image, mask, and kind tensors."""
         image = self._load_slice(self._get_h5_file(), idx)
-        # For complex: compare complex number to 0. For real: use small epsilon for float comparison.
-        mask = image != 0 if image.is_complex() else image.abs() > 1e-6
+
+        if image.is_complex() != self.kind.is_complex:
+            raise ValueError(
+                f"Kind/dtype mismatch: kind={self.kind.name} (complex={self.kind.is_complex}) "
+                f"but loaded image is_complex={image.is_complex()} from {self.h5_path}"
+            )
+
+        mask = image.abs() > 1e-6
 
         if self.scaling_factor != 1.0:
             image = image * self.scaling_factor
