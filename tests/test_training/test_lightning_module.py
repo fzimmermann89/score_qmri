@@ -63,7 +63,7 @@ def test_create_fixed_noise_for_all_kinds(module):
 
     for kind in DatasetKind:
         n = noise[int(kind)]
-        assert n.shape == (1, 2, 32, 32)
+        assert n.shape == (4, 2, 32, 32)
         if is_complex_kind(int(kind)):
             assert not torch.allclose(n[:, 1], torch.zeros_like(n[:, 1]))
         else:

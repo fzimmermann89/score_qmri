@@ -55,6 +55,8 @@ class DiffusionHparams:
     log_batch_interval: int
     warmup_steps: int
     ema_decay: float
+    attention_levels: tuple[int, ...]
+    head_dim: int
 
 
 class DiffusionLightningModule(LightningModule):
@@ -83,6 +85,8 @@ class DiffusionLightningModule(LightningModule):
         log_batch_interval: int = 200,
         warmup_steps: int = 2000,
         ema_decay: float = 0.9999,
+        attention_levels: tuple[int, ...] = (),
+        head_dim: int = 64,
     ) -> None:
         """
         Parameters
@@ -125,6 +129,10 @@ class DiffusionLightningModule(LightningModule):
             Number of warmup steps for linear LR warmup.
         ema_decay
             EMA decay rate for weight averaging.
+        attention_levels
+            Tuple of level indices where self-attention is applied.
+        head_dim
+            Dimension per attention head.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -137,6 +145,8 @@ class DiffusionLightningModule(LightningModule):
             channel_mult=channel_mult,
             cond_dim=cond_dim,
             num_kinds=NUM_DATASET_KINDS,
+            attention_levels=attention_levels,
+            head_dim=head_dim,
         )
         self.sampler: DDIMSampler = DDIMSampler(self.model, num_steps=validation_steps)
         self._fixed_noise: dict[int, Tensor] | None = None
@@ -354,12 +364,14 @@ class DiffusionLightningModule(LightningModule):
         if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
             return
 
+        import matplotlib.pyplot as plt
         import wandb
 
         size = self.hparams.validation_size
+        num_samples = 4
 
         if self._fixed_noise is None:
-            self._fixed_noise = create_fixed_noise((size, size))
+            self._fixed_noise = create_fixed_noise((size, size), num_samples=num_samples)
 
         sample_model: DiffusionModel = self.ema.shadow if self.ema is not None else self.model
         sample_model.eval()
@@ -368,19 +380,33 @@ class DiffusionLightningModule(LightningModule):
         with torch.no_grad():
             for kind_enum in VALIDATION_KINDS:
                 k = int(kind_enum)
-                kind_tensor = torch.tensor([k], device=self.device)
+                kind_tensor = torch.full((num_samples,), k, device=self.device, dtype=torch.long)
                 collect = kind_enum == DatasetKind.T1W_MAGNITUDE
 
-                sample = sampler.sample((1, 2, size, size), kind_tensor, self._fixed_noise[k], collect_stats=collect)
-                sample_denorm = sample_model.denormalize(sample, kind_tensor)
+                samples = sampler.sample(
+                    (num_samples, 2, size, size),
+                    kind_tensor,
+                    self._fixed_noise[k],
+                    collect_stats=collect,
+                )
+                samples_denorm: Tensor = sample_model.denormalize(samples, kind_tensor)
 
-                if is_complex_kind(k):
-                    img_np = (sample_denorm[0, 0] ** 2 + sample_denorm[0, 1] ** 2).sqrt().cpu().numpy()
-                else:
-                    img_np = sample_denorm[0, 0].cpu().numpy()
+                fig, axes = plt.subplots(1, num_samples, figsize=(3 * num_samples, 3))
+                if num_samples == 1:
+                    axes = [axes]
+                for i in range(num_samples):
+                    sample_i = samples_denorm[i]
+                    if is_complex_kind(k):
+                        img = (sample_i[0] ** 2 + sample_i[1] ** 2).sqrt().cpu().numpy()
+                    else:
+                        img = sample_i[0].cpu().numpy()
+                    axes[i].imshow(img, cmap="gray")
+                    axes[i].axis("off")
+                fig.suptitle(f"{kind_enum.name} @ step {self.global_step}", fontsize=10)
+                fig.tight_layout()
 
-                image = wandb.Image(img_np, caption=f"step_{self.global_step}")
-                self.logger.experiment.log({f"samples/{kind_enum.name}": image, "global_step": self.global_step})
+                self.logger.experiment.log({f"samples/{kind_enum.name}": wandb.Image(fig), "global_step": self.global_step})
+                plt.close(fig)
 
                 if collect and sampler.last_stats is not None:
                     self._log_sampling_stats(kind_enum.name, sampler.last_stats)

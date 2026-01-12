@@ -153,13 +153,26 @@ class DDIMSampler:
 
         return x_prev, x0_pred
 
+def create_fixed_noise(image_shape: tuple[int, int], num_samples: int = 4, seed: int = 42) -> dict[int, Tensor]:
+    """Create reproducible noise for each dataset kind in 2ch format.
 
-def create_fixed_noise(image_shape: tuple[int, int], seed: int = 42) -> dict[int, Tensor]:
-    """Create reproducible noise for each dataset kind in 2ch format."""
+    Parameters
+    ----------
+    image_shape
+        Spatial dimensions (H, W).
+    num_samples
+        Number of noise samples per kind (batch size).
+    seed
+        Random seed for reproducibility.
+
+    Returns
+    -------
+        Dict mapping kind index to noise tensor of shape (num_samples, 2, H, W).
+    """
     gen = torch.Generator().manual_seed(seed)
     result = {}
     for kind in DatasetKind:
-        shape = (1, 2, *image_shape)
+        shape = (num_samples, 2, *image_shape)
         noise = torch.randn(shape, generator=gen)
         if not is_complex_kind(int(kind)):
             noise[:, 1] = 0.0

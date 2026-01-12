@@ -15,6 +15,46 @@ class GroupNorm32(torch.nn.GroupNorm):
         return super().forward(input.float()).to(input.dtype)
 
 
+class Attention(torch.nn.Module):
+    """Efficient self-attention using SDPA (Flash Attention compatible).
+
+    Uses fused QKV projection, pre-norm, and ReZero residual connection.
+    PyTorch's scaled_dot_product_attention auto-selects the optimal backend
+    (Flash Attention, Memory Efficient, or Math) based on inputs and hardware.
+    """
+
+    def __init__(self, channels: int, head_dim: int = 64) -> None:
+        super().__init__()
+        self.head_dim = head_dim
+        self.num_heads = max(1, channels // head_dim)
+        inner_dim = self.num_heads * head_dim
+
+        self.norm = GroupNorm32(min(8, channels), channels)
+        self.to_qkv = torch.nn.Conv2d(channels, inner_dim * 3, 1, bias=False)
+        self.to_out = torch.nn.Sequential(
+            torch.nn.Conv2d(inner_dim, channels, 1),
+            torch.nn.Dropout(0.0),
+        )
+        self.alpha = torch.nn.Parameter(torch.tensor(0.1))
+
+    def forward(self, x: Tensor) -> Tensor:
+        B, C, H, W = x.shape
+        h = self.norm(x)
+
+        qkv = self.to_qkv(h)  # (B, 3*inner_dim, H, W)
+        qkv = qkv.view(B, 3, self.num_heads, self.head_dim, H * W)  # (B, 3, heads, head_dim, N)
+        qkv = qkv.permute(1, 0, 2, 4, 3)  # (3, B, heads, N, head_dim)
+        q, k, v = qkv.unbind(0)  # each (B, heads, N, head_dim)
+
+        out: Tensor = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+
+        out = out.permute(0, 1, 3, 2)  # (B, heads, head_dim, N)
+        out = out.reshape(B, self.num_heads * self.head_dim, H, W)
+        out = self.to_out(out)
+
+        return x + self.alpha * out
+
+
 class ResBlock(torch.nn.Module):
     """Residual block with FiLM conditioning and ReZero initialization."""
 
@@ -88,21 +128,32 @@ class Upsample(torch.nn.Module):
 
 
 class EncoderBlock(torch.nn.Module):
-    """ResBlock with optional downsampling. Returns (forward, skip)."""
+    """ResBlock with optional attention and downsampling. Returns (forward, skip)."""
 
-    def __init__(self, in_ch: int, out_ch: int, cond_dim: int, downsample: bool = False) -> None:
+    def __init__(
+        self,
+        in_ch: int,
+        out_ch: int,
+        cond_dim: int,
+        downsample: bool = False,
+        use_attention: bool = False,
+        head_dim: int = 64,
+    ) -> None:
         super().__init__()
         self.res = ResBlock(in_ch, out_ch, cond_dim)
+        self.attn = Attention(out_ch, head_dim) if use_attention else None
         self.down = Downsample(out_ch) if downsample else None
 
     def forward(self, x: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
         skip = self.res(x, cond)
+        if self.attn is not None:
+            skip = self.attn(skip)
         out = self.down(skip) if self.down is not None else skip
         return out, skip
 
 
 class DecoderBlock(torch.nn.Module):
-    """Optional upsampling with ResBlock and skip concat. Returns (forward, skip)."""
+    """Optional upsampling with ResBlock, attention, and skip concat."""
 
     def __init__(
         self,
@@ -112,15 +163,20 @@ class DecoderBlock(torch.nn.Module):
         cond_dim: int,
         upsample: bool = False,
         upsample_mode: UpsampleMode = "nearest",
+        use_attention: bool = False,
+        head_dim: int = 64,
     ) -> None:
         super().__init__()
         self.up = Upsample(in_ch, upsample_mode) if upsample else None
         self.res = ResBlock(in_ch + skip_ch, out_ch, cond_dim)
+        self.attn = Attention(out_ch, head_dim) if use_attention else None
 
     def forward(self, x: Tensor, skip: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
         if self.up is not None:
             x = self.up(x)
         h = self.res(torch.cat([x, skip], dim=1), cond)
+        if self.attn is not None:
+            h = self.attn(h)
         return h, h
 
 
@@ -140,10 +196,11 @@ class OutputHead(torch.nn.Module):
 
 
 class UNet(torch.nn.Module):
-    """UNet with dual prediction heads and FiLM conditioning.
+    """UNet with dual prediction heads, FiLM conditioning, and optional attention.
 
     Predicts both clean image (x₀) and noise (ε) through separate output heads.
     Architecture uses symmetric EncoderBlock/DecoderBlock with skip connections.
+    Attention is applied at specified resolution levels for global context.
 
     Input: 2 channels (real/imag for complex MRI)
     Output: (x0_pred, noise_pred), each (B, 2, H, W)
@@ -157,9 +214,12 @@ class UNet(torch.nn.Module):
         channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
         cond_dim: int = 128,
         upsample_mode: UpsampleMode = "nearest",
+        attention_levels: tuple[int, ...] = (),
+        head_dim: int = 64,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
+        attention_set = set(attention_levels)
 
         self.input_conv = torch.nn.Conv2d(in_channels, base_channels, 3, padding=1)
 
@@ -169,23 +229,38 @@ class UNet(torch.nn.Module):
 
         for level, mult in enumerate(channel_mult):
             out_ch = base_channels * mult
+            use_attn = level in attention_set
             for i in range(num_res_blocks):
                 is_last_at_level = i == num_res_blocks - 1
                 do_down = is_last_at_level and level < len(channel_mult) - 1
-                self.encoder.append(EncoderBlock(ch, out_ch, cond_dim, downsample=do_down))
+                self.encoder.append(EncoderBlock(ch, out_ch, cond_dim, downsample=do_down, use_attention=use_attn, head_dim=head_dim))
                 encoder_channels.append(out_ch)
                 ch = out_ch
 
         self.middle = ResBlock(ch, ch, cond_dim)
+        last_level = len(channel_mult) - 1
+        self.middle_attn: Attention | None = Attention(ch, head_dim) if last_level in attention_set else None
 
         self.decoder = torch.nn.ModuleList()
         for level, mult in reversed(list(enumerate(channel_mult))):
             out_ch = base_channels * mult
+            use_attn = level in attention_set
             for i in range(num_res_blocks):
                 is_first_at_level = i == 0
                 do_up = is_first_at_level and level < len(channel_mult) - 1
                 skip_ch = encoder_channels.pop()
-                self.decoder.append(DecoderBlock(ch, out_ch, skip_ch, cond_dim, upsample=do_up, upsample_mode=upsample_mode))
+                self.decoder.append(
+                    DecoderBlock(
+                        ch,
+                        out_ch,
+                        skip_ch,
+                        cond_dim,
+                        upsample=do_up,
+                        upsample_mode=upsample_mode,
+                        use_attention=use_attn,
+                        head_dim=head_dim,
+                    )
+                )
                 ch = out_ch
 
         self.x0_head = OutputHead(ch, 2, cond_dim, skip_ch=in_channels)
@@ -201,6 +276,8 @@ class UNet(torch.nn.Module):
             skips.append(skip)
 
         x = self.middle(x, cond)
+        if self.middle_attn is not None:
+            x = self.middle_attn(x)
 
         for block in self.decoder:
             x, _ = block(x, skips.pop(), cond)
