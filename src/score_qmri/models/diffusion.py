@@ -9,11 +9,12 @@ The model predicts both:
 - Clean image x0 (trained with SSIM + L1, auxiliary denoising task)
 """
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum, auto
 from pathlib import Path
-from typing import cast, overload
+from typing import Literal, cast, overload
 
 import torch
 from torch import Tensor
@@ -23,6 +24,8 @@ from score_qmri.datasets.kind import is_complex_kind
 from .conditioning import ConditioningMLP
 from .normalization import RunningNormalizer
 from .unet import UNet
+
+NoiseSchedule = Literal["linear", "cosine"]
 
 
 class InputFormat(IntEnum):
@@ -169,14 +172,15 @@ class DiffusionModel(torch.nn.Module):
         num_kinds: int = 14,
         attention_levels: tuple[int, ...] = (),
         head_dim: int = 64,
+        noise_schedule: NoiseSchedule = "linear",
     ) -> None:
         """
         Parameters
         ----------
         beta_min
-            Minimum noise rate β(0).
+            Minimum noise rate β(0) (for linear schedule).
         beta_max
-            Maximum noise rate β(1).
+            Maximum noise rate β(1) (for linear schedule).
         base_channels
             UNet base channel count.
         num_res_blocks
@@ -192,10 +196,13 @@ class DiffusionModel(torch.nn.Module):
             E.g., (3, 4) applies attention at 32×32 and 16×16 for 256×256 input.
         head_dim
             Dimension per attention head (default 64, following Stable Diffusion).
+        noise_schedule
+            Noise schedule type: "linear" (VP-SDE default) or "cosine" (Nichol & Dhariwal).
         """
         super().__init__()
         self.beta_min = beta_min
         self.beta_max = beta_max
+        self.noise_schedule = noise_schedule
 
         self.cond_mlp = ConditioningMLP(cond_dim=cond_dim, num_kinds=num_kinds)
         self.unet = torch.compile(
@@ -216,12 +223,27 @@ class DiffusionModel(torch.nn.Module):
         return next(self.parameters()).device
 
     def beta(self, t: Tensor) -> Tensor:
-        """Instantaneous noise rate β(t) = β_min + t(β_max - β_min)."""
+        """Instantaneous noise rate β(t).
+
+        Note: Returns the linear schedule formula. For "cosine" schedule, this
+        value is not strictly used by the sampler (which relies on alpha_bar),
+        but represents the derivative of log(alpha_bar).
+        """
         return self.beta_min + t * (self.beta_max - self.beta_min)
 
     def alpha_bar(self, t: Tensor) -> Tensor:
         """Cumulative signal variance ᾱ(t) = exp(-∫₀ᵗ β(s)ds)."""
+        if self.noise_schedule == "cosine":
+            return self._alpha_bar_cosine(t)
         return torch.exp(-self.beta_min * t - 0.5 * (self.beta_max - self.beta_min) * t**2)
+
+    def _alpha_bar_cosine(self, t: Tensor, s: float = 0.008) -> Tensor:
+        """Cosine schedule: ᾱ(t) = f(t)/f(0) where f(t) = cos²((t+s)/(1+s) * π/2)."""
+        # Ensure t is float32 to avoid precision issues
+        t = t.float()
+        f_t = torch.cos((t + s) / (1 + s) * math.pi / 2) ** 2
+        f_0 = math.cos(s / (1 + s) * math.pi / 2) ** 2
+        return f_t / f_0
 
     def sigma(self, t: Tensor) -> Tensor:
         """Noise standard deviation σ(t) = √(1 - ᾱ(t))."""

@@ -14,6 +14,7 @@ from torch import Tensor
 from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind, is_complex_kind
 from score_qmri.models.diffusion import (
     DiffusionModel,
+    NoiseSchedule,
     _apply_kind_constraints,
     _create_noise,
 )
@@ -57,6 +58,7 @@ class DiffusionHparams:
     ema_decay: float
     attention_levels: tuple[int, ...]
     head_dim: int
+    noise_schedule: NoiseSchedule
 
 
 class DiffusionLightningModule(LightningModule):
@@ -87,6 +89,7 @@ class DiffusionLightningModule(LightningModule):
         ema_decay: float = 0.9999,
         attention_levels: tuple[int, ...] = (),
         head_dim: int = 64,
+        noise_schedule: NoiseSchedule = "linear",
     ) -> None:
         """
         Parameters
@@ -133,6 +136,8 @@ class DiffusionLightningModule(LightningModule):
             Tuple of level indices where self-attention is applied.
         head_dim
             Dimension per attention head.
+        noise_schedule
+            Noise schedule type ("linear" or "cosine").
         """
         super().__init__()
         self.save_hyperparameters()
@@ -147,6 +152,7 @@ class DiffusionLightningModule(LightningModule):
             num_kinds=NUM_DATASET_KINDS,
             attention_levels=attention_levels,
             head_dim=head_dim,
+            noise_schedule=noise_schedule,
         )
         self.sampler: DDIMSampler = DDIMSampler(self.model, num_steps=validation_steps)
         self._fixed_noise: dict[int, Tensor] | None = None
