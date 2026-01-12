@@ -6,6 +6,18 @@ from typing import Literal
 import torch
 from torch import Tensor
 
+from score_qmri.datasets.kind import is_complex_kind
+
+
+def create_channel_mask(kind: Tensor, device: torch.device) -> Tensor:
+    """Create (B, 2, 1, 1) channel mask: [1,1] for complex kinds, [1,0] for real kinds."""
+    B = kind.shape[0]
+    mask = torch.ones(B, 2, 1, 1, device=device)
+    for i in range(B):
+        if not is_complex_kind(int(kind[i].item())):
+            mask[i, 1] = 0.0
+    return mask
+
 
 def _sliding_window(
     x: Tensor,
@@ -85,20 +97,41 @@ def _sliding_window(
 def noise_loss(
     pred: Tensor,
     target: Tensor,
-    mask: Tensor | None = None,
+    spatial_mask: Tensor | None = None,
+    channel_mask: Tensor | None = None,
     reduction: Literal["mean", "none"] = "mean",
 ) -> Tensor:
-    """MSE loss on noise prediction. Supports complex and real tensors."""
-    diff_sq = (pred - target).abs().square()
-    spatial_dims = tuple(range(1, diff_sq.ndim))
+    """MSE loss on noise prediction for (B, 2, H, W) tensors.
 
-    if mask is None:
-        loss = diff_sq.mean(dim=spatial_dims)
-    else:
-        mask_f = mask.float()
+    Parameters
+    ----------
+    pred, target
+        Prediction and target tensors (B, 2, H, W).
+    spatial_mask
+        Spatial weight mask (B, H, W) or (B, 1, H, W).
+    channel_mask
+        Channel mask (B, 2, 1, 1) to ignore imag channel for real kinds.
+    """
+    diff_sq = (pred - target).square()
+
+    if channel_mask is not None:
+        diff_sq = diff_sq * channel_mask
+
+    if spatial_mask is not None:
+        mask_f = spatial_mask.float()
         if diff_sq.ndim == 4 and mask_f.ndim == 3:
             mask_f = mask_f.unsqueeze(1)
-        loss = (diff_sq * mask_f).sum(dim=spatial_dims) / mask_f.sum(dim=spatial_dims).clamp(min=1)
+        diff_sq = diff_sq * mask_f
+        n_elements = mask_f.sum(dim=(-2, -1))
+        if channel_mask is not None:
+            n_elements = n_elements * channel_mask.squeeze(-1).squeeze(-1).sum(dim=1, keepdim=True)
+        loss = diff_sq.sum(dim=(1, 2, 3)) / n_elements.sum(dim=1).clamp(min=1)
+    else:
+        if channel_mask is not None:
+            n_channels = channel_mask.squeeze(-1).squeeze(-1).sum(dim=1)
+            loss = diff_sq.sum(dim=(1, 2, 3)) / (diff_sq.shape[2] * diff_sq.shape[3] * n_channels).clamp(min=1)
+        else:
+            loss = diff_sq.mean(dim=(1, 2, 3))
 
     if reduction == "mean":
         return loss.mean()
@@ -111,20 +144,41 @@ def noise_loss(
 def l1_loss(
     pred: Tensor,
     target: Tensor,
-    mask: Tensor | None = None,
+    spatial_mask: Tensor | None = None,
+    channel_mask: Tensor | None = None,
     reduction: Literal["mean", "none"] = "mean",
 ) -> Tensor:
-    """L1 loss. Supports complex and real tensors."""
-    diff = (pred - target).abs()
-    spatial_dims = (-2, -1)
+    """L1 loss for (B, 2, H, W) tensors.
 
-    if mask is None:
-        loss = diff.mean(dim=spatial_dims)
-    else:
-        mask_f = mask.float()
+    Parameters
+    ----------
+    pred, target
+        Prediction and target tensors (B, 2, H, W).
+    spatial_mask
+        Spatial weight mask (B, H, W) or (B, 1, H, W).
+    channel_mask
+        Channel mask (B, 2, 1, 1) to ignore imag channel for real kinds.
+    """
+    diff = (pred - target).abs()
+
+    if channel_mask is not None:
+        diff = diff * channel_mask
+
+    if spatial_mask is not None:
+        mask_f = spatial_mask.float()
         if diff.ndim == 4 and mask_f.ndim == 3:
             mask_f = mask_f.unsqueeze(1)
-        loss = (diff * mask_f).sum(dim=spatial_dims) / mask_f.sum(dim=spatial_dims).clamp(min=1)
+        diff = diff * mask_f
+        n_elements = mask_f.sum(dim=(-2, -1))
+        if channel_mask is not None:
+            n_elements = n_elements * channel_mask.squeeze(-1).squeeze(-1).sum(dim=1, keepdim=True)
+        loss = diff.sum(dim=(1, 2, 3)) / n_elements.sum(dim=1).clamp(min=1)
+    else:
+        if channel_mask is not None:
+            n_channels = channel_mask.squeeze(-1).squeeze(-1).sum(dim=1)
+            loss = diff.sum(dim=(1, 2, 3)) / (diff.shape[2] * diff.shape[3] * n_channels).clamp(min=1)
+        else:
+            loss = diff.mean(dim=(1, 2, 3))
 
     if reduction == "mean":
         return loss.mean()
@@ -220,21 +274,27 @@ def _ssim_loss_real(
 def ssim_loss(
     pred: Tensor,
     target: Tensor,
-    mask: Tensor | None = None,
+    spatial_mask: Tensor | None = None,
+    channel_mask: Tensor | None = None,
     data_range: Tensor | float | None = None,
     window_size: int = 7,
     k1: float = 0.01,
     k2: float = 0.03,
     reduction: Literal["mean", "none"] = "mean",
 ) -> Tensor:
-    """SSIM loss (1 - SSIM). For complex: computes on real/imag separately, averages."""
-    if pred.is_complex():
-        mask_4d = mask.unsqueeze(1) if mask is not None and mask.ndim == 3 else mask
-        loss_real = _ssim_loss_real(pred.real.unsqueeze(1), target.real.unsqueeze(1), mask_4d, data_range, window_size, k1, k2, reduction)
-        loss_imag = _ssim_loss_real(pred.imag.unsqueeze(1), target.imag.unsqueeze(1), mask_4d, data_range, window_size, k1, k2, reduction)
-        return (loss_real + loss_imag) / 2
+    """SSIM loss for (B, 2, H, W) tensors. Computes per-channel then combines."""
+    loss_ch0 = _ssim_loss_real(pred[:, 0:1], target[:, 0:1], spatial_mask, data_range, window_size, k1, k2, "none")
+    loss_ch1 = _ssim_loss_real(pred[:, 1:2], target[:, 1:2], spatial_mask, data_range, window_size, k1, k2, "none")
 
-    if pred.ndim == 3:
-        return _ssim_loss_real(pred.unsqueeze(1), target.unsqueeze(1), mask, data_range, window_size, k1, k2, reduction)
+    if channel_mask is not None:
+        ch_weights = channel_mask[:, :, 0, 0]
+        loss = (loss_ch0 * ch_weights[:, 0:1] + loss_ch1 * ch_weights[:, 1:2]) / ch_weights.sum(dim=1, keepdim=True).clamp(min=1)
+    else:
+        loss = (loss_ch0 + loss_ch1) / 2
 
-    return _ssim_loss_real(pred, target, mask, data_range, window_size, k1, k2, reduction)
+    if reduction == "mean":
+        return loss.mean()
+    elif reduction == "none":
+        return loss
+    else:
+        raise ValueError(f"Invalid reduction: {reduction}. Must be 'mean' or 'none'")

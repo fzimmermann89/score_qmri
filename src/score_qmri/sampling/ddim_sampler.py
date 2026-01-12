@@ -5,8 +5,12 @@ from dataclasses import dataclass, field
 import torch
 from torch import Tensor
 
-from score_qmri.datasets.kind import DatasetKind
-from score_qmri.models.diffusion import DiffusionModel
+from score_qmri.datasets.kind import DatasetKind, is_complex_kind
+from score_qmri.models.diffusion import (
+    DiffusionModel,
+    _apply_kind_constraints,
+    _create_noise,
+)
 
 
 @dataclass
@@ -52,7 +56,7 @@ class DDIMSampler:
         Parameters
         ----------
         shape
-            Output shape (B, H, W).
+            Output shape (B, 2, H, W).
         kind
             Dataset kind indices (B,).
         initial_noise
@@ -62,17 +66,26 @@ class DDIMSampler:
 
         Returns
         -------
-        Sampled tensor in normalized space (B, H, W).
+        Sampled tensor in normalized space (B, 2, H, W).
         """
         device = self.model.device
         B = shape[0]
         kind = torch.zeros(B, dtype=torch.long, device=device) if kind is None else kind.to(device)
-        x = initial_noise.to(device) if initial_noise is not None else torch.randn(shape, device=device)
+
+        if initial_noise is not None:
+            x = initial_noise.to(device)
+            if x.ndim == 3:
+                x = torch.stack([x, torch.zeros_like(x)], dim=1)
+        else:
+            x = _create_noise(shape, kind, device, torch.float32)
+
+        x = _apply_kind_constraints(x, kind)
 
         eps = 1e-3
         timesteps = torch.linspace(1.0 - eps, eps, self.num_steps + 1, device=device)
 
         stats = SamplingStats() if collect_stats else None
+        x0_pred = x
 
         with torch.no_grad():
             for i in range(self.num_steps):
@@ -93,34 +106,35 @@ class DDIMSampler:
         stats: SamplingStats | None = None,
     ) -> tuple[Tensor, Tensor]:
         output = self.model(x, t, kind)
-        x0_pred = self.model.predict_x0(x, t, output.noise)
-        x0_pred = torch.complex(x0_pred.real.clamp(-6, 6), x0_pred.imag.clamp(-6, 6)) if x0_pred.is_complex() else x0_pred.clamp(-6, 6)
+        noise_pred = output.noise
+        x0_pred = self.model.predict_x0(x, t, noise_pred, kind)
+        x0_pred = x0_pred.clamp(-6, 6)
 
-        ab_t = self.model.alpha_bar(t).view(-1, 1, 1)
-        ab_prev = self.model.alpha_bar(t_prev).view(-1, 1, 1)
+        ab_t = self.model.alpha_bar(t).view(-1, 1, 1, 1)
+        ab_prev = self.model.alpha_bar(t_prev).view(-1, 1, 1, 1)
 
         if stats is not None:
             should_log = step_idx < 5 or step_idx % 25 == 0 or step_idx == self.num_steps - 1
             if should_log:
-                x_abs = x.abs() if x.is_complex() else x
-                x0_abs = x0_pred.abs() if x0_pred.is_complex() else x0_pred
-                noise_abs = output.noise.abs() if output.noise.is_complex() else output.noise
+                x_mag = (x[:, 0] ** 2 + x[:, 1] ** 2).sqrt()
+                x0_mag = (x0_pred[:, 0] ** 2 + x0_pred[:, 1] ** 2).sqrt()
+                noise_mag = (noise_pred[:, 0] ** 2 + noise_pred[:, 1] ** 2).sqrt()
 
                 stats.steps.append(step_idx)
                 stats.t_values.append(t[0].item())
-                stats.alpha_bar.append(ab_t[0, 0, 0].item())
-                stats.x_min.append(x_abs.min().item())
-                stats.x_max.append(x_abs.max().item())
-                stats.x_mean.append(x_abs.mean().item())
-                stats.x_std.append(x_abs.std().item())
-                stats.x0_min.append(x0_abs.min().item())
-                stats.x0_max.append(x0_abs.max().item())
-                stats.x0_mean.append(x0_abs.mean().item())
-                stats.x0_std.append(x0_abs.std().item())
-                stats.noise_min.append(noise_abs.min().item())
-                stats.noise_max.append(noise_abs.max().item())
-                stats.noise_mean.append(noise_abs.mean().item())
-                stats.noise_std.append(noise_abs.std().item())
+                stats.alpha_bar.append(ab_t[0, 0, 0, 0].item())
+                stats.x_min.append(x_mag.min().item())
+                stats.x_max.append(x_mag.max().item())
+                stats.x_mean.append(x_mag.mean().item())
+                stats.x_std.append(x_mag.std().item())
+                stats.x0_min.append(x0_mag.min().item())
+                stats.x0_max.append(x0_mag.max().item())
+                stats.x0_mean.append(x0_mag.mean().item())
+                stats.x0_std.append(x0_mag.std().item())
+                stats.noise_min.append(noise_mag.min().item())
+                stats.noise_max.append(noise_mag.max().item())
+                stats.noise_mean.append(noise_mag.mean().item())
+                stats.noise_std.append(noise_mag.std().item())
                 stats.intermediates.append(x0_pred.detach().cpu())
 
         one_minus_ab_t = (1 - ab_t).clamp(min=1e-8)
@@ -128,27 +142,26 @@ class DDIMSampler:
         sigma_sq = self.eta**2 * (one_minus_ab_prev / one_minus_ab_t * (1 - ab_t / ab_prev.clamp(min=1e-8)))
         sigma = sigma_sq.clamp(min=0.0).sqrt()
 
-        pred_dir = (1 - ab_prev - sigma**2).clamp(min=0.0).sqrt() * output.noise
+        pred_dir = (1 - ab_prev - sigma**2).clamp(min=0.0).sqrt() * noise_pred
         x_prev = ab_prev.sqrt() * x0_pred + pred_dir
 
         if self.eta > 0 and t_prev[0] > 1e-8:
-            x_prev = x_prev + sigma * torch.randn_like(x)
+            noise = _create_noise(x.shape, kind, x.device, x.dtype)
+            x_prev = x_prev + sigma * noise
+
+        x_prev = _apply_kind_constraints(x_prev, kind)
 
         return x_prev, x0_pred
 
 
 def create_fixed_noise(image_shape: tuple[int, int], seed: int = 42) -> dict[int, Tensor]:
-    """Create reproducible noise for each dataset kind with correct dtype."""
+    """Create reproducible noise for each dataset kind in 2ch format."""
     gen = torch.Generator().manual_seed(seed)
     result = {}
     for kind in DatasetKind:
-        shape = (1, *image_shape)
-        if kind.is_complex:
-            noise = torch.complex(
-                torch.randn(shape, generator=gen),
-                torch.randn(shape, generator=gen),
-            )
-        else:
-            noise = torch.randn(shape, generator=gen)
+        shape = (1, 2, *image_shape)
+        noise = torch.randn(shape, generator=gen)
+        if not is_complex_kind(int(kind)):
+            noise[:, 1] = 0.0
         result[int(kind)] = noise
     return result

@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind
+from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind, is_complex_kind
 from score_qmri.training.lightning_module import DiffusionLightningModule
 
 
@@ -20,7 +20,7 @@ def module():
 
 def test_training_step(module):
     batch = {
-        "image": torch.randn(2, 64, 64),
+        "image": torch.randn(2, 2, 64, 64),
         "mask": torch.ones(2, 64, 64, dtype=torch.bool),
         "kind": torch.tensor([0, 1]),
     }
@@ -29,11 +29,12 @@ def test_training_step(module):
     assert loss.item() >= 0
 
 
-def test_training_step_complex(module):
+def test_training_step_real_kind(module):
+    """Test training with real kinds (imag channel should stay zero)."""
     batch = {
-        "image": torch.complex(torch.randn(2, 64, 64), torch.randn(2, 64, 64)),
+        "image": torch.randn(2, 2, 64, 64),
         "mask": torch.ones(2, 64, 64, dtype=torch.bool),
-        "kind": torch.tensor([0, 1]),
+        "kind": torch.tensor([6, 6]),  # T1MAP is a real kind
     }
     loss = module.training_step(batch, 0)
     assert loss.requires_grad
@@ -62,17 +63,16 @@ def test_create_fixed_noise_for_all_kinds(module):
 
     for kind in DatasetKind:
         n = noise[int(kind)]
-        assert n.shape == (1, 32, 32)
-        if kind.is_complex:
-            assert n.is_complex()
+        assert n.shape == (1, 2, 32, 32)
+        if is_complex_kind(int(kind)):
+            assert not torch.allclose(n[:, 1], torch.zeros_like(n[:, 1]))
         else:
-            assert not n.is_complex()
+            assert torch.allclose(n[:, 1], torch.zeros_like(n[:, 1]))
 
 
 def test_training_step_partial_valid_samples(module):
-    """Test training_step handles mix of valid/invalid samples."""
     batch = {
-        "image": torch.randn(4, 64, 64),
+        "image": torch.randn(4, 2, 64, 64),
         "mask": torch.ones(4, 64, 64, dtype=torch.bool),
         "kind": torch.tensor([0, 1, 0, 1]),
     }
@@ -85,9 +85,8 @@ def test_training_step_partial_valid_samples(module):
 
 
 def test_training_step_all_invalid_samples(module):
-    """Test training_step returns zero loss when all samples have < 1000 valid pixels."""
     batch = {
-        "image": torch.randn(4, 64, 64),
+        "image": torch.randn(4, 2, 64, 64),
         "mask": torch.zeros(4, 64, 64, dtype=torch.bool),
         "kind": torch.tensor([0, 1, 0, 1]),
     }
@@ -99,9 +98,8 @@ def test_training_step_all_invalid_samples(module):
 
 
 def test_training_step_no_skip_on_partial_invalid(module):
-    """Test training_step never returns None even with invalid samples."""
     batch = {
-        "image": torch.randn(4, 64, 64),
+        "image": torch.randn(4, 2, 64, 64),
         "mask": torch.ones(4, 64, 64, dtype=torch.bool),
         "kind": torch.tensor([0, 0, 0, 0]),
     }

@@ -18,6 +18,7 @@ repos:
     rev: v1.19.1
     hooks:
       - id: mypy
+        exclude: ^debug_.*\.py$
         additional_dependencies:
           - torch>=2.8.0
           - torchvision>=0.20.0

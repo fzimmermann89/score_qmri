@@ -153,15 +153,30 @@ def _pad_or_crop_centered(tensor: torch.Tensor, target_h: int, target_w: int) ->
     return torch.nn.functional.pad(tensor, (pad_left, pad_right, pad_top, pad_bot))
 
 
-class _CollateWithResize:
-    """Picklable collate function for DataLoader with spawn multiprocessing."""
+def _to_2ch(image: torch.Tensor) -> torch.Tensor:
+    """Convert native (H, W) image to 2-channel (2, H, W) float tensor."""
+    if image.is_complex():
+        return torch.moveaxis(torch.view_as_real(image), -1, 0)
+    return torch.stack([image, torch.zeros_like(image)], dim=0)
+
+
+class Collate:
+    """Collate batch samples into tensors with center crop/pad and 2-channel conversion.
+
+    Converts complex tensors to (real, imag) and real tensors to (value, zeros).
+    Output image shape is (B, 2, H, W) float32.
+    """
 
     def __init__(self, target_h: int, target_w: int) -> None:
         self.target_h = target_h
         self.target_w = target_w
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
-        images = torch.stack([_pad_or_crop_centered(s["image"], self.target_h, self.target_w) for s in batch])
+        images_2ch = []
+        for s in batch:
+            img = _pad_or_crop_centered(s["image"], self.target_h, self.target_w)
+            images_2ch.append(_to_2ch(img))
+        images = torch.stack(images_2ch)
         masks = torch.stack([_pad_or_crop_centered(s["mask"].float(), self.target_h, self.target_w).bool() for s in batch])
         kinds = torch.stack([s["kind"] for s in batch])
         h5_paths = [s["h5_path"] for s in batch]
@@ -282,7 +297,7 @@ class MRIDataModule(LightningDataModule):
         return DataLoader(
             self.concat_ds,
             batch_sampler=batch_sampler,
-            collate_fn=_CollateWithResize(*self.sample_size),
+            collate_fn=Collate(*self.sample_size),
             num_workers=self.num_workers,
             persistent_workers=self.num_workers > 0,
             pin_memory=torch.cuda.is_available(),

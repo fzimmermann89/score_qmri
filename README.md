@@ -99,7 +99,7 @@ This format is used for:
 Complex data is stored as `torch.complex64` tensors `(H, W)` during loading.
 Magnitude data is stored as `torch.float32` tensors `(H, W)`.
 
-For network input, the `DiffusionModel.prepare_input()` converts to 2-channel tensors `(B, 2, H, W)`:
+For network input, the collate function converts all data to 2-channel tensors `(B, 2, H, W)`:
 - **Complex**: Channel 0 = real, Channel 1 = imaginary
 - **Magnitude**: Channel 0 = magnitude, Channel 1 = zeros
 
