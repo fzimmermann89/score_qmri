@@ -70,9 +70,6 @@ def test_create_fixed_noise():
             assert torch.allclose(n[:, 1], torch.zeros_like(n[:, 1]))
 
 
-
-
-
 def test_create_fixed_noise_reproducible():
     from score_qmri.datasets.kind import NUM_DATASET_KINDS
 

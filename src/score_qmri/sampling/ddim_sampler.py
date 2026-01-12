@@ -153,6 +153,7 @@ class DDIMSampler:
 
         return x_prev, x0_pred
 
+
 def create_fixed_noise(image_shape: tuple[int, int], num_samples: int = 4, seed: int = 42) -> dict[int, Tensor]:
     """Create reproducible noise for each dataset kind in 2ch format.
 
