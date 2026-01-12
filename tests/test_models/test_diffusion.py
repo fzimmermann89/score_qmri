@@ -453,3 +453,7 @@ def test_diffusion_cosine_schedule():
     t = torch.linspace(0, 1, 10)
     ab = model.alpha_bar(t)
     assert torch.all(ab[:-1] >= ab[1:])
+
+    beta = model.beta(torch.tensor([0.1, 0.5, 0.9]))
+    assert torch.isfinite(beta).all()
+    assert (beta > 0).all()

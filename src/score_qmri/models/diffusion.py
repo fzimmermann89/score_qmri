@@ -223,12 +223,11 @@ class DiffusionModel(torch.nn.Module):
         return next(self.parameters()).device
 
     def beta(self, t: Tensor) -> Tensor:
-        """Instantaneous noise rate β(t).
-
-        Note: Returns the linear schedule formula. For "cosine" schedule, this
-        value is not strictly used by the sampler (which relies on alpha_bar),
-        but represents the derivative of log(alpha_bar).
-        """
+        """Instantaneous noise rate β(t)."""
+        if self.noise_schedule == "cosine":
+            t = t.float().clamp(min=0.0, max=1.0 - 1e-5)
+            theta = (t + 0.008) / (1 + 0.008) * math.pi / 2
+            return math.pi / (1 + 0.008) * torch.tan(theta)
         return self.beta_min + t * (self.beta_max - self.beta_min)
 
     def alpha_bar(self, t: Tensor) -> Tensor:
