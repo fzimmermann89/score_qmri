@@ -29,7 +29,7 @@ class Attention(torch.nn.Module):
         self.num_heads = max(1, channels // head_dim)
         inner_dim = self.num_heads * head_dim
 
-        self.norm = GroupNorm32(min(8, channels), channels)
+        self.norm = GroupNorm32(get_groups(channels), channels)
         self.to_qkv = torch.nn.Conv2d(channels, inner_dim * 3, 1, bias=False)
         self.to_out = torch.nn.Sequential(
             torch.nn.Conv2d(inner_dim, channels, 1),
@@ -55,20 +55,33 @@ class Attention(torch.nn.Module):
         return x + self.alpha * out
 
 
+def get_groups(channels: int) -> int:
+    """Get the largest valid group size (<= 32) for GroupNorm."""
+    for groups in [32, 16, 8, 4, 2]:
+        if channels % groups == 0:
+            return groups
+    return 1
+
+
 class ResBlock(torch.nn.Module):
-    """Residual block with FiLM conditioning and ReZero initialization."""
+    """Residual block with FiLM conditioning and ReZero initialization.
+
+    Uses Pre-Norm architecture (GroupNorm -> SiLU -> Conv) for better gradient flow.
+    """
 
     def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128) -> None:
         super().__init__()
+        groups1 = get_groups(in_ch)
         self.block1 = torch.nn.Sequential(
+            GroupNorm32(groups1, in_ch),
+            torch.nn.SiLU(),
             torch.nn.Conv2d(in_ch, out_ch, 3, padding=1),
-            GroupNorm32(min(8, out_ch), out_ch),
-            torch.nn.SiLU(),
         )
+        groups2 = get_groups(out_ch)
         self.block2 = torch.nn.Sequential(
-            torch.nn.Conv2d(out_ch, out_ch, 3, padding=1),
-            GroupNorm32(min(8, out_ch), out_ch),
+            GroupNorm32(groups2, out_ch),
             torch.nn.SiLU(),
+            torch.nn.Conv2d(out_ch, out_ch, 3, padding=1),
         )
         self.cond_proj = torch.nn.Linear(cond_dim, out_ch * 2)
         self.skip = torch.nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else torch.nn.Identity()

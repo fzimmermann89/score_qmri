@@ -298,6 +298,7 @@ data:
 model:
   attention_levels: [3, 4]
   learning_rate: 1e-4
+  noise_schedule: cosine
 
 trainer:
   max_steps: 1000000

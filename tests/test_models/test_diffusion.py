@@ -435,3 +435,21 @@ def test_list_input_score():
     assert len(result) == 2
     assert result[0].shape == (2, 32, 32)
     assert result[1].shape == (3, 32, 32)
+
+
+def test_diffusion_cosine_schedule():
+    """Test cosine noise schedule properties."""
+    model = DiffusionModel(noise_schedule="cosine", base_channels=16, num_res_blocks=2, channel_mult=(1, 2))
+
+    # t=0 -> alpha_bar=1
+    ab_0 = model.alpha_bar(torch.tensor([0.0]))
+    assert torch.isclose(ab_0, torch.tensor(1.0), atol=1e-4)
+
+    # t=1 -> alpha_bar=0
+    ab_1 = model.alpha_bar(torch.tensor([1.0]))
+    assert torch.isclose(ab_1, torch.tensor(0.0), atol=1e-4)
+
+    # Monotonicity
+    t = torch.linspace(0, 1, 10)
+    ab = model.alpha_bar(t)
+    assert torch.all(ab[:-1] >= ab[1:])
