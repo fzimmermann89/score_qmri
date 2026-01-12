@@ -167,6 +167,8 @@ class DiffusionModel(torch.nn.Module):
         channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
         cond_dim: int = 128,
         num_kinds: int = 14,
+        attention_levels: tuple[int, ...] = (),
+        head_dim: int = 64,
     ) -> None:
         """
         Parameters
@@ -185,6 +187,11 @@ class DiffusionModel(torch.nn.Module):
             Conditioning embedding dimension.
         num_kinds
             Number of dataset kind classes for embedding.
+        attention_levels
+            Tuple of level indices where self-attention is applied (0-indexed).
+            E.g., (3, 4) applies attention at 32×32 and 16×16 for 256×256 input.
+        head_dim
+            Dimension per attention head (default 64, following Stable Diffusion).
         """
         super().__init__()
         self.beta_min = beta_min
@@ -198,6 +205,8 @@ class DiffusionModel(torch.nn.Module):
                 num_res_blocks=num_res_blocks,
                 channel_mult=channel_mult,
                 cond_dim=cond_dim,
+                attention_levels=attention_levels,
+                head_dim=head_dim,
             )
         )
         self.normalizer = RunningNormalizer(num_kinds=num_kinds)

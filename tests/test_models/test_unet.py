@@ -2,7 +2,7 @@
 
 import torch
 
-from score_qmri.models.unet import ResBlock, UNet
+from score_qmri.models.unet import Attention, ResBlock, UNet
 
 
 def test_resblock_forward():
@@ -67,3 +67,57 @@ def test_unet_dual_heads_different():
     cond = torch.randn(1, 64)
     x0, noise = unet(x, cond)
     assert not torch.allclose(x0, noise)
+
+
+def test_attention_forward():
+    """Test Attention block preserves shape."""
+    attn = Attention(channels=128, head_dim=64)
+    x = torch.randn(2, 128, 16, 16)
+    out = attn(x)
+    assert out.shape == x.shape
+
+
+def test_attention_residual():
+    """Test Attention has residual connection (output similar to input with small alpha)."""
+    attn = Attention(channels=64, head_dim=32)
+    x = torch.randn(1, 64, 8, 8)
+    out = attn(x)
+    diff = (out - x).abs().mean()
+    assert diff < x.abs().mean()
+
+
+def test_attention_gradient_flow():
+    """Test gradients flow through attention."""
+    attn = Attention(channels=64, head_dim=32)
+    x = torch.randn(2, 64, 8, 8, requires_grad=True)
+    out = attn(x)
+    out.sum().backward()
+    assert x.grad is not None
+    assert x.grad.abs().sum() > 0
+
+
+def test_unet_with_attention():
+    """Test UNet with attention at specified levels."""
+    unet = UNet(
+        in_channels=2,
+        base_channels=32,
+        num_res_blocks=2,
+        channel_mult=(1, 2, 4),
+        cond_dim=64,
+        attention_levels=(2,),
+        head_dim=32,
+    )
+    x = torch.randn(2, 2, 32, 32)
+    cond = torch.randn(2, 64)
+    x0, noise = unet(x, cond)
+    assert x0.shape == x.shape
+    assert noise.shape == x.shape
+
+
+def test_unet_attention_increases_params():
+    """Test that attention levels add parameters."""
+    unet_no_attn = UNet(base_channels=32, channel_mult=(1, 2, 4), attention_levels=())
+    unet_with_attn = UNet(base_channels=32, channel_mult=(1, 2, 4), attention_levels=(2,))
+    params_no_attn = sum(p.numel() for p in unet_no_attn.parameters())
+    params_with_attn = sum(p.numel() for p in unet_with_attn.parameters())
+    assert params_with_attn > params_no_attn
