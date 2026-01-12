@@ -54,16 +54,15 @@ class DiffusionOutputList:
 
 def _to_2ch_single(x: Tensor) -> tuple[Tensor, InputFormat]:
     """Convert single tensor to canonical (B, 2, H, W) format."""
-    if x.ndim == 4 and x.shape[1] == 2 and not x.is_complex():
-        return x, InputFormat.REAL_2CH
-    elif x.ndim == 3 and x.is_complex():
-        x_2ch = torch.moveaxis(torch.view_as_real(x), -1, 1)
-        return x_2ch, InputFormat.COMPLEX_1CH
-    elif x.ndim == 3 and not x.is_complex():
-        x_2ch = torch.stack([x, torch.zeros_like(x)], dim=1)
-        return x_2ch, InputFormat.REAL_1CH
-    else:
-        raise ValueError(f"Unsupported input shape/dtype: {x.shape}, complex={x.is_complex()}")
+    match (x.ndim, x.is_complex()):
+        case (4, False) if x.shape[1] == 2:
+            return x, InputFormat.REAL_2CH
+        case (3, True):
+            return torch.moveaxis(torch.view_as_real(x), -1, 1), InputFormat.COMPLEX_1CH
+        case (3, False):
+            return torch.stack([x, torch.zeros_like(x)], dim=1), InputFormat.REAL_1CH
+        case _:
+            raise ValueError(f"Unsupported input shape/dtype: {x.shape}, complex={x.is_complex()}")
 
 
 def _to_2ch(x: Tensor | Sequence[Tensor], kind: Tensor | None = None) -> tuple[Tensor, InputFormat, ListMetadata | None]:
@@ -83,25 +82,33 @@ def _to_2ch(x: Tensor | Sequence[Tensor], kind: Tensor | None = None) -> tuple[T
         None for single tensor inputs.
     """
     if isinstance(x, (list, tuple)):
-        chunks_2ch = []
-        formats = []
-        batch_sizes = []
-        for tensor in x:
-            if not isinstance(tensor, Tensor):
-                raise TypeError(f"List elements must be Tensors, got {type(tensor)}")
-            t_2ch, t_fmt = _to_2ch_single(tensor)
-            chunks_2ch.append(t_2ch)
-            formats.append(t_fmt)
-            batch_sizes.append(t_2ch.shape[0])
+        if not all(isinstance(tensor, Tensor) for tensor in x):
+            bad = next(tensor for tensor in x if not isinstance(tensor, Tensor))
+            raise TypeError(f"List elements must be Tensors, got {type(bad)}")
+        converted = [_to_2ch_single(tensor) for tensor in x]
+        chunks_2ch = [tensor for tensor, _ in converted]
+        formats = [fmt for _, fmt in converted]
+        batch_sizes = [tensor.shape[0] for tensor in chunks_2ch]
         x_2ch = torch.cat(chunks_2ch, dim=0)
         if kind is not None:
             x_2ch = _apply_kind_constraints(x_2ch, kind)
         return x_2ch, InputFormat.LIST_2CH, ListMetadata(formats, batch_sizes)
-    else:
-        x_2ch, fmt = _to_2ch_single(cast(Tensor, x))
-        if kind is not None:
-            x_2ch = _apply_kind_constraints(x_2ch, kind)
-        return x_2ch, fmt, None
+    x_2ch, fmt = _to_2ch_single(cast(Tensor, x))
+    if kind is not None:
+        x_2ch = _apply_kind_constraints(x_2ch, kind)
+    return x_2ch, fmt, None
+
+
+def _from_2ch_single(x_2ch: Tensor, fmt: InputFormat) -> Tensor:
+    match fmt:
+        case InputFormat.REAL_2CH:
+            return x_2ch
+        case InputFormat.COMPLEX_1CH:
+            return torch.view_as_complex(torch.moveaxis(x_2ch, 1, -1).contiguous())
+        case InputFormat.REAL_1CH:
+            return x_2ch[:, 0]
+        case _:
+            raise ValueError(f"Unsupported format: {fmt}")
 
 
 def _from_2ch(x_2ch: Tensor, fmt: InputFormat, kind: Tensor | None = None, metadata: ListMetadata | None = None) -> Tensor | list[Tensor]:
@@ -109,29 +116,14 @@ def _from_2ch(x_2ch: Tensor, fmt: InputFormat, kind: Tensor | None = None, metad
     if kind is not None:
         x_2ch = _apply_kind_constraints(x_2ch, kind)
 
-    if fmt == InputFormat.REAL_2CH:
-        return x_2ch
-    elif fmt == InputFormat.COMPLEX_1CH:
-        return torch.view_as_complex(torch.moveaxis(x_2ch, 1, -1).contiguous())
-    elif fmt == InputFormat.REAL_1CH:
-        return x_2ch[:, 0]
-    elif fmt == InputFormat.LIST_2CH:
-        if metadata is None:
-            raise ValueError("LIST_2CH format requires metadata")
-        chunks = x_2ch.split(metadata.batch_sizes, dim=0)
-        results = []
-        for chunk, elem_fmt in zip(chunks, metadata.formats, strict=True):
-            if elem_fmt == InputFormat.REAL_2CH:
-                results.append(chunk)
-            elif elem_fmt == InputFormat.COMPLEX_1CH:
-                results.append(torch.view_as_complex(torch.moveaxis(chunk, 1, -1).contiguous()))
-            elif elem_fmt == InputFormat.REAL_1CH:
-                results.append(chunk[:, 0])
-            else:
-                raise ValueError(f"Invalid element format in list: {elem_fmt}")
-        return results
-    else:
-        raise ValueError(f"Unsupported format: {fmt}")
+    match fmt:
+        case InputFormat.LIST_2CH:
+            if metadata is None:
+                raise ValueError("LIST_2CH format requires metadata")
+            chunks = x_2ch.split(metadata.batch_sizes, dim=0)
+            return [_from_2ch_single(chunk, elem_fmt) for chunk, elem_fmt in zip(chunks, metadata.formats, strict=True)]
+        case _:
+            return _from_2ch_single(x_2ch, fmt)
 
 
 def _apply_kind_constraints(x_2ch: Tensor, kind: Tensor) -> Tensor:
