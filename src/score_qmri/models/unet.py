@@ -1,7 +1,11 @@
 """UNet architecture with conditioning for diffusion models."""
 
+from typing import Literal
+
 import torch
 from torch import Tensor
+
+UpsampleMode = Literal["nearest", "pixelshuffle"]
 
 
 class GroupNorm32(torch.nn.GroupNorm):
@@ -52,15 +56,34 @@ class Downsample(torch.nn.Module):
 
 
 class Upsample(torch.nn.Module):
-    """PixelShuffle for 2x spatial upsampling."""
+    """2x spatial upsampling with selectable method.
 
-    def __init__(self, ch: int) -> None:
+    Parameters
+    ----------
+    ch
+        Number of input/output channels.
+    mode
+        Upsampling method:
+        - "nearest": Nearest-neighbor interpolation + 3×3 conv (Stable Diffusion style)
+        - "pixelshuffle": PixelShuffle (can cause periodic artifacts)
+    """
+
+    def __init__(self, ch: int, mode: UpsampleMode = "nearest") -> None:
         super().__init__()
-        self.conv = torch.nn.Conv2d(ch, ch * 4, 3, padding=1)
-        self.shuffle = torch.nn.PixelShuffle(2)
+        self.mode: UpsampleMode = mode
+        if mode == "pixelshuffle":
+            self.conv = torch.nn.Conv2d(ch, ch * 4, 3, padding=1)
+            self.shuffle: torch.nn.PixelShuffle | None = torch.nn.PixelShuffle(2)
+        else:
+            self.conv = torch.nn.Conv2d(ch, ch, 3, padding=1)
+            self.shuffle = None
 
     def forward(self, x: Tensor) -> Tensor:
-        out: Tensor = self.shuffle(self.conv(x))
+        if self.shuffle is not None:
+            out: Tensor = self.shuffle(self.conv(x))
+            return out
+        x = torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
+        out = self.conv(x)
         return out
 
 
@@ -81,9 +104,17 @@ class EncoderBlock(torch.nn.Module):
 class DecoderBlock(torch.nn.Module):
     """Optional upsampling with ResBlock and skip concat. Returns (forward, skip)."""
 
-    def __init__(self, in_ch: int, out_ch: int, skip_ch: int, cond_dim: int, upsample: bool = False) -> None:
+    def __init__(
+        self,
+        in_ch: int,
+        out_ch: int,
+        skip_ch: int,
+        cond_dim: int,
+        upsample: bool = False,
+        upsample_mode: UpsampleMode = "nearest",
+    ) -> None:
         super().__init__()
-        self.up = Upsample(in_ch) if upsample else None
+        self.up = Upsample(in_ch, upsample_mode) if upsample else None
         self.res = ResBlock(in_ch + skip_ch, out_ch, cond_dim)
 
     def forward(self, x: Tensor, skip: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
@@ -125,6 +156,7 @@ class UNet(torch.nn.Module):
         num_res_blocks: int = 2,
         channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
         cond_dim: int = 128,
+        upsample_mode: UpsampleMode = "nearest",
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -153,7 +185,7 @@ class UNet(torch.nn.Module):
                 is_first_at_level = i == 0
                 do_up = is_first_at_level and level < len(channel_mult) - 1
                 skip_ch = encoder_channels.pop()
-                self.decoder.append(DecoderBlock(ch, out_ch, skip_ch, cond_dim, upsample=do_up))
+                self.decoder.append(DecoderBlock(ch, out_ch, skip_ch, cond_dim, upsample=do_up, upsample_mode=upsample_mode))
                 ch = out_ch
 
         self.x0_head = OutputHead(ch, 2, cond_dim, skip_ch=in_channels)
