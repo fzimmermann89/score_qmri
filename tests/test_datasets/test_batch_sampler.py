@@ -377,3 +377,89 @@ def test_kind_normalization_validation():
             batch_size=4,
             kind_normalization=-0.1,
         )
+
+
+def test_max_steps_controls_length():
+    ds = TensorDataset(torch.randn(100, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds])
+
+    sampler = ScheduledBatchSampler(
+        concat,
+        [100],
+        [DatasetKind.T1MAP],
+        [lambda s: 1.0],
+        batch_size=4,
+        max_steps=500,
+    )
+
+    assert len(sampler) == 500
+
+
+def test_max_steps_none_uses_default_length():
+    ds = TensorDataset(torch.randn(100, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds])
+
+    with pytest.warns(UserWarning, match="max_steps not set"):
+        sampler = ScheduledBatchSampler(
+            concat,
+            [100],
+            [DatasetKind.T1MAP],
+            [lambda s: 1.0],
+            batch_size=4,
+            max_steps=None,
+        )
+
+    assert len(sampler) == 100 // 4
+
+
+def test_set_epoch_does_not_reset_step():
+    ds = TensorDataset(torch.randn(20, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds])
+
+    sampler = ScheduledBatchSampler(
+        concat,
+        [20],
+        [DatasetKind.T1MAP],
+        [lambda s: 1.0],
+        batch_size=4,
+        max_steps=100,
+    )
+
+    sampler._next_batch()
+    sampler._next_batch()
+    assert sampler.step == 2
+
+    sampler.set_epoch(1)
+    assert sampler.step == 2
+
+
+def test_schedule_continues_across_epochs():
+    ds = TensorDataset(torch.randn(20, 3, 32, 32))
+    concat: ConcatDataset = ConcatDataset([ds])
+
+    steps_seen: list[int] = []
+
+    def tracking_schedule(step: int) -> float:
+        steps_seen.append(step)
+        return 1.0
+
+    sampler = ScheduledBatchSampler(
+        concat,
+        [20],
+        [DatasetKind.T1MAP],
+        [tracking_schedule],
+        batch_size=4,
+        max_steps=5,
+    )
+
+    # given: first "epoch"
+    for _ in sampler:
+        pass
+
+    # when: simulate epoch boundary and second "epoch"
+    sampler.set_epoch(1)
+    for _ in sampler:
+        pass
+
+    # then: steps should be continuous 0..9
+    assert steps_seen == list(range(10))

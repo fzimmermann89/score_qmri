@@ -283,6 +283,10 @@ class MRIDataModule(LightningDataModule):
 
         rank = self.trainer.global_rank if self.trainer is not None else int(os.environ.get("LOCAL_RANK", 0))
 
+        max_steps = None
+        if self.trainer is not None and self.trainer.max_steps is not None and self.trainer.max_steps > 0:
+            max_steps = self.trainer.max_steps
+
         batch_sampler = ScheduledBatchSampler(
             self.concat_ds,
             self.dataset_lengths,
@@ -292,6 +296,7 @@ class MRIDataModule(LightningDataModule):
             kind_normalization=self.kind_normalization,
             base_seed=self.base_seed,
             rank=rank,
+            max_steps=max_steps,
         )
 
         return DataLoader(

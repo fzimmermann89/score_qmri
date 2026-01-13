@@ -1,5 +1,6 @@
 """Custom BatchSampler with step-based probability scheduling."""
 
+import warnings
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
@@ -44,6 +45,7 @@ class ScheduledBatchSampler(BatchSampler):
         base_seed: int = 42,
         rank: int = 0,
         sampler: "torch.utils.data.Sampler | None" = None,
+        max_steps: int | None = None,
     ):
         """
         Parameters
@@ -67,6 +69,10 @@ class ScheduledBatchSampler(BatchSampler):
             Distributed rank for seed offset.
         sampler
             Unused, exists for Lightning DDP compatibility.
+        max_steps
+            Total training steps. Sampler reports this as its length, enabling single-epoch
+            training that avoids iterator recreation overhead. If None, falls back to
+            total_samples // batch_size (legacy behavior with warning).
         """
         n_ds = len(dataset.datasets)
         if not (len(dataset_lengths) == len(dataset_kinds) == len(schedules) == n_ds):
@@ -74,12 +80,24 @@ class ScheduledBatchSampler(BatchSampler):
         if not 0.0 <= kind_normalization <= 1.0:
             raise ValueError(f"kind_normalization must be in [0, 1], got {kind_normalization}")
 
+        if max_steps is None:
+            warnings.warn(
+                "ScheduledBatchSampler: max_steps not set. Using total_samples // batch_size as epoch length. "
+                "This causes iterator recreation at epoch boundaries. Set max_steps=trainer.max_steps for "
+                "continuous training.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         self.dataset = dataset
         self.schedules = schedules
         self.batch_size = batch_size
         self.kind_normalization = kind_normalization
         self.step = 0
         self.sampler: Any = sampler
+        self.max_steps = max_steps
+        self.base_seed = base_seed
+        self.rank = rank
 
         self.rng = torch.Generator()
         self.rng.manual_seed(base_seed + rank)
@@ -144,10 +162,13 @@ class ScheduledBatchSampler(BatchSampler):
             yield self._next_batch()
 
     def __len__(self) -> int:
+        if self.max_steps is not None:
+            return self.max_steps
         return max(1, int(self.dataset_lengths.sum().item()) // self.batch_size)
 
     def reset_step(self, step: int = 0) -> None:
         self.step = step
 
     def set_epoch(self, epoch: int) -> None:
-        self.step = 0
+        """Called by Lightning at epoch boundaries. Reseeds RNG but preserves step for schedule continuity."""
+        self.rng.manual_seed(self.base_seed + self.rank + epoch * 10000)
