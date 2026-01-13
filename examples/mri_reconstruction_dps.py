@@ -7,11 +7,17 @@
 # DPS combines an unconditional diffusion prior with likelihood guidance to solve
 # the inverse problem: k-space → image.
 
+# ruff: noqa: E402
 # %%
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import torch
+from torch import Tensor
+
+from score_qmri.datasets.kind import DatasetKind
+from score_qmri.models.diffusion import DiffusionModel
+from score_qmri.sampling import DPSConfig, DPSSampler
 
 # %%
 # Configuration
@@ -25,10 +31,6 @@ ETA = 0.0  # Deterministic DDIM
 
 # %%
 # Load the diffusion model
-from score_qmri.datasets.kind import DatasetKind
-from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import DPSConfig, DPSSampler
-
 model = DiffusionModel(
     base_channels=64,
     channel_mult=(1, 2, 4, 8, 16),
@@ -58,8 +60,8 @@ x, y = torch.meshgrid(
     indexing="ij",
 )
 phantom = torch.zeros(H, W, dtype=torch.complex64)
-phantom[(x**2 + y**2) < 0.5] = 1.0 + 0.0j
-phantom[(x**2 + y**2) < 0.2] = 0.5 + 0.0j
+phantom[(x**2 + y**2) < 0.5] = torch.tensor(1.0 + 0.0j)
+phantom[(x**2 + y**2) < 0.2] = torch.tensor(0.5 + 0.0j)
 phantom = phantom.to(DEVICE)
 
 # Reshape to mrpro format: (B, 1, 1, H, W)
@@ -102,6 +104,7 @@ try:
     # mrpro FourierOp for single-coil
     fourier_op = FourierOp.from_kdata(...)  # Configure based on your kdata
     print("Using mrpro FourierOp")
+    forward_op = fourier_op
 
 except ImportError:
     # Fallback: simple masked FFT operator
@@ -159,7 +162,7 @@ with torch.no_grad():
     reconstruction = sampler.sample(
         forward_op=forward_op,
         measurement=kspace_undersampled,
-        kind=DatasetKind.T1W_COMPLEX_COMBINED,
+        kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED,
     )
 
 print("DPS reconstruction complete!")
@@ -194,7 +197,6 @@ plt.show()
 
 # %%
 # Compute metrics
-from torch import Tensor
 
 
 def psnr(x: Tensor, y: Tensor) -> float:
