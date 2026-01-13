@@ -173,8 +173,8 @@ class DPSSampler:
 
         # Process gradient
         if cfg.normalize_gradient:
-            grad_norm = grad.norm() + 1e-8
-            grad = grad / grad_norm
+            grad_norm = grad.reshape(B, -1).norm(dim=1).view(B, 1, 1, 1)
+            grad = grad / (grad_norm + 1e-8)
 
         if cfg.gradient_clipping is not None:
             grad = torch.clamp(grad, -cfg.gradient_clipping, cfg.gradient_clipping)
