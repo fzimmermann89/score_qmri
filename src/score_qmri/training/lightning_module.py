@@ -402,11 +402,8 @@ class DiffusionLightningModule(LightningModule):
                     axes = [axes]
                 for i in range(num_samples):
                     sample_i = samples_denorm[i]
-                    if is_complex_kind(k):
-                        img = (sample_i[0] ** 2 + sample_i[1] ** 2).sqrt().cpu().numpy()
-                    else:
-                        img = sample_i[0].cpu().numpy()
-                    axes[i].imshow(img, cmap="gray")
+                    mag = (sample_i[0] ** 2 + sample_i[1] ** 2).sqrt() if is_complex_kind(k) else sample_i[0]
+                    axes[i].imshow(mag.cpu().numpy(), cmap="gray")
                     axes[i].axis("off")
                 fig.suptitle(f"{kind_enum.name} @ step {self.global_step}", fontsize=10)
                 fig.tight_layout()
