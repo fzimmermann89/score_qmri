@@ -1,11 +1,85 @@
 """UNet architecture with conditioning for diffusion models."""
 
+import math
 from typing import Literal
 
 import torch
+from einops import rearrange
 from torch import Tensor
 
 UpsampleMode = Literal["nearest", "pixelshuffle"]
+
+
+class CoordConcat(torch.nn.Module):
+    """Concatenate normalized (x, y) coordinate channels to input.
+
+    Breaks translation invariance by providing absolute spatial position.
+    Caches the coordinate grid for efficiency when resolution is unchanged.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._cached_grid: Tensor | None = None
+
+    def forward(self, x: Tensor) -> Tensor:
+        B, C, H, W = x.shape
+
+        if (
+            self._cached_grid is None
+            or self._cached_grid.shape[-2:] != (H, W)
+            or self._cached_grid.device != x.device
+            or self._cached_grid.dtype != x.dtype
+        ):
+            y_coords = torch.linspace(-1, 1, H, device=x.device, dtype=x.dtype)
+            x_coords = torch.linspace(-1, 1, W, device=x.device, dtype=x.dtype)
+            grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
+            self._cached_grid = torch.stack([grid_y, grid_x], dim=0)
+
+        coords = self._cached_grid.unsqueeze(0).expand(B, -1, -1, -1)
+        return torch.cat([x, coords], dim=1)
+
+
+class SinusoidalPosEmb2D(torch.nn.Module):
+    """2D sinusoidal positional embeddings for attention layers.
+
+    Generates separate embeddings for height and width dimensions,
+    then combines them. Caches for efficiency when resolution is unchanged.
+    """
+
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        self.channels = channels
+        self._cached_emb: Tensor | None = None
+
+    def _get_1d_sincos(self, positions: Tensor, dim: int) -> Tensor:
+        half_dim = dim // 2
+        freqs = torch.exp(
+            torch.arange(half_dim, device=positions.device, dtype=torch.float32) * -(math.log(10000.0) / max(half_dim - 1, 1))
+        )
+        args = positions[:, None].float() * freqs[None, :]
+        return torch.cat([args.sin(), args.cos()], dim=-1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        B, C, H, W = x.shape
+
+        if self._cached_emb is None or self._cached_emb.shape[-2:] != (H, W) or self._cached_emb.device != x.device:
+            dim_y = self.channels // 2
+            dim_x = self.channels - dim_y
+
+            y_pos = torch.arange(H, device=x.device)
+            x_pos = torch.arange(W, device=x.device)
+
+            y_emb = self._get_1d_sincos(y_pos, dim_y)
+            x_emb = self._get_1d_sincos(x_pos, dim_x)
+
+            y_emb = y_emb[:, None, :].expand(H, W, -1)
+            x_emb = x_emb[None, :, :].expand(H, W, -1)
+
+            emb = torch.cat([y_emb, x_emb], dim=-1)
+            emb = emb.permute(2, 0, 1).unsqueeze(0)
+            self._cached_emb = emb
+
+        return self._cached_emb.to(dtype=x.dtype).expand(B, -1, -1, -1)
 
 
 class GroupNorm32(torch.nn.GroupNorm):
@@ -23,33 +97,41 @@ class Attention(torch.nn.Module):
     (Flash Attention, Memory Efficient, or Math) based on inputs and hardware.
     """
 
-    def __init__(self, channels: int, head_dim: int = 64) -> None:
+    def __init__(self, channels: int, head_dim: int = 64, positional_embedding: bool = False) -> None:
         super().__init__()
+        if channels % head_dim != 0:
+            raise ValueError(f"channels={channels} must be divisible by head_dim={head_dim}")
+
         self.head_dim = head_dim
-        self.num_heads = max(1, channels // head_dim)
-        inner_dim = self.num_heads * head_dim
+        self.num_heads = channels // head_dim
 
         self.norm = GroupNorm32(get_groups(channels), channels)
-        self.to_qkv = torch.nn.Conv2d(channels, inner_dim * 3, 1, bias=False)
-        self.to_out = torch.nn.Sequential(
-            torch.nn.Conv2d(inner_dim, channels, 1),
-            torch.nn.Dropout(0.0),
-        )
+        self.to_qkv = torch.nn.Conv2d(channels, channels * 3, 1, bias=False)
+        self.to_out = torch.nn.Conv2d(channels, channels, 1)
         self.alpha = torch.nn.Parameter(torch.tensor(0.1))
+        self.pos_emb = SinusoidalPosEmb2D(channels) if positional_embedding else None
 
     def forward(self, x: Tensor) -> Tensor:
         B, C, H, W = x.shape
-        h = self.norm(x)
 
-        qkv = self.to_qkv(h)  # (B, 3*inner_dim, H, W)
-        qkv = qkv.view(B, 3, self.num_heads, self.head_dim, H * W)  # (B, 3, heads, head_dim, N)
-        qkv = qkv.permute(1, 0, 2, 4, 3)  # (3, B, heads, N, head_dim)
-        q, k, v = qkv.unbind(0)  # each (B, heads, N, head_dim)
+        x_input = x + self.pos_emb(x) if self.pos_emb is not None else x
+        h = self.norm(x_input)
 
-        out: Tensor = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        qkv = self.to_qkv(h)  # (B, 3*heads*head_dim, H, W)
+        q, k, v = rearrange(
+            qkv,
+            "b (qkv heads d) h w -> qkv b heads (h w) d",
+            qkv=3,
+            heads=self.num_heads,
+            d=self.head_dim,
+        ).unbind(0)
 
-        out = out.permute(0, 1, 3, 2)  # (B, heads, head_dim, N)
-        out = out.reshape(B, self.num_heads * self.head_dim, H, W)
+        dropout = 0.1 if self.training else 0.0
+        out: Tensor = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False, dropout_p=dropout)
+
+        out = rearrange(out, "b heads (h w) d -> b (heads d) h w", h=H, w=W)
+        if x.is_contiguous(memory_format=torch.channels_last):
+            out = out.contiguous(memory_format=torch.channels_last)
         out = self.to_out(out)
 
         return x + self.alpha * out
@@ -151,10 +233,11 @@ class EncoderBlock(torch.nn.Module):
         downsample: bool = False,
         use_attention: bool = False,
         head_dim: int = 64,
+        positional_embedding: bool = False,
     ) -> None:
         super().__init__()
         self.res = ResBlock(in_ch, out_ch, cond_dim)
-        self.attn = Attention(out_ch, head_dim) if use_attention else None
+        self.attn = Attention(out_ch, head_dim, positional_embedding) if use_attention else None
         self.down = Downsample(out_ch) if downsample else None
 
     def forward(self, x: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
@@ -178,11 +261,12 @@ class DecoderBlock(torch.nn.Module):
         upsample_mode: UpsampleMode = "nearest",
         use_attention: bool = False,
         head_dim: int = 64,
+        positional_embedding: bool = False,
     ) -> None:
         super().__init__()
         self.up = Upsample(in_ch, upsample_mode) if upsample else None
         self.res = ResBlock(in_ch + skip_ch, out_ch, cond_dim)
-        self.attn = Attention(out_ch, head_dim) if use_attention else None
+        self.attn = Attention(out_ch, head_dim, positional_embedding) if use_attention else None
 
     def forward(self, x: Tensor, skip: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
         if self.up is not None:
@@ -229,12 +313,18 @@ class UNet(torch.nn.Module):
         upsample_mode: UpsampleMode = "nearest",
         attention_levels: tuple[int, ...] = (),
         head_dim: int = 64,
+        positional_embedding: bool = True,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
-        attention_set = set(attention_levels)
+        self.positional_embedding = positional_embedding
 
-        self.input_conv = torch.nn.Conv2d(in_channels, base_channels, 3, padding=1)
+        num_levels = len(channel_mult)
+        attention_set = {lvl if lvl >= 0 else num_levels + lvl for lvl in attention_levels}
+
+        self.coord_concat = CoordConcat() if positional_embedding else None
+        input_ch = in_channels + 2 if positional_embedding else in_channels
+        self.input_conv = torch.nn.Conv2d(input_ch, base_channels, 3, padding=1)
 
         self.encoder = torch.nn.ModuleList()
         encoder_channels: list[int] = []
@@ -245,14 +335,24 @@ class UNet(torch.nn.Module):
             use_attn = level in attention_set
             for i in range(num_res_blocks):
                 is_last_at_level = i == num_res_blocks - 1
-                do_down = is_last_at_level and level < len(channel_mult) - 1
-                self.encoder.append(EncoderBlock(ch, out_ch, cond_dim, downsample=do_down, use_attention=use_attn, head_dim=head_dim))
+                do_down = is_last_at_level and level < num_levels - 1
+                self.encoder.append(
+                    EncoderBlock(
+                        ch,
+                        out_ch,
+                        cond_dim,
+                        downsample=do_down,
+                        use_attention=use_attn,
+                        head_dim=head_dim,
+                        positional_embedding=positional_embedding,
+                    )
+                )
                 encoder_channels.append(out_ch)
                 ch = out_ch
 
         self.middle = ResBlock(ch, ch, cond_dim)
-        last_level = len(channel_mult) - 1
-        self.middle_attn: Attention | None = Attention(ch, head_dim) if last_level in attention_set else None
+        last_level = num_levels - 1
+        self.middle_attn: Attention | None = Attention(ch, head_dim, positional_embedding) if last_level in attention_set else None
 
         self.decoder = torch.nn.ModuleList()
         for level, mult in reversed(list(enumerate(channel_mult))):
@@ -260,7 +360,7 @@ class UNet(torch.nn.Module):
             use_attn = level in attention_set
             for i in range(num_res_blocks):
                 is_first_at_level = i == 0
-                do_up = is_first_at_level and level < len(channel_mult) - 1
+                do_up = is_first_at_level and level < num_levels - 1
                 skip_ch = encoder_channels.pop()
                 self.decoder.append(
                     DecoderBlock(
@@ -272,6 +372,7 @@ class UNet(torch.nn.Module):
                         upsample_mode=upsample_mode,
                         use_attention=use_attn,
                         head_dim=head_dim,
+                        positional_embedding=positional_embedding,
                     )
                 )
                 ch = out_ch
@@ -281,6 +382,8 @@ class UNet(torch.nn.Module):
 
     def forward(self, x: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
         x_in = x
+        if self.coord_concat is not None:
+            x = self.coord_concat(x)
         x = self.input_conv(x)
 
         skips = []
