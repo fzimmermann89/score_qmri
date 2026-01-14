@@ -205,17 +205,17 @@ class DiffusionModel(torch.nn.Module):
         self.noise_schedule = noise_schedule
 
         self.cond_mlp = ConditioningMLP(cond_dim=cond_dim, num_kinds=num_kinds)
-        self.unet = torch.compile(
-            UNet(
-                in_channels=2,
-                base_channels=base_channels,
-                num_res_blocks=num_res_blocks,
-                channel_mult=channel_mult,
-                cond_dim=cond_dim,
-                attention_levels=attention_levels,
-                head_dim=head_dim,
-            )
+        unet = UNet(
+            in_channels=2,
+            base_channels=base_channels,
+            num_res_blocks=num_res_blocks,
+            channel_mult=channel_mult,
+            cond_dim=cond_dim,
+            attention_levels=attention_levels,
+            head_dim=head_dim,
         )
+        unet.to(memory_format=torch.channels_last)  # type: ignore[call-overload]
+        self.unet = torch.compile(unet, mode="reduce-overhead")
         self.normalizer = RunningNormalizer(num_kinds=num_kinds)
 
     @property
