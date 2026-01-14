@@ -108,7 +108,7 @@ class DDIMSampler:
         output = self.model(x, t, kind)
         noise_pred = output.noise
         x0_pred = self.model.predict_x0(x, t, noise_pred, kind)
-        x0_pred = x0_pred.clamp(-6, 6)
+        x0_pred = self.model.clamp_x0(x0_pred, kind)
 
         ab_t = self.model.alpha_bar(t).view(-1, 1, 1, 1)
         ab_prev = self.model.alpha_bar(t_prev).view(-1, 1, 1, 1)

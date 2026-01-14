@@ -28,5 +28,6 @@ class MappingDataset(FlatH5Dataset):
         scaling_factor: float = 1.0,
         augmentation_config: AugmentationConfig | None = None,
         kind: DatasetKind = DatasetKind.T1MAP,
+        penumbra_width: int = -1,
     ) -> None:
-        super().__init__(h5_path, augmentation_config, kind, scaling_factor)
+        super().__init__(h5_path, augmentation_config, kind, scaling_factor, penumbra_width)

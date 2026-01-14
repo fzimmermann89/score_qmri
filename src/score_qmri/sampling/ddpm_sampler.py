@@ -41,7 +41,7 @@ class DDPMSampler:
     def _step(self, x: Tensor, t: Tensor, t_prev: Tensor, kind: Tensor) -> Tensor:
         output = self.model(x, t, kind)
         x0_pred = self.model.predict_x0(x, t, output.noise, kind)
-        x0_pred = x0_pred.clamp(-6, 6)
+        x0_pred = self.model.clamp_x0(x0_pred, kind)
 
         if t_prev[0] <= 1e-3:
             return x0_pred

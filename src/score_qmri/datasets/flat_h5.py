@@ -28,6 +28,7 @@ class FlatH5Dataset(BaseMRIDataset):
         augmentation_config: AugmentationConfig | None = None,
         kind: DatasetKind = DatasetKind.T1W_MAGNITUDE,
         scaling_factor: float = 1.0,
+        penumbra_width: int = 30,
     ) -> None:
         """
         Parameters
@@ -40,10 +41,12 @@ class FlatH5Dataset(BaseMRIDataset):
             DatasetKind for conditioning.
         scaling_factor
             Factor to multiply values by for normalization.
+        penumbra_width
+            Penumbra dilation width: >0 for ring, 0 for none, <0 for infinite.
         """
         self._subject_keys: list[str] = []
         self._slice_index: list[tuple[str, int]] = []
-        super().__init__(h5_path, augmentation_config, kind, scaling_factor)
+        super().__init__(h5_path, augmentation_config, kind, scaling_factor, penumbra_width)
 
     def _count_slices_in_file(self, h5_file: h5py.File) -> int:
         """Count total slices across all subjects."""

@@ -39,8 +39,33 @@ _COMPLEX_KINDS = frozenset(
     }
 )
 
+_MAGNITUDE_KINDS = frozenset(
+    {
+        DatasetKind.T1W_MAGNITUDE,
+        DatasetKind.T2W_MAGNITUDE,
+        DatasetKind.FLAIR_MAGNITUDE,
+        DatasetKind.M0_MAGNITUDE,
+    }
+)
+
+_MAPPING_KINDS = frozenset(
+    {
+        DatasetKind.T1MAP,
+        DatasetKind.T2MAP,
+        DatasetKind.T2STARMAP,
+    }
+)
+
 NUM_DATASET_KINDS: int = len(DatasetKind)
 
 
 def is_complex_kind(kind_index: int) -> bool:
     return kind_index in _COMPLEX_KINDS
+
+
+def is_magnitude_kind(kind_index: int) -> bool:
+    return kind_index in _MAGNITUDE_KINDS
+
+
+def is_mapping_kind(kind_index: int) -> bool:
+    return kind_index in _MAPPING_KINDS

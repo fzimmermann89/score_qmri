@@ -23,5 +23,6 @@ class MagnitudeImageDataset(FlatH5Dataset):
         augmentation_config: AugmentationConfig | None = None,
         kind: DatasetKind = DatasetKind.T1W_MAGNITUDE,
         scaling_factor: float = 1.0,
+        penumbra_width: int = 30,
     ) -> None:
-        super().__init__(h5_path, augmentation_config, kind, scaling_factor)
+        super().__init__(h5_path, augmentation_config, kind, scaling_factor, penumbra_width)

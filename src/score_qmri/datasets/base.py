@@ -6,13 +6,21 @@ from pathlib import Path
 from typing import Any
 
 import h5py
+import numpy as np
 import torch
+from scipy.ndimage import distance_transform_edt
 from torch import Tensor
 from torch.utils.data import Dataset
 
 from .augmentation import AugmentationPipeline
 from .config import AugmentationConfig
 from .kind import DatasetKind
+
+
+def _compute_penumbra(signal_mask: np.ndarray, width: int) -> np.ndarray:
+    """Compute penumbra mask using distance transform (O(N) vs O(k*N) for dilation)."""
+    dist: np.ndarray = distance_transform_edt(~signal_mask)
+    return (dist > 0) & (dist <= width)
 
 
 class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
@@ -28,10 +36,12 @@ class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
         augmentation_config: AugmentationConfig | None = None,
         kind: DatasetKind = DatasetKind.COMPLEX_T1W_COILWISE,
         scaling_factor: float = 1.0,
+        penumbra_width: int = 30,
     ) -> None:
         self.h5_path = str(Path(h5_path).resolve())
         self.kind = kind
         self.scaling_factor = scaling_factor
+        self.penumbra_width = penumbra_width
         self.augmentation = AugmentationPipeline(augmentation_config) if augmentation_config else None
         self._h5_file: h5py.File | None = None
 
@@ -64,7 +74,7 @@ class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
         return self.num_slices
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
-        """Get sample with image, mask, and kind tensors."""
+        """Get sample with image, masks, and kind tensors."""
         image = self._load_slice(self._get_h5_file(), idx)
 
         if image.is_complex() != self.kind.is_complex:
@@ -73,17 +83,27 @@ class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
                 f"but loaded image is_complex={image.is_complex()} from {self.h5_path}"
             )
 
-        mask = image.abs() > 1e-6
+        signal_mask = image.abs() > 1e-6
 
         if self.scaling_factor != 1.0:
             image = image * self.scaling_factor
 
         if self.augmentation is not None:
-            image, mask = self.augmentation(image, mask)
+            image, signal_mask = self.augmentation(image, signal_mask)
+
+        background_mask = ~signal_mask
+
+        if self.penumbra_width < 0:
+            penumbra_mask = background_mask
+        elif self.penumbra_width == 0:
+            penumbra_mask = torch.zeros_like(signal_mask)
+        else:
+            penumbra_mask = torch.from_numpy(_compute_penumbra(signal_mask.numpy(), self.penumbra_width))
 
         return {
             "image": image,
-            "mask": mask,
+            "penumbra_mask": penumbra_mask,
+            "background_mask": background_mask,
             "kind": torch.tensor(self.kind.value, dtype=torch.long),
             "h5_path": self.h5_path,
         }

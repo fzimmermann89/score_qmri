@@ -13,6 +13,7 @@ dependencies = [
     "jsonargparse[signatures]>=4.27.0",
     "h5py>=3.8.0",
     "numpy>=1.24.0",
+    "scipy>=1.10.0",
     "wandb>=0.15.0,<0.21",
     "pytorch-msssim>=1.0.0",
     "einops>=0.7.0",

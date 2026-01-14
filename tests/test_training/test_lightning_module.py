@@ -19,9 +19,11 @@ def module():
 
 
 def test_training_step(module):
+    background_mask = torch.zeros(2, 64, 64, dtype=torch.bool)
     batch = {
         "image": torch.randn(2, 2, 64, 64),
-        "mask": torch.ones(2, 64, 64, dtype=torch.bool),
+        "penumbra_mask": torch.zeros(2, 64, 64, dtype=torch.bool),
+        "background_mask": background_mask,
         "kind": torch.tensor([0, 1]),
     }
     loss = module.training_step(batch, 0)
@@ -31,9 +33,11 @@ def test_training_step(module):
 
 def test_training_step_real_kind(module):
     """Test training with real kinds (imag channel should stay zero)."""
+    background_mask = torch.zeros(2, 64, 64, dtype=torch.bool)
     batch = {
         "image": torch.randn(2, 2, 64, 64),
-        "mask": torch.ones(2, 64, 64, dtype=torch.bool),
+        "penumbra_mask": torch.zeros(2, 64, 64, dtype=torch.bool),
+        "background_mask": background_mask,
         "kind": torch.tensor([6, 6]),  # T1MAP is a real kind
     }
     loss = module.training_step(batch, 0)
@@ -71,13 +75,15 @@ def test_create_fixed_noise_for_all_kinds(module):
 
 
 def test_training_step_partial_valid_samples(module):
+    background_mask = torch.zeros(4, 64, 64, dtype=torch.bool)
+    background_mask[:2] = True
+    background_mask[:2, :10, :10] = False
     batch = {
         "image": torch.randn(4, 2, 64, 64),
-        "mask": torch.ones(4, 64, 64, dtype=torch.bool),
+        "penumbra_mask": torch.zeros(4, 64, 64, dtype=torch.bool),
+        "background_mask": background_mask,
         "kind": torch.tensor([0, 1, 0, 1]),
     }
-    batch["mask"][:2] = False
-    batch["mask"][:2, :10, :10] = True
 
     loss = module.training_step(batch, 0)
     assert loss is not None
@@ -85,12 +91,14 @@ def test_training_step_partial_valid_samples(module):
 
 
 def test_training_step_all_invalid_samples(module):
+    background_mask = torch.ones(4, 64, 64, dtype=torch.bool)
+    background_mask[:, :10, :10] = False
     batch = {
         "image": torch.randn(4, 2, 64, 64),
-        "mask": torch.zeros(4, 64, 64, dtype=torch.bool),
+        "penumbra_mask": torch.zeros(4, 64, 64, dtype=torch.bool),
+        "background_mask": background_mask,
         "kind": torch.tensor([0, 1, 0, 1]),
     }
-    batch["mask"][:, :10, :10] = True
 
     loss = module.training_step(batch, 0)
     assert loss is not None
@@ -98,13 +106,15 @@ def test_training_step_all_invalid_samples(module):
 
 
 def test_training_step_no_skip_on_partial_invalid(module):
+    background_mask = torch.zeros(4, 64, 64, dtype=torch.bool)
+    background_mask[:2] = True
+    background_mask[:2, :5, :5] = False
     batch = {
         "image": torch.randn(4, 2, 64, 64),
-        "mask": torch.ones(4, 64, 64, dtype=torch.bool),
+        "penumbra_mask": torch.zeros(4, 64, 64, dtype=torch.bool),
+        "background_mask": background_mask,
         "kind": torch.tensor([0, 0, 0, 0]),
     }
-    batch["mask"][:2] = False
-    batch["mask"][:2, :5, :5] = True
 
     for _ in range(5):
         loss = module.training_step(batch, 0)

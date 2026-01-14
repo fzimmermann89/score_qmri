@@ -174,7 +174,8 @@ def test_diffusion_normalize():
 
     x_norm = model.normalize(x, kind, mask)
     assert x_norm.shape == (4, 64, 64)
-    assert x_norm.mean().abs() < 0.5
+    # 3-sigma scaling: x / (3*std). With mean=5, std=2, result mean ≈ 5/(3*2) ≈ 0.83
+    assert x_norm.mean() > 0.5 and x_norm.mean() < 1.5
 
 
 def test_diffusion_normalize_complex():
