@@ -37,7 +37,6 @@ data:
 trainer:
   max_steps: 1000000
   gradient_clip_val: 1.0
-  precision: 16-mixed
 ```
 
 

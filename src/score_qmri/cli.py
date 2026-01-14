@@ -308,7 +308,7 @@ def main() -> None:
             "max_steps": 100000,
             "accelerator": "auto",
             "devices": "auto",
-            "precision": "16-mixed",
+            "precision": "bf16-mixed",
             "log_every_n_steps": 10,
             "gradient_clip_val": 1.0,
             "enable_checkpointing": True,

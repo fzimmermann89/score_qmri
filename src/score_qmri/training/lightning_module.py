@@ -187,6 +187,12 @@ class DiffusionLightningModule(LightningModule):
                 include_fn=lambda p: p.endswith(".py") or p.endswith(".yaml") or p.endswith(".toml"),
             )
 
+    def on_after_batch_transfer(self, batch: dict[str, Tensor], dataloader_idx: int) -> dict[str, Tensor]:
+        for key, value in batch.items():
+            if isinstance(value, Tensor) and value.ndim == 4:
+                batch[key] = value.to(memory_format=torch.channels_last)
+        return batch
+
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
         if self.global_step % 100 != 0:
             return
@@ -467,10 +473,12 @@ class DiffusionLightningModule(LightningModule):
         self.logger.experiment.log({"samples/stats_table": table, "global_step": self.global_step})
 
     def configure_optimizers(self) -> OptimizerLRSchedulerConfig:
+        use_fused = torch.cuda.is_available() and self.device.type == "cuda"
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay,
+            fused=use_fused,
         )
 
         def warmup_lambda(step: int) -> float:
