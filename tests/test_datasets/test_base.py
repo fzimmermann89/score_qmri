@@ -72,20 +72,21 @@ def test_base_dataset_getitem_returns_correct_keys(sample_h5_file):
     dataset = DummyDataset(sample_h5_file, kind=DatasetKind.T1W_MAGNITUDE)
     sample = dataset[0]
 
-    assert set(sample.keys()) == {"image", "mask", "kind", "h5_path"}
+    assert set(sample.keys()) == {"image", "penumbra_mask", "background_mask", "kind", "h5_path"}
     assert sample["image"].shape == (64, 64)
-    assert sample["mask"].shape == (64, 64)
-    assert sample["mask"].dtype == torch.bool
+    assert sample["background_mask"].shape == (64, 64)
+    assert sample["background_mask"].dtype == torch.bool
     assert sample["kind"].item() == DatasetKind.T1W_MAGNITUDE.value
 
 
 def test_base_dataset_mask_is_nonzero_pixels(sample_h5_file):
-    """Test mask correctly identifies non-zero pixels."""
+    """Test background_mask correctly identifies zero pixels (inverse of signal)."""
     dataset = DummyDataset(sample_h5_file, kind=DatasetKind.T1W_MAGNITUDE)
     sample = dataset[0]
 
-    image, mask = sample["image"], sample["mask"]
-    assert torch.all((image.abs() > 1e-6) == mask)
+    image, background_mask = sample["image"], sample["background_mask"]
+    signal_mask = ~background_mask
+    assert torch.all((image.abs() > 1e-6) == signal_mask)
 
 
 def test_base_dataset_h5_caching(sample_h5_file):

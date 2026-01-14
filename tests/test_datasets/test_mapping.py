@@ -86,14 +86,13 @@ def test_mapping_empty_file_raises(tmp_path: Path) -> None:
 
 
 def test_mapping_mask_is_nonzero_pixels(sample_h5_file_mapping: str) -> None:
-    """Test mask correctly identifies non-zero pixels."""
+    """Test background_mask correctly identifies zero pixels (inverse of signal)."""
     dataset = MappingDataset(sample_h5_file_mapping, scaling_factor=2000.0, kind=DatasetKind.T1MAP)
     sample = dataset[0]
 
-    image, mask = sample["image"], sample["mask"]
-    # Since values are scaled to [0, 1], non-zero pixels should have mask True
-    # But some pixels might be exactly zero due to floating point precision
-    assert torch.all((image > 1e-6) == mask)
+    image, background_mask = sample["image"], sample["background_mask"]
+    signal_mask = ~background_mask
+    assert torch.all((image > 1e-6) == signal_mask)
 
 
 def test_mapping_different_kinds(sample_h5_file_mapping: str) -> None:

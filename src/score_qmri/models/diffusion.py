@@ -281,6 +281,19 @@ class DiffusionModel(torch.nn.Module):
         x_denorm = self.normalizer.denormalize(x_2ch, kind)
         return _from_2ch(x_denorm, fmt, kind, metadata)
 
+    def clamp_x0(self, x: Tensor, kind: Tensor, limit: float = 1.5) -> Tensor:
+        """Clamp x₀ predictions to kind-specific physical ranges."""
+        result = x.clone()
+        for k in kind.unique():
+            k_idx = int(k.item())
+            idx = kind == k
+            if is_complex_kind(k_idx):
+                result[idx] = result[idx].clamp(-limit, limit)
+            else:
+                result[idx, 0] = result[idx, 0].clamp(0.0, limit)
+                result[idx, 1] = 0.0
+        return result
+
     @overload
     def q_sample(
         self,

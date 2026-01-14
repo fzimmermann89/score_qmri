@@ -64,6 +64,7 @@ class BaseDatasetConfig(ABC):
     h5_path: str
     augmentation_config: AugmentationConfig | None = None
     schedule: ScheduleType | None = None
+    penumbra_width: int = 30
 
     def __post_init__(self) -> None:
         if self.schedule is None:
@@ -89,6 +90,7 @@ class ComplexDatasetConfig(BaseDatasetConfig):
             kind=self.kind,
             augmentation_config=self.augmentation_config,
             scaling_factor=self.scaling_factor,
+            penumbra_width=self.penumbra_width,
         )
 
 
@@ -106,6 +108,7 @@ class MagnitudeDatasetConfig(BaseDatasetConfig):
             kind=self.kind,
             augmentation_config=self.augmentation_config,
             scaling_factor=self.scaling_factor,
+            penumbra_width=self.penumbra_width,
         )
 
 
@@ -116,6 +119,7 @@ class MappingDatasetConfig(BaseDatasetConfig):
     type: Literal["mapping"] = "mapping"
     kind: DatasetKind = DatasetKind.T1MAP
     scaling_factor: float = 1.0
+    penumbra_width: int = -1
 
     def create(self) -> MappingDataset:
         return MappingDataset(
@@ -123,6 +127,7 @@ class MappingDatasetConfig(BaseDatasetConfig):
             kind=self.kind,
             scaling_factor=self.scaling_factor,
             augmentation_config=self.augmentation_config,
+            penumbra_width=self.penumbra_width,
         )
 
 
@@ -171,16 +176,22 @@ class Collate:
         self.target_h = target_h
         self.target_w = target_w
 
+    def _pad_mask(self, mask: torch.Tensor) -> torch.Tensor:
+        return _pad_or_crop_centered(mask.float(), self.target_h, self.target_w).bool()
+
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
         images_2ch = []
         for s in batch:
             img = _pad_or_crop_centered(s["image"], self.target_h, self.target_w)
             images_2ch.append(_to_2ch(img))
-        images = torch.stack(images_2ch)
-        masks = torch.stack([_pad_or_crop_centered(s["mask"].float(), self.target_h, self.target_w).bool() for s in batch])
-        kinds = torch.stack([s["kind"] for s in batch])
-        h5_paths = [s["h5_path"] for s in batch]
-        return {"image": images, "mask": masks, "kind": kinds, "h5_path": h5_paths}
+
+        return {
+            "image": torch.stack(images_2ch),
+            "penumbra_mask": torch.stack([self._pad_mask(s["penumbra_mask"]) for s in batch]),
+            "background_mask": torch.stack([self._pad_mask(s["background_mask"]) for s in batch]),
+            "kind": torch.stack([s["kind"] for s in batch]),
+            "h5_path": [s["h5_path"] for s in batch],
+        }
 
 
 class MRIDataModule(LightningDataModule):

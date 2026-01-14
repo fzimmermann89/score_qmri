@@ -140,7 +140,7 @@ class TestRunningNormalizer:
         assert torch.isclose(normalizer.mean[6, 1], torch.tensor(0.0), atol=1e-5)
         assert torch.isclose(normalizer.var[6, 1], torch.tensor(1.0), atol=1e-5)
 
-    def test_normalize_produces_zero_mean(self):
+    def test_normalize_produces_scaled_output(self):
         normalizer = RunningNormalizer(num_kinds=1, momentum=0.5)
         normalizer.train()
 
@@ -150,7 +150,8 @@ class TestRunningNormalizer:
 
         x_norm = normalizer.normalize(x, mask, kind)
 
-        assert x_norm.mean().abs() < 0.5
+        # 3-sigma scaling: x / (3*std). Mean ≈ 10/(3*3) ≈ 1.1
+        assert x_norm.mean() > 0.5 and x_norm.mean() < 2.0
 
     def test_mixed_kinds_in_batch(self, normalizer):
         normalizer.train()

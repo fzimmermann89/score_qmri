@@ -108,9 +108,8 @@ class DPSSampler:
             x = initial_noise.to(device)
         else:
             x = _create_noise((B, 2, H, W), kind_tensor, device, torch.float32)
-            # Scale noise to match denormalized data distribution
-            mean, std = self.model.normalizer[kind_idx]
-            x = x * std.to(device).view(1, 2, 1, 1)
+            scale = self.model.normalizer.get_scale(kind_idx)
+            x = x * scale.to(device).view(1, 2, 1, 1)
 
         x = _apply_kind_constraints(x, kind_tensor)
 
@@ -153,7 +152,7 @@ class DPSSampler:
         output = self.model(x_norm, t, kind)
         noise_pred = output.noise
         x0_pred_norm = self.model.predict_x0(x_norm, t, noise_pred, kind)
-        x0_pred_norm = x0_pred_norm.clamp(-6, 6)
+        x0_pred_norm = self.model.clamp_x0(x0_pred_norm, kind)
 
         # Denormalize x0 prediction for data fidelity
         x0_pred_denorm = self.model.denormalize(x0_pred_norm, kind)
@@ -188,10 +187,9 @@ class DPSSampler:
         # We need to transform the DDIM equations to work in denormalized space
         # Key insight: diffusion happens in normalized space, but we track denormalized x
 
-        # Get normalizer stats
-        mean, std = self.model.normalizer[int(kind[0].item())]
-        mean = mean.to(x.device).view(1, 2, 1, 1)
-        std = std.to(x.device).view(1, 2, 1, 1)
+        # Get normalizer scale (3-sigma scaling: x_norm = x / scale)
+        scale = self.model.normalizer.get_scale(int(kind[0].item()))
+        scale = scale.to(x.device).view(1, 2, 1, 1)
 
         ab_t = self.model.alpha_bar(t).view(-1, 1, 1, 1)
         ab_prev = self.model.alpha_bar(t_prev).view(-1, 1, 1, 1)
@@ -210,8 +208,8 @@ class DPSSampler:
             noise = _create_noise(x.shape, kind, x.device, x.dtype)
             x_prev_norm = x_prev_norm + sigma * noise
 
-        # Convert back to denormalized
-        x_prev = x_prev_norm * std + mean
+        # Convert back to denormalized (3-sigma: x_denorm = x_norm * scale)
+        x_prev = x_prev_norm * scale
 
         # Apply DPS guidance correction (in denormalized space)
         x_prev = x_prev - cfg.guidance_scale * grad

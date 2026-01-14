@@ -1,4 +1,4 @@
-"""Per-dataset-kind running normalization with EMA."""
+"""Per-dataset-kind running normalization with EMA using 3-sigma scaling."""
 
 import torch
 import torch.distributed as dist
@@ -6,12 +6,18 @@ from torch import Tensor
 
 from score_qmri.datasets.kind import NUM_DATASET_KINDS, is_complex_kind
 
+EPS = 1e-6
+
 
 class RunningNormalizer(torch.nn.Module):
-    """Track per-kind running mean/std and normalize to zero mean, unit variance.
+    """Track per-kind running mean/std and normalize using 3-sigma scaling.
 
     Uses exponential moving average. Updates are frozen in eval mode.
     Statistics are tracked separately for each channel.
+
+    Normalization formula:
+    - Complex kinds: scale = 3 * std + eps, x_norm = x / scale
+    - Real kinds: scale = mean + 3 * std + eps, x_norm = x / scale
 
     For real kinds (magnitude/mapping), imaginary channel stats are frozen
     at mean=0, var=1 to maintain identity transform on that channel.
@@ -21,7 +27,6 @@ class RunningNormalizer(torch.nn.Module):
         self,
         num_kinds: int = NUM_DATASET_KINDS,
         momentum: float = 0.001,
-        eps: float = 1e-5,
     ) -> None:
         """
         Parameters
@@ -30,12 +35,9 @@ class RunningNormalizer(torch.nn.Module):
             Number of DatasetKind values.
         momentum
             EMA momentum factor. Effective window is approximately 1/momentum samples.
-        eps
-            Numerical stability constant for std division.
         """
         super().__init__()
         self.momentum = momentum
-        self.eps = eps
         self.num_kinds = num_kinds
 
         self.register_buffer("mean", torch.zeros(num_kinds, 2))
@@ -62,7 +64,7 @@ class RunningNormalizer(torch.nn.Module):
             batch_mean = (x_k * m_k).sum(dim=(0, 2, 3)) / n_valid
             centered = x_k - batch_mean[None, :, None, None]
             batch_var = (centered.pow(2) * m_k).sum(dim=(0, 2, 3)) / n_valid
-            batch_var = batch_var.clamp(min=self.eps)
+            batch_var = batch_var.clamp(min=EPS)
 
             if not is_complex_kind(k_idx):
                 batch_mean[1] = 0.0
@@ -77,25 +79,32 @@ class RunningNormalizer(torch.nn.Module):
 
             self.n[k_idx] += 1
 
-    def __getitem__(self, k: int) -> tuple[Tensor, Tensor]:
-        std = self.var[k].sqrt().clamp(min=self.eps)
-        return self.mean[k], std
+    def get_scale(self, k: int) -> Tensor:
+        """Get normalization scale for a dataset kind.
+
+        Returns scale = mean + 3*std + eps for real kinds, 3*std + eps for complex.
+        """
+        std = self.var[k].sqrt().clamp(min=EPS)
+        if is_complex_kind(k):
+            return 3.0 * std + EPS
+        mean = self.mean[k].clamp(min=0.0)
+        return mean + 3.0 * std + EPS
 
     def normalize(self, x: Tensor, mask: Tensor, kind: Tensor) -> Tensor:
-        """Update stats (if training) then normalize.
+        """Update stats (if training) then normalize using 3-sigma scaling.
 
         Parameters
         ----------
         x
             Input tensor (B, 2, H, W).
         mask
-            Boolean mask (B, 1, H, W) or (B, H, W).
+            Boolean mask (B, 1, H, W) or (B, H, W). True = valid signal.
         kind
             Dataset kind indices (B,).
 
         Returns
         -------
-        Normalized tensor with approximately zero mean and unit std per kind/channel.
+        Normalized tensor scaled to approximately [-1, 1] or [0, 1] range.
         """
         if mask.ndim == 3:
             mask = mask[:, None, :, :]
@@ -108,8 +117,8 @@ class RunningNormalizer(torch.nn.Module):
         for k in kind.unique():
             k_idx = int(k.item())
             idx = kind == k
-            mean, std = self[k_idx]
-            result[idx] = (x[idx] - mean[None, :, None, None]) / std[None, :, None, None]
+            scale = self.get_scale(k_idx)
+            result[idx] = x[idx] / scale[None, :, None, None]
 
         return result
 
@@ -132,8 +141,8 @@ class RunningNormalizer(torch.nn.Module):
         for k in kind.unique():
             k_idx = int(k.item())
             idx = kind == k
-            mean, std = self[k_idx]
-            result[idx] = x[idx] * std[None, :, None, None] + mean[None, :, None, None]
+            scale = self.get_scale(k_idx)
+            result[idx] = x[idx] * scale[None, :, None, None]
 
         return result
 
@@ -162,7 +171,7 @@ class RunningNormalizer(torch.nn.Module):
 
         valid = n_total > 0
         self.mean[valid] = weighted_mean[valid] / n_total[valid, None]
-        self.var[valid] = (weighted_var[valid] / n_total[valid, None]).clamp(min=self.eps)
+        self.var[valid] = (weighted_var[valid] / n_total[valid, None]).clamp(min=EPS)
 
         for k_idx in range(self.num_kinds):
             if not is_complex_kind(k_idx):

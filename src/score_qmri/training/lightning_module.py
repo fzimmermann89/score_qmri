@@ -49,7 +49,8 @@ class DiffusionHparams:
     x0_weight: float
     ssim_weight: float
     l1_weight: float
-    mask_weight: float
+    penumbra_weight: float
+    background_weight: float
     validation_size: int
     validation_steps: int
     validation_interval: int
@@ -80,7 +81,8 @@ class DiffusionLightningModule(LightningModule):
         x0_weight: float = 0.1,
         ssim_weight: float = 0.5,
         l1_weight: float = 0.5,
-        mask_weight: float = 0.1,
+        penumbra_weight: float = 0.0,
+        background_weight: float = 0.5,
         validation_size: int = 128,
         validation_steps: int = 250,
         validation_interval: int = 1000,
@@ -118,8 +120,10 @@ class DiffusionLightningModule(LightningModule):
             SSIM weight within x0 loss.
         l1_weight
             L1 weight within x0 loss.
-        mask_weight
-            Weight for masked-out regions in loss (0 = ignore, 1 = full weight).
+        penumbra_weight
+            Loss weight for penumbra zone (0 = ignore).
+        background_weight
+            Loss weight for background zone (0.5 = half weight).
         validation_size
             Image size for validation sampling.
         validation_steps
@@ -227,13 +231,17 @@ class DiffusionLightningModule(LightningModule):
 
     def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:
         x0_raw = batch["image"]
-        mask = batch["mask"]
+        penumbra_mask = batch["penumbra_mask"]
+        background_mask = batch["background_mask"]
         kind = batch["kind"]
+
+        signal_mask = ~background_mask
 
         x0_raw = _apply_kind_constraints(x0_raw, kind)
 
-        x0_pre_clamp = self.model.normalize(x0_raw, kind, mask)
-        x0 = x0_pre_clamp.clamp(-6, 6)
+        x0_pre_clamp = self.model.normalize(x0_raw, kind, signal_mask)
+        x0_pre_clamp = torch.where(signal_mask.unsqueeze(1), x0_pre_clamp, torch.zeros_like(x0_pre_clamp))
+        x0 = self.model.clamp_x0(x0_pre_clamp, kind)
 
         eps = 1e-5
         t = torch.rand(x0.shape[0], device=self.device) * (1.0 - eps) + eps
@@ -243,7 +251,7 @@ class DiffusionLightningModule(LightningModule):
 
         output = self.model(x_t, t, kind)
 
-        valid_counts = mask.sum(dim=(-2, -1))
+        valid_counts = signal_mask.sum(dim=(-2, -1))
         valid_samples = valid_counts >= 1000
         n_valid = int(valid_samples.sum().item())
 
@@ -253,20 +261,24 @@ class DiffusionLightningModule(LightningModule):
 
         x0_v = x0[valid_samples]
         noise_v = noise[valid_samples]
-        mask_v = mask[valid_samples]
+        penumbra_mask_v = penumbra_mask[valid_samples]
+        background_mask_v = background_mask[valid_samples]
         kind_v = kind[valid_samples]
         pred_noise_v = output.noise[valid_samples]
         pred_x0_v = output.x0[valid_samples]
 
-        weighted_mask = torch.where(mask_v.unsqueeze(1), 1.0, self.hparams.mask_weight)
+        loss_weight = torch.ones_like(background_mask_v, dtype=x0_v.dtype)
+        loss_weight = torch.where(background_mask_v, self.hparams.background_weight, loss_weight)
+        loss_weight = torch.where(penumbra_mask_v, self.hparams.penumbra_weight, loss_weight)
+        loss_weight = loss_weight.unsqueeze(1)
         channel_mask = create_channel_mask(kind_v, self.device)
 
         t_v = t[valid_samples]
         signal_weight = self.model.alpha_bar(t_v)
 
-        loss_noise = noise_loss(pred_noise_v, noise_v, weighted_mask, channel_mask)
-        loss_l1 = l1_loss(pred_x0_v, x0_v, weighted_mask, channel_mask, reduction="none")
-        loss_ssim = ssim_loss(pred_x0_v, x0_v, weighted_mask, channel_mask, reduction="none").squeeze(-1)
+        loss_noise = noise_loss(pred_noise_v, noise_v, loss_weight, channel_mask)
+        loss_l1 = l1_loss(pred_x0_v, x0_v, loss_weight, channel_mask, reduction="none")
+        loss_ssim = ssim_loss(pred_x0_v, x0_v, loss_weight, channel_mask, reduction="none").squeeze(-1)
 
         loss_l1 = (loss_l1 * signal_weight).mean()
         loss_ssim = (loss_ssim * signal_weight).mean()
