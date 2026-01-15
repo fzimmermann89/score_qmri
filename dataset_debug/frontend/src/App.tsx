@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
 import { 
-  DatasetInfo, SampleResponse, AnnotationField, AnnotationValues, HistogramResponse, DisplayMode 
+  DatasetInfo, SampleResponse, AnnotationField, AnnotationValues, HistogramResponse, DisplayMode, ImageStats 
 } from './types';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { DatasetSelector } from './components/DatasetSelector';
@@ -38,6 +38,14 @@ function App() {
 
   const [histData, setHistData] = useState<HistogramResponse | null>(null);
   const [histLoading, setHistLoading] = useState(false);
+
+  const [gridStats, setGridStats] = useState<ImageStats | null>(null);
+  const [gridHistogram, setGridHistogram] = useState<HistogramResponse | null>(null);
+  const [gridLoading, setGridLoading] = useState(false);
+  const [gridPageStart, setGridPageStart] = useState(0);
+  const [gridRandomMode, setGridRandomMode] = useState(false);
+  const gridPageSize = 8;
+  const sampleIndex = sample?.index ?? 0;
 
   const [prefetchedSlice, setPrefetchedSlice] = useState<SampleResponse | null>(null);
   const [prefetchedRandom, setPrefetchedRandom] = useState<SampleResponse | null>(null);
@@ -90,6 +98,36 @@ function App() {
     return () => clearTimeout(timer);
 
   }, [sample, selectedDsIdx, augment, seed, displayMode, intensity, prefetchedSlice, prefetchedRandom]);
+
+  useEffect(() => {
+    if (viewMode !== 'grid' || gridRandomMode) return;
+    const newStart = Math.floor(sampleIndex / gridPageSize) * gridPageSize;
+    setGridPageStart((prev) => (prev === newStart ? prev : newStart));
+  }, [viewMode, gridRandomMode, sampleIndex, gridPageSize]);
+
+  useEffect(() => {
+    if (viewMode === 'single') {
+      setGridStats(null);
+      setGridHistogram(null);
+      setGridLoading(false);
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (isFullscreen) {
+        setIsFullscreen(false);
+        return;
+      }
+      if (viewMode === 'single') {
+        setViewMode('grid');
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isFullscreen, viewMode]);
 
   const loadStatus = async () => {
     try {
@@ -156,15 +194,15 @@ function App() {
 
   const handleDatasetSelect = (idx: number) => {
     setSelectedDsIdx(idx);
-    setIntensity({}); 
+    setIntensity({});
+    setGridRandomMode(false);
+    setGridPageStart(0);
     loadSample(idx, { index: 0, augment, seed, display_mode: displayMode });
   };
 
   const handleNavigate = (type: 'sample' | 'coil' | 'slice' | 'subject', direction: 'next' | 'prev') => {
     if (!sample) return;
     
-    console.time("Navigate"); // START TIMER
-
     const nav = sample.navigation;
     let nextParams = { 
       subject_idx: nav.current_subject_index,
@@ -183,10 +221,8 @@ function App() {
           const pNav = prefetchedSlice.navigation;
           if (pNav.current_subject_index === nextParams.subject_idx &&
               pNav.current_slice_index === nextParams.slice_idx + 1) {
-             console.log("Using PREFETCHED slice!");
              setSample(prefetchedSlice);
              setPrefetchedSlice(null);
-             console.timeEnd("Navigate");
              return;
           } else {
              console.warn("Prefetch mismatch:", pNav.current_slice_index, "vs expected", nextParams.slice_idx + 1);
@@ -200,33 +236,79 @@ function App() {
        const delta = direction === 'next' ? 1 : -1;
        const newIdx = Math.max(0, Math.min(nav.total_samples - 1, nav.linear_index + delta));
        loadSample(selectedDsIdx, { index: newIdx, augment, seed, display_mode: displayMode }, true);
-       console.timeEnd("Navigate");
        return;
     }
 
-    // For other navigations, also use silent mode as backend is fast
-    console.log("Fetching from network...");
     api.getSampleByHierarchy(selectedDsIdx, nextParams)
       .then(s => {
         setSample(s);
-        console.timeEnd("Navigate");
       })
       .catch(e => {
         console.warn("Navigation failed", e);
-        console.timeEnd("Navigate");
       });
   };
 
+  const handleGridPrevPage = () => {
+    if (!selectedDataset || gridRandomMode) return;
+    setGridPageStart(Math.max(0, gridPageStart - gridPageSize));
+  };
+
+  const handleGridNextPage = () => {
+    if (!selectedDataset || gridRandomMode) return;
+    const nextStart = gridPageStart + gridPageSize;
+    if (nextStart < selectedDataset.total_samples) {
+      setGridPageStart(nextStart);
+    }
+  };
+
+  const handleNextSampleKey = () => {
+    if (viewMode === 'grid') {
+      handleGridNextPage();
+      return;
+    }
+    handleNavigate('sample', 'next');
+  };
+
+  const handlePrevSampleKey = () => {
+    if (viewMode === 'grid') {
+      handleGridPrevPage();
+      return;
+    }
+    handleNavigate('sample', 'prev');
+  };
+
   useKeyboardNavigation({
-    onNextSample: () => handleNavigate('sample', 'next'),
-    onPrevSample: () => handleNavigate('sample', 'prev'),
-    onNextCoil: () => handleNavigate('coil', 'next'),
-    onPrevCoil: () => handleNavigate('coil', 'prev'),
-    onNextSlice: () => handleNavigate('slice', 'next'),
-    onPrevSlice: () => handleNavigate('slice', 'prev'),
-    onNextSubject: () => handleNavigate('subject', 'next'),
-    onPrevSubject: () => handleNavigate('subject', 'prev'),
+    onNextSample: handleNextSampleKey,
+    onPrevSample: handlePrevSampleKey,
+    onNextCoil: () => {
+      if (viewMode === 'grid') return;
+      handleNavigate('coil', 'next');
+    },
+    onPrevCoil: () => {
+      if (viewMode === 'grid') return;
+      handleNavigate('coil', 'prev');
+    },
+    onNextSlice: () => {
+      if (viewMode === 'grid') return;
+      handleNavigate('slice', 'next');
+    },
+    onPrevSlice: () => {
+      if (viewMode === 'grid') return;
+      handleNavigate('slice', 'prev');
+    },
+    onNextSubject: () => {
+      if (viewMode === 'grid') return;
+      handleNavigate('subject', 'next');
+    },
+    onPrevSubject: () => {
+      if (viewMode === 'grid') return;
+      handleNavigate('subject', 'prev');
+    },
     onRandomSample: async () => {
+      if (viewMode === 'grid') {
+        setGridRandomMode(true);
+        return;
+      }
       if (prefetchedRandom) {
          setSample(prefetchedRandom);
          setPrefetchedRandom(null);
@@ -244,12 +326,16 @@ function App() {
     onToggleAugment: () => {
       const newVal = !augment;
       setAugment(newVal);
-      if (sample) loadSample(selectedDsIdx, { index: sample.index, augment: newVal, seed, display_mode: displayMode });
+      if (viewMode === 'single' && sample) {
+        loadSample(selectedDsIdx, { index: sample.index, augment: newVal, seed, display_mode: displayMode });
+      }
     },
     onNewAugmentSeed: () => {
       const newSeed = seed + 1;
       setSeed(newSeed);
-      if (sample) loadSample(selectedDsIdx, { index: sample.index, augment, seed: newSeed, display_mode: displayMode });
+      if (viewMode === 'single' && sample) {
+        loadSample(selectedDsIdx, { index: sample.index, augment, seed: newSeed, display_mode: displayMode });
+      }
     },
     onToggleMasks: () => { setShowPenumbra(p => !p); setShowBackground(b => !b); },
     onTogglePenumbra: () => setShowPenumbra(p => !p),
@@ -257,13 +343,16 @@ function App() {
     onToggleHistogram: () => {
       const newVal = !showHistogram;
       setShowHistogram(newVal);
-       if (newVal && sample) fetchHistogram(selectedDsIdx, { index: sample.index, augment, seed, display_mode: displayMode });
-
+      if (viewMode === 'single' && newVal && sample) {
+        fetchHistogram(selectedDsIdx, { index: sample.index, augment, seed, display_mode: displayMode });
+      }
     },
     onToggleDisplayMode: () => {
       const newMode = displayMode === 'real_imag' ? 'mag_phase' : 'real_imag';
       setDisplayMode(newMode);
-      if (sample) loadSample(selectedDsIdx, { index: sample.index, augment, seed, display_mode: newMode });
+      if (viewMode === 'single' && sample) {
+        loadSample(selectedDsIdx, { index: sample.index, augment, seed, display_mode: newMode });
+      }
     },
     onToggleFullscreen: () => setIsFullscreen(f => !f),
     onToggleHelp: () => setShowHelp(h => !h),
@@ -274,6 +363,10 @@ function App() {
        if (datasets.find(d => d.dataset_idx === idx)) handleDatasetSelect(idx);
     }
   });
+
+  const activeStats = viewMode === 'grid' ? gridStats : sample?.stats;
+  const activeHistogram = viewMode === 'grid' ? gridHistogram : histData;
+  const activeHistogramLoading = viewMode === 'grid' ? gridLoading : histLoading;
 
   if (error) {
     return (
@@ -322,11 +415,6 @@ function App() {
         </div>
       </header>
 
-      {mockMode && (
-        // hidden in body, moved to header
-        null
-      )}
-
       <div className="flex-grow grid grid-cols-[240px_minmax(0,1fr)_240px] gap-2 min-h-0">
         
         <div className="flex flex-col gap-2 overflow-y-auto pr-1 min-h-0">
@@ -338,7 +426,7 @@ function App() {
             />
           )}
           {sample && <ConfigPanel config={selectedDataset?.config} />}
-          {sample && <StatsPanel stats={sample.stats} />}
+          {activeStats && <StatsPanel stats={activeStats} />}
           
           <div className="bg-gray-900 border border-gray-800 rounded-lg p-3">
              <h3 className="text-sm font-bold text-gray-300 uppercase mb-2">View Settings</h3>
@@ -359,9 +447,6 @@ function App() {
                    }} className="text-blue-400 hover:text-blue-300 text-sm">New (Space)</button>
                  </div>
 
-                 <div className="flex flex-col gap-1 mt-2">
-                    {/* Layer controls moved to ImageViewer */}
-                 </div>
               </div>
            </div>
 
@@ -372,23 +457,29 @@ function App() {
                 onClick={() => {
                   const n = !showHistogram;
                   setShowHistogram(n);
-                  if(n && sample) fetchHistogram(selectedDsIdx, { index: sample.index, augment, seed, display_mode: displayMode });
+                  if (n && viewMode === 'single' && sample) {
+                    fetchHistogram(selectedDsIdx, { index: sample.index, augment, seed, display_mode: displayMode });
+                  }
                 }}
                 className={`text-[11px] px-2 py-1 rounded border ${showHistogram ? 'bg-blue-900 border-blue-700 text-white' : 'bg-gray-900 border-gray-700 text-gray-400'}`}
               >
                 {showHistogram ? 'On' : 'Off'}
               </button>
             </div>
-            {showHistogram && <Histogram data={histData} loading={histLoading} onClose={() => setShowHistogram(false)} />}
+            {showHistogram && <Histogram data={activeHistogram} loading={activeHistogramLoading} onClose={() => setShowHistogram(false)} />}
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 min-w-0 relative">
+        <div className="flex flex-col gap-3 min-w-0 min-h-0 relative">
           <div className="flex-grow min-h-0 bg-gray-900/80 rounded-xl relative overflow-hidden border border-gray-800 shadow-inner">
             {viewMode === 'grid' && selectedDataset ? (
                <GridView 
                   dataset={selectedDataset}
-                  startIndex={sample?.index || 0}
+                  pageStart={gridPageStart}
+                  pageSize={gridPageSize}
+                  isRandomMode={gridRandomMode}
+                  onPageStartChange={setGridPageStart}
+                  onRandomModeChange={setGridRandomMode}
                   augment={augment}
                   seed={seed}
                   displayMode={displayMode}
@@ -396,6 +487,11 @@ function App() {
                     setViewMode('single');
                     loadSample(selectedDsIdx, { index: idx, augment, seed, display_mode: displayMode });
                   }}
+                  onUpdateGlobalStats={(stats, histogram) => {
+                    setGridStats(stats);
+                    setGridHistogram(histogram);
+                  }}
+                  onLoadingChange={setGridLoading}
                />
             ) : (
               <>
@@ -459,7 +555,7 @@ function App() {
           )}
         </div>
 
-        <div className="flex flex-col h-full overflow-hidden min-h-0 gap-3">
+        <div className="flex flex-col h-full overflow-y-auto min-h-0 gap-3 pr-1">
            <AnnotationPanel 
               datasetName={selectedDataset?.h5_filename || ''}
               fields={fields}

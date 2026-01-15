@@ -60,6 +60,19 @@ export interface SampleResponse {
   colorbar_image_base64?: string;
 }
 
+export interface BatchSampleResponse {
+  index: number;
+  image_left_base64: string;
+  image_right_base64: string | null;
+  image_left_label: string;
+  image_right_label: string | null;
+  colorbar_range: {
+    left: [number, number];
+    right: [number, number];
+  };
+  shape?: [number, number];
+}
+
 export interface HistogramResponse {
   bins: number[];
   counts: number[];
@@ -69,6 +82,13 @@ export interface HistogramResponse {
     mean: number;
     std: number;
   };
+}
+
+export interface BatchDataResponse {
+  samples: BatchSampleResponse[];
+  global_stats: ImageStats;
+  global_histogram: HistogramResponse;
+  global_range: [number, number];
 }
 
 export interface AnnotationField {

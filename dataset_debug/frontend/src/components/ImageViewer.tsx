@@ -16,14 +16,12 @@ interface Props {
   onToggleBackground: () => void;
 }
 
-const Colorbar: React.FC<{ range: [number, number]; cmap?: 'gray' | 'twilight' }> = ({ range, cmap = 'gray' }) => {
-  console.time("Colorbar Render");
-  
+const Colorbar: React.FC<{ range: [number, number]; cmap?: 'gray' | 'twilight' }> = React.memo(({ range, cmap = 'gray' }) => {
   const gradient = cmap === 'twilight' 
     ? 'linear-gradient(to top, #5e4fa2, #3288bd, #66c2a5, #abdda4, #e6f598, #fee08b, #fdae61, #f46d43, #d53e4f, #9e0142, #5e4fa2)'
     : 'linear-gradient(to top, #000, #fff)';
   
-  const component = (
+  return (
     <div className="flex flex-col items-center gap-1 px-1 py-2 shrink-0 bg-gray-950/70 border-l border-gray-800 min-w-[28px]">
       <span className="text-[11px] font-mono text-gray-300">{range[1].toFixed(2)}</span>
       <div 
@@ -33,23 +31,12 @@ const Colorbar: React.FC<{ range: [number, number]; cmap?: 'gray' | 'twilight' }
       <span className="text-[11px] font-mono text-gray-300">{range[0].toFixed(2)}</span>
     </div>
   );
-
-  useEffect(() => {
-     return () => console.timeEnd("Colorbar Render");
-  }, [range, cmap]);
-
-  return component;
-};
+});
 
 export const ImageViewer: React.FC<Props> = ({ 
   sample, showPenumbra, showBackground, isFullscreen, onCloseFullscreen, onIntensityChange,
   displayMode, onDisplayModeChange, showImage, onToggleImage, onTogglePenumbra, onToggleBackground
 }) => {
-  useEffect(() => {
-     console.time("ImageViewer Render");
-     return () => console.timeEnd("ImageViewer Render");
-  });
-
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -61,16 +48,10 @@ export const ImageViewer: React.FC<Props> = ({
   const [vmin, setVmin] = useState<number>(sample.colorbar_range.left[0]);
   const [vmax, setVmax] = useState<number>(sample.colorbar_range.left[1]);
 
-  // Keep zoom/offset when sample changes, only reset if dataset explicitly requires it or user resets manually
-  // We remove the useEffect that resets scale/offset on sample change
-  
   useEffect(() => {
     setVmin(sample.colorbar_range.left[0]);
     setVmax(sample.colorbar_range.left[1]);
-  }, [sample]); 
-  
-  // Note: previous logic reset scale/offset here. Removed to persist zoom.
-
+  }, [sample]);
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();

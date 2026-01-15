@@ -133,6 +133,114 @@ class MockDatasetManager:
         linear_idx = structure.position_to_index[position]
         return self.get_sample(dataset_idx, linear_idx, augment, seed, display_mode, vmin, vmax)
 
+    def get_batch_data(
+        self,
+        dataset_idx: int,
+        indices: list[int],
+        augment: bool,
+        seed: int | None,
+        display_mode: str,
+    ) -> dict[str, Any]:
+        if seed is not None:
+            random.seed(seed)
+            np.random.seed(seed)
+            torch.manual_seed(seed)
+
+        ds = self._datasets[dataset_idx]
+        images_to_stack = []
+        background_masks = []
+
+        for idx in indices:
+            sample = ds[idx]
+            img = sample["image"]
+            images_to_stack.append(img)
+            background_masks.append(sample["background_mask"])
+
+        batch_tensor = torch.stack(images_to_stack)
+        hist_values = batch_tensor.abs().float() if batch_tensor.is_complex() else batch_tensor.float()
+        flat_tensor = hist_values.flatten()
+        flat_tensor = flat_tensor[torch.isfinite(flat_tensor)]
+
+        signal_fraction = 0.0
+        if background_masks:
+            mask_tensor = torch.stack(background_masks)
+            signal_fraction = (~mask_tensor).float().mean().item()
+
+        if flat_tensor.numel() == 0:
+            hist_bins = np.linspace(0.0, 1.0, 2).tolist()
+            hist_counts = [0]
+            stats = {
+                "min": 0.0,
+                "max": 0.0,
+                "mean": 0.0,
+                "std": 0.0,
+                "variance": 0.0,
+                "signal_fraction": signal_fraction,
+            }
+            render_min = 0.0
+            render_max = 1.0
+        else:
+            variance = torch.var(flat_tensor, unbiased=False).item()
+            stats = {
+                "min": flat_tensor.min().item(),
+                "max": flat_tensor.max().item(),
+                "mean": flat_tensor.mean().item(),
+                "std": float(np.sqrt(variance)),
+                "variance": variance,
+                "signal_fraction": signal_fraction,
+            }
+
+            counts, bin_edges = np.histogram(flat_tensor.cpu().numpy(), bins=128)
+            hist_bins = bin_edges.tolist()
+            hist_counts = counts.tolist()
+
+            if batch_tensor.is_complex() and display_mode == "real_imag":
+                max_abs = torch.maximum(batch_tensor.real.abs(), batch_tensor.imag.abs()).max().item()
+                render_min = -max_abs
+                render_max = max_abs
+            elif batch_tensor.is_complex():
+                render_min = 0.0
+                render_max = flat_tensor.max().item()
+            else:
+                render_min = stats["min"]
+                render_max = stats["max"]
+
+        rendered_samples = []
+        for i, img in enumerate(images_to_stack):
+            left_img, right_img, left_lbl, right_lbl, ranges, _, _ = render_images(
+                img,
+                display_mode=display_mode,
+                is_complex=bool(img.is_complex()),
+                vmin=render_min,
+                vmax=render_max,
+            )
+
+            rendered_samples.append({
+                "index": indices[i],
+                "image_left_base64": left_img,
+                "image_right_base64": right_img,
+                "image_left_label": left_lbl,
+                "image_right_label": right_lbl,
+                "colorbar_range": ranges,
+                "shape": list(img.shape[-2:]),
+            })
+
+        return {
+            "samples": rendered_samples,
+            "global_stats": stats,
+            "global_histogram": {
+                "bins": hist_bins,
+                "counts": hist_counts,
+                "stats": {
+                    "min": stats["min"],
+                    "max": stats["max"],
+                    "mean": stats["mean"],
+                    "std": stats["std"],
+                },
+            },
+            "global_range": (render_min, render_max),
+        }
+
     def get_histogram(self, dataset_idx: int, sample_idx: int, augment: bool, seed: int | None) -> dict[str, Any]:
         if seed is not None:
             random.seed(seed)

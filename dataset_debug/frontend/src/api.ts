@@ -1,6 +1,6 @@
 import { 
   DatasetInfo, SampleResponse, SampleParams, HistogramResponse, 
-  AnnotationField, AnnotationValues, HierarchyParams 
+  AnnotationField, AnnotationValues, HierarchyParams, BatchDataResponse 
 } from './types';
 
 const API_ROOT = '/api';
@@ -44,6 +44,15 @@ export const api = {
     if (params.vmax !== undefined) search.set('vmax', params.vmax.toString());
 
     const res = await fetch(`${API_ROOT}/datasets/${datasetIdx}/sample-by-hierarchy?${search.toString()}`);
+    return res.json();
+  },
+
+  getBatchData: async (datasetIdx: number, params: { indices: number[]; augment: boolean; seed: number; display_mode: string }): Promise<BatchDataResponse> => {
+    const res = await fetch(`${API_ROOT}/datasets/${datasetIdx}/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
     return res.json();
   },
 

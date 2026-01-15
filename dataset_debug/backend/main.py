@@ -141,6 +141,18 @@ def get_sample_by_hierarchy(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/datasets/{dataset_idx}/batch")
+def get_batch_data(dataset_idx: int, payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        indices = payload.get("indices", [])
+        augment = payload.get("augment", True)
+        seed = payload.get("seed", None)
+        display_mode = payload.get("display_mode", "real_imag")
+        return _manager.get_batch_data(dataset_idx, indices, augment, seed, display_mode)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/datasets/{dataset_idx}/random-index")
 def get_random_index(dataset_idx: int) -> dict[str, int]:
     return {"index": _manager.random_index(dataset_idx)}

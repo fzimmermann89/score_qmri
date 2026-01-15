@@ -24,9 +24,8 @@ export const Histogram: React.FC<Props> = ({ data, loading, onClose }) => {
         onClick={onClose}
         className="absolute top-2 right-2 text-gray-600 hover:text-white"
       >✕</button>
-      <h3 className="text-xs font-bold text-gray-400 uppercase mb-1">Histogram</h3>
       
-      <div className="h-24 flex items-end gap-[1px] w-full">
+      <div className="h-24 flex items-end gap-[1px] w-full mt-3">
         {counts.map((count, i) => (
           <div 
             key={i}
