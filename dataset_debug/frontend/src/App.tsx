@@ -277,6 +277,15 @@ function App() {
     handleNavigate('sample', 'prev');
   };
 
+  const handleGridStatsUpdate = useCallback((stats: ImageStats, histogram: HistogramResponse) => {
+    setGridStats(stats);
+    setGridHistogram(histogram);
+  }, []);
+
+  const handleGridLoadingChange = useCallback((value: boolean) => {
+    setGridLoading(value);
+  }, []);
+
   useKeyboardNavigation({
     onNextSample: handleNextSampleKey,
     onPrevSample: handlePrevSampleKey,
@@ -487,11 +496,8 @@ function App() {
                     setViewMode('single');
                     loadSample(selectedDsIdx, { index: idx, augment, seed, display_mode: displayMode });
                   }}
-                  onUpdateGlobalStats={(stats, histogram) => {
-                    setGridStats(stats);
-                    setGridHistogram(histogram);
-                  }}
-                  onLoadingChange={setGridLoading}
+                  onUpdateGlobalStats={handleGridStatsUpdate}
+                  onLoadingChange={handleGridLoadingChange}
                />
             ) : (
               <>

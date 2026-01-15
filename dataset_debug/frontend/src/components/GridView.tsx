@@ -176,7 +176,7 @@ export const GridView: React.FC<Props> = ({
 
       <div className="flex-1 min-h-0 flex gap-3">
         <div className="flex-1 min-h-0 grid grid-cols-4 auto-rows-fr gap-3 overflow-y-auto pr-1">
-          {loading ? (
+          {loading && samples.length === 0 ? (
             <div className="col-span-4 flex items-center justify-center text-gray-500 animate-pulse h-64">
               Loading grid...
             </div>

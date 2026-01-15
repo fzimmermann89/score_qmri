@@ -236,23 +236,6 @@ export const ImageViewer: React.FC<Props> = ({
                </div>
             </div>
 
-             <div className="flex flex-col gap-1 items-center border-r border-gray-700 pr-2 mr-1">
-               <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider">Mode</span>
-               <div className="flex flex-col gap-1 w-full">
-                  <button 
-                     onClick={() => onDisplayModeChange('real_imag')}
-                     className={`text-[9px] px-2 py-0.5 rounded border transition-colors ${displayMode === 'real_imag' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-400 hover:text-gray-300'}`}
-                  >
-                     Re/Im
-                  </button>
-                  <button 
-                     onClick={() => onDisplayModeChange('mag_phase')}
-                     className={`text-[9px] px-2 py-0.5 rounded border transition-colors ${displayMode === 'mag_phase' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-400 hover:text-gray-300'}`}
-                  >
-                     Mg/Ph
-                  </button>
-               </div>
-            </div>
 
              <div className="flex flex-col gap-1 items-center border-r border-gray-700 pr-2 mr-1">
                 <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider">Zoom</span>
