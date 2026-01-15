@@ -7,6 +7,7 @@ interface Props {
   pageStart: number;
   pageSize: number;
   isRandomMode: boolean;
+  randomRequestKey: number;
   onPageStartChange: (start: number) => void;
   onRandomModeChange: (enabled: boolean) => void;
   onSelectSample: (index: number) => void;
@@ -22,6 +23,7 @@ export const GridView: React.FC<Props> = ({
   pageStart,
   pageSize,
   isRandomMode,
+  randomRequestKey,
   onPageStartChange,
   onRandomModeChange,
   onSelectSample,
@@ -77,18 +79,30 @@ export const GridView: React.FC<Props> = ({
     }
   }, [isRandomMode, randomIndices.length, refreshRandom]);
 
+  useEffect(() => {
+    if (!isRandomMode) return;
+    if (randomRequestKey === 0) return;
+    refreshRandom();
+  }, [randomRequestKey, isRandomMode, refreshRandom]);
+
   const handleSequential = () => {
     onRandomModeChange(false);
     onPageStartChange(Math.floor(pageStart / pageSize) * pageSize);
   };
 
   const handlePrev = () => {
-    if (isRandomMode) return;
+    if (isRandomMode) {
+      refreshRandom();
+      return;
+    }
     onPageStartChange(Math.max(0, pageStart - pageSize));
   };
 
   const handleNext = () => {
-    if (isRandomMode) return;
+    if (isRandomMode) {
+      refreshRandom();
+      return;
+    }
     if (pageStart + pageSize < dataset.total_samples) {
       onPageStartChange(pageStart + pageSize);
     }
@@ -159,14 +173,14 @@ export const GridView: React.FC<Props> = ({
           <div className="w-px bg-gray-800 mx-2" />
           <button
             onClick={handlePrev}
-            disabled={pageStart === 0 || loading || isRandomMode}
+            disabled={loading || (!isRandomMode && pageStart === 0)}
             className="glass-button disabled:opacity-30"
           >
             ← Prev
           </button>
           <button
             onClick={handleNext}
-            disabled={pageStart + pageSize >= dataset.total_samples || loading || isRandomMode}
+            disabled={loading || (!isRandomMode && pageStart + pageSize >= dataset.total_samples)}
             className="glass-button disabled:opacity-30"
           >
             Next →

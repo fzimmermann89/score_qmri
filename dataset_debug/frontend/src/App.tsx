@@ -44,6 +44,7 @@ function App() {
   const [gridLoading, setGridLoading] = useState(false);
   const [gridPageStart, setGridPageStart] = useState(0);
   const [gridRandomMode, setGridRandomMode] = useState(false);
+  const [gridRandomRequestKey, setGridRandomRequestKey] = useState(0);
   const gridPageSize = 8;
   const sampleIndex = sample?.index ?? 0;
 
@@ -249,12 +250,20 @@ function App() {
   };
 
   const handleGridPrevPage = () => {
-    if (!selectedDataset || gridRandomMode) return;
+    if (!selectedDataset) return;
+    if (gridRandomMode) {
+      setGridRandomRequestKey((prev) => prev + 1);
+      return;
+    }
     setGridPageStart(Math.max(0, gridPageStart - gridPageSize));
   };
 
   const handleGridNextPage = () => {
-    if (!selectedDataset || gridRandomMode) return;
+    if (!selectedDataset) return;
+    if (gridRandomMode) {
+      setGridRandomRequestKey((prev) => prev + 1);
+      return;
+    }
     const nextStart = gridPageStart + gridPageSize;
     if (nextStart < selectedDataset.total_samples) {
       setGridPageStart(nextStart);
@@ -487,6 +496,7 @@ function App() {
                   pageStart={gridPageStart}
                   pageSize={gridPageSize}
                   isRandomMode={gridRandomMode}
+                  randomRequestKey={gridRandomRequestKey}
                   onPageStartChange={setGridPageStart}
                   onRandomModeChange={setGridRandomMode}
                   augment={augment}
