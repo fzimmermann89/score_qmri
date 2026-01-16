@@ -30,6 +30,12 @@ _mock_manager: MockDatasetManager | None = None
 _real_manager: DatasetManager | None = None
 
 
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
 def _load_state(config_path: str | None) -> tuple[DatasetManager | MockDatasetManager, AnnotationStore, bool]:
     global _mock_mode, _mock_manager, _real_manager
     try:
@@ -39,7 +45,8 @@ def _load_state(config_path: str | None) -> tuple[DatasetManager | MockDatasetMa
         _real_manager = DatasetManager(config)
         annotations = AnnotationStore(Path(__file__).parent, config.config_path)
         return _real_manager, annotations, False
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to load real datasets, falling back to mock mode. Error: {e}")
         _mock_manager = MockDatasetManager()
         annotations = AnnotationStore(Path(__file__).parent, Path("mock_config.yaml"))
         _mock_mode = True

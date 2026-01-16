@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { SampleResponse, DisplayMode } from '../types';
+import { ImagePane } from './ImagePane';
 
 interface Props {
   sample: SampleResponse;
@@ -15,23 +16,6 @@ interface Props {
   onTogglePenumbra: () => void;
   onToggleBackground: () => void;
 }
-
-const Colorbar: React.FC<{ range: [number, number]; cmap?: 'gray' | 'twilight' }> = React.memo(({ range, cmap = 'gray' }) => {
-  const gradient = cmap === 'twilight' 
-    ? 'linear-gradient(to top, #5e4fa2, #3288bd, #66c2a5, #abdda4, #e6f598, #fee08b, #fdae61, #f46d43, #d53e4f, #9e0142, #5e4fa2)'
-    : 'linear-gradient(to top, #000, #fff)';
-  
-  return (
-    <div className="flex flex-col items-center gap-1 px-1 py-2 shrink-0 bg-gray-950/70 border-l border-gray-800 min-w-[28px]">
-      <span className="text-[11px] font-mono text-gray-300">{range[1].toFixed(2)}</span>
-      <div 
-        className="w-3 flex-1 rounded-sm border border-gray-700 shadow-inner" 
-        style={{ background: gradient, minHeight: 140 }}
-      />
-      <span className="text-[11px] font-mono text-gray-300">{range[0].toFixed(2)}</span>
-    </div>
-  );
-});
 
 export const ImageViewer: React.FC<Props> = ({ 
   sample, showPenumbra, showBackground, isFullscreen, onCloseFullscreen, onIntensityChange,
@@ -94,100 +78,62 @@ export const ImageViewer: React.FC<Props> = ({
     }
   };
 
+  const onPaneMouseMove = (e: React.MouseEvent, imgRef: HTMLImageElement | null, side: 'left' | 'right') => {
+    handleMouseMove(e);
+    handleImageMouseMove(e, imgRef, side);
+  };
+
   const containerClass = isFullscreen 
     ? "fixed inset-0 z-50 bg-gray-950 flex flex-col" 
     : "flex flex-col h-full bg-gray-950";
 
-  const renderImagePane = (
-    base64: string, 
-    label: string, 
-    range: [number, number], 
-    side: 'left' | 'right',
-    cmap: 'gray' | 'twilight' = 'gray',
-    imgRef: React.RefObject<HTMLImageElement>
-  ) => (
-      <div className="flex-1 flex min-w-0 min-h-0 relative group">
-        <div className="flex-1 flex flex-col min-w-0 min-h-0">
-          <div className="absolute top-2 left-2 z-10 px-2 py-0.5 bg-gray-950/60 backdrop-blur-sm rounded text-[10px] font-medium text-gray-300 pointer-events-none border border-white/10">
-            {label}
-          </div>
-          
-          <div 
-            className="flex-1 relative bg-gray-900 overflow-hidden cursor-crosshair"
-            onWheel={handleWheel}
-            onMouseDown={handleMouseDown}
-            onMouseMove={(e) => {
-              handleMouseMove(e);
-              handleImageMouseMove(e, imgRef.current, side);
-            }}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={() => { handleMouseUp(); setHoverInfo(null); }}
-          >
-            <div className="absolute inset-0 flex items-center justify-center p-0">
-              <div 
-                className="relative inline-block"
-                style={{ 
-                  transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-                  transformOrigin: 'center center',
-                  transition: isDragging ? 'none' : 'transform 0.15s ease-out',
-                  maxWidth: '100%',
-                  maxHeight: '100%'
-                }}
-              >
-                <img 
-                  ref={imgRef}
-                  src={base64} 
-                  className={`block max-w-full max-h-full transition-opacity ${showImage ? 'opacity-100' : 'opacity-0'}`}
-                  style={{ imageRendering: 'pixelated' }}
-                  draggable={false}
-                  decoding="async"
-                />
-                
-                {showPenumbra && sample.penumbra_overlay_base64 && (
-                  <img 
-                    src={sample.penumbra_overlay_base64} 
-                    className="absolute inset-0 w-full h-full opacity-60 pointer-events-none"
-                    style={{ imageRendering: 'pixelated' }}
-                    draggable={false}
-                  />
-                )}
-                {showBackground && sample.background_overlay_base64 && (
-                  <img 
-                    src={sample.background_overlay_base64} 
-                    className="absolute inset-0 w-full h-full opacity-60 pointer-events-none"
-                    style={{ imageRendering: 'pixelated' }}
-                    draggable={false}
-                  />
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        <Colorbar range={range} cmap={cmap} />
-      </div>
-    );
-
   return (
     <div className={containerClass}>
       <div className="flex-1 flex min-h-0 divide-x divide-gray-800 relative">
-        {renderImagePane(
-          sample.image_left_base64, 
-          sample.image_left_label, 
-          sample.colorbar_range.left, 
-          'left',
-          'gray',
-          leftImageRef
-        )}
+        <ImagePane
+          base64={sample.image_left_base64}
+          label={sample.image_left_label}
+          range={sample.colorbar_range.left}
+          side="left"
+          cmap="gray"
+          imgRef={leftImageRef}
+          scale={scale}
+          offset={offset}
+          isDragging={isDragging}
+          showImage={showImage}
+          showPenumbra={showPenumbra}
+          showBackground={showBackground}
+          penumbraOverlay={sample.penumbra_overlay_base64}
+          backgroundOverlay={sample.background_overlay_base64}
+          onWheel={handleWheel}
+          onMouseDown={handleMouseDown}
+          onMouseMove={onPaneMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={() => { handleMouseUp(); setHoverInfo(null); }}
+        />
+        
         {sample.image_right_base64 && sample.image_right_label && (
-          renderImagePane(
-            sample.image_right_base64, 
-            sample.image_right_label, 
-            sample.colorbar_range.right, 
-            'right',
-            sample.image_right_label === 'Phase' ? 'twilight' : 'gray',
-            rightImageRef
-          )
+          <ImagePane
+            base64={sample.image_right_base64}
+            label={sample.image_right_label}
+            range={sample.colorbar_range.right}
+            side="right"
+            cmap={sample.image_right_label === 'Phase' ? 'twilight' : 'gray'}
+            imgRef={rightImageRef}
+            scale={scale}
+            offset={offset}
+            isDragging={isDragging}
+            showImage={showImage}
+            showPenumbra={showPenumbra}
+            showBackground={showBackground}
+            penumbraOverlay={sample.penumbra_overlay_base64}
+            backgroundOverlay={sample.background_overlay_base64}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseMove={onPaneMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={() => { handleMouseUp(); setHoverInfo(null); }}
+          />
         )}
 
         <div className="absolute bottom-4 right-10 flex gap-2 bg-gray-900/90 backdrop-blur border border-gray-700 p-1.5 rounded-lg shadow-xl z-20 items-end">

@@ -4,6 +4,8 @@ import {
   DatasetInfo, SampleResponse, AnnotationField, AnnotationValues, HistogramResponse, DisplayMode, ImageStats 
 } from './types';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
+import { usePrefetch } from './hooks/usePrefetch';
+import { useDatasets } from './hooks/useDatasets';
 import { DatasetSelector } from './components/DatasetSelector';
 import { ImageViewer } from './components/ImageViewer';
 import { GridView } from './components/GridView';
@@ -15,8 +17,7 @@ import { AnnotationPanel } from './components/AnnotationPanel';
 import { KeyboardHelp } from './components/KeyboardHelp';
 
 function App() {
-  const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
-  const [mockMode, setMockMode] = useState<boolean>(false);
+  const { datasets, mockMode, error: datasetsError } = useDatasets();
   const [selectedDsIdx, setSelectedDsIdx] = useState<number>(0);
   const selectedDataset = datasets.find(ds => ds.dataset_idx === selectedDsIdx) || null;
   
@@ -48,57 +49,34 @@ function App() {
   const gridPageSize = 8;
   const sampleIndex = sample?.index ?? 0;
 
-  const [prefetchedSlice, setPrefetchedSlice] = useState<SampleResponse | null>(null);
-  const [prefetchedRandom, setPrefetchedRandom] = useState<SampleResponse | null>(null);
+  const { prefetchedSlice, prefetchedRandom, setPrefetchedSlice, setPrefetchedRandom } = usePrefetch({
+    sample,
+    selectedDsIdx,
+    augment,
+    seed,
+    displayMode,
+    intensity,
+    loading,
+    selectedDataset: !!selectedDataset
+  });
 
   const [fields, setFields] = useState<AnnotationField[]>([]);
   const [annotations, setAnnotations] = useState<AnnotationValues>({});
 
   useEffect(() => {
-    loadDatasets();
-    loadAnnotationFields();
-    loadStatus();
-  }, []);
+    if (datasetsError) {
+      setError(datasetsError);
+    }
+    if (datasets.length > 0 && !sample) {
+      const firstIdx = datasets[0].dataset_idx;
+      setSelectedDsIdx(firstIdx);
+      loadSample(firstIdx, { index: 0, augment, seed, display_mode: displayMode });
+    }
+  }, [datasets, datasetsError]);
 
   useEffect(() => {
-    if (!sample || loading || !selectedDataset) return;
-    
-    const prefetch = async () => {
-       if (sample.navigation.can_next_slice) {
-          const nav = sample.navigation;
-          const nextSliceParams = {
-             subject_idx: nav.current_subject_index,
-             slice_idx: nav.current_slice_index + 1,
-             coil_idx: nav.coil_count ? (nav.current_coil_index ?? 0) : undefined,
-             augment, seed, display_mode: displayMode, ...intensity
-          };
-          
-          const isCached = prefetchedSlice && 
-             prefetchedSlice.navigation.current_subject_index === nextSliceParams.subject_idx &&
-             prefetchedSlice.navigation.current_slice_index === nextSliceParams.slice_idx &&
-             prefetchedSlice.navigation.current_coil_index === nextSliceParams.coil_idx;
-          
-          if (!isCached) {
-             try {
-                const s = await api.getSampleByHierarchy(selectedDsIdx, nextSliceParams);
-                setPrefetchedSlice(s);
-             } catch(e) { console.warn("Prefetch slice failed", e); }
-          }
-       }
-
-       if (!prefetchedRandom) {
-          try {
-             const idx = await api.getRandomIndex(selectedDsIdx);
-             const s = await api.getSample(selectedDsIdx, { index: idx, augment, seed, display_mode: displayMode, ...intensity });
-             setPrefetchedRandom(s);
-          } catch (e) { console.warn("Prefetch random failed", e); }
-       }
-    };
-
-    const timer = setTimeout(prefetch, 200);
-    return () => clearTimeout(timer);
-
-  }, [sample, selectedDsIdx, augment, seed, displayMode, intensity, prefetchedSlice, prefetchedRandom]);
+    loadAnnotationFields();
+  }, []);
 
   useEffect(() => {
     if (viewMode !== 'grid' || gridRandomMode) return;
@@ -129,29 +107,6 @@ function App() {
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isFullscreen, viewMode]);
-
-  const loadStatus = async () => {
-    try {
-      const res = await fetch('/api/status');
-      const data = await res.json();
-      setMockMode(data.mock_mode || false);
-    } catch (e) { console.error(e); }
-  };
-
-  const loadDatasets = async () => {
-    try {
-      const data = await api.getDatasets();
-      setDatasets(data.datasets);
-      setMockMode(data.mock_mode || false);
-      if (data.datasets.length > 0) {
-        setSelectedDsIdx(data.datasets[0].dataset_idx);
-        loadSample(data.datasets[0].dataset_idx, { index: 0, augment, seed, display_mode: displayMode });
-      }
-    } catch (e) {
-      console.error(e);
-      setError("Failed to load datasets. Is backend running?");
-    }
-  };
 
   const loadAnnotationFields = async () => {
     try {
