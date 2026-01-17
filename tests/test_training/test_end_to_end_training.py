@@ -11,13 +11,10 @@ import pytest
 import torch
 from lightning.pytorch.cli import LightningCLI
 
+from score_qmri.cli import DiffusionLightningCLI
 from score_qmri.datasets.config import AugmentationConfig
 from score_qmri.datasets.kind import DatasetKind
-from score_qmri.datasets.lightning import (
-    ConstantSchedule,
-    MagnitudeDatasetConfig,
-    MRIDataModule,
-)
+from score_qmri.datasets.lightning import ConstantSchedule, MagnitudeDatasetConfig, MRIDataModule
 from score_qmri.training.lightning_module import DiffusionLightningModule
 
 
@@ -212,7 +209,6 @@ def test_training_with_yaml_config(
     training_yaml_config: str,
     fast_trainer: pl.Trainer,
 ) -> None:
-    """Verify Lightning CLI correctly parses YAML config and training succeeds."""
     try:
         from score_qmri.training.losses import ssim_loss
 
@@ -235,6 +231,34 @@ def test_training_with_yaml_config(
 
         assert fast_trainer.global_step == 4
         assert "train/loss" in fast_trainer.logged_metrics
+
+    finally:
+        sys.argv = original_argv
+
+
+def test_cli_parses_default_config() -> None:
+    config_path = Path(__file__).resolve().parents[2] / "config.yaml"
+    if not config_path.exists():
+        pytest.skip("config.yaml not found")
+
+    original_argv = sys.argv.copy()
+
+    try:
+        sys.argv = ["test", "--config", str(config_path)]
+
+        cli = DiffusionLightningCLI(
+            DiffusionLightningModule,
+            MRIDataModule,
+            run=False,
+            subclass_mode_data=True,
+        )
+
+        assert isinstance(cli.model, DiffusionLightningModule)
+        assert cli.model.model.train_clip == 1.2
+        assert cli.model.model.sample_clip == 1.0
+        assert cli.model.model._kind_scale_lookup[int(DatasetKind.T1MAP)] == 0.0003
+        assert cli.datamodule is not None
+        assert cli.datamodule.dataset_configs
 
     finally:
         sys.argv = original_argv

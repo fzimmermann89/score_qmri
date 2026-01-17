@@ -19,7 +19,7 @@ class FlatH5Dataset(BaseMRIDataset):
     """Base class for flat H5 files with subject datasets at root.
 
     Subclasses can override `_process_slice` to apply custom processing
-    (e.g., scaling for quantitative maps).
+    (e.g., scaling_factor for quantitative maps).
     """
 
     def __init__(

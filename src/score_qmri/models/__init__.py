@@ -2,7 +2,6 @@
 
 from .conditioning import ConditioningMLP, SinusoidalEmbedding
 from .diffusion import DiffusionModel, DiffusionOutput
-from .normalization import RunningNormalizer
 from .unet import UNet
 
 __all__ = [
@@ -11,5 +10,4 @@ __all__ = [
     "DiffusionOutput",
     "ConditioningMLP",
     "SinusoidalEmbedding",
-    "RunningNormalizer",
 ]

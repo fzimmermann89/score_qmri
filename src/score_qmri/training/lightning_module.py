@@ -15,6 +15,7 @@ from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind, is_complex_
 from score_qmri.models.diffusion import (
     DiffusionModel,
     NoiseSchedule,
+    NormalizationConfig,
     _apply_kind_constraints,
     _create_noise,
 )
@@ -60,6 +61,7 @@ class DiffusionHparams:
     attention_levels: tuple[int, ...]
     head_dim: int
     noise_schedule: NoiseSchedule
+    normalization: NormalizationConfig
 
 
 class DiffusionLightningModule(LightningModule):
@@ -92,6 +94,7 @@ class DiffusionLightningModule(LightningModule):
         attention_levels: tuple[int, ...] = (),
         head_dim: int = 64,
         noise_schedule: NoiseSchedule = "linear",
+        normalization: NormalizationConfig | None = None,
     ) -> None:
         """
         Parameters
@@ -142,8 +145,11 @@ class DiffusionLightningModule(LightningModule):
             Dimension per attention head.
         noise_schedule
             Noise schedule type ("linear" or "cosine").
+        normalization
+            Normalization settings for clipping and per-kind scales.
         """
         super().__init__()
+        normalization = normalization or NormalizationConfig()
         self.save_hyperparameters()
 
         self.model = DiffusionModel(
@@ -157,6 +163,7 @@ class DiffusionLightningModule(LightningModule):
             attention_levels=attention_levels,
             head_dim=head_dim,
             noise_schedule=noise_schedule,
+            normalization=normalization,
         )
         self.sampler: DDIMSampler = DDIMSampler(self.model, num_steps=validation_steps)
         self._fixed_noise: dict[int, Tensor] | None = None
@@ -239,9 +246,9 @@ class DiffusionLightningModule(LightningModule):
 
         x0_raw = _apply_kind_constraints(x0_raw, kind)
 
-        x0_pre_clamp = self.model.normalize(x0_raw, kind, signal_mask)
-        x0_pre_clamp = torch.where(signal_mask.unsqueeze(1), x0_pre_clamp, torch.zeros_like(x0_pre_clamp))
-        x0 = self.model.clamp_x0(x0_pre_clamp, kind)
+        x0_norm = self.model.normalize(x0_raw, kind)
+        x0_norm = torch.where(signal_mask.unsqueeze(1), x0_norm, torch.zeros_like(x0_norm))
+        x0 = self.model.clamp_x0(x0_norm, kind, limit=self.model.train_clip)
 
         eps = 1e-5
         t = torch.rand(x0.shape[0], device=self.device) * (1.0 - eps) + eps
@@ -377,9 +384,6 @@ class DiffusionLightningModule(LightningModule):
     ) -> None:
         if self.ema is not None:
             self.ema.update(self.model)
-
-        if self.global_step > 0 and self.global_step % 100 == 0:
-            self.model.normalizer.sync_stats()
 
         if self.global_step > 0 and self.global_step % self.hparams.validation_interval == 0:
             self._log_samples()

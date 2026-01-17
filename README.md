@@ -7,6 +7,7 @@ Diffusion model framework for learning MRI priors (2-channel real/imag or mag/ze
 - FiLM conditioning on timestep + dataset kind
 - Pre-Norm UNet with optional SDPA attention (`attention_levels`)
 - Cosine or linear noise schedule (cosine default)
+- Fixed per-kind normalization for mapping kinds (`kind_scales`)
 - DDIM validation sampling with fixed noise
 
 ## Quick Start
@@ -23,20 +24,28 @@ model:
   head_dim: 64
   noise_schedule: cosine
   learning_rate: 1e-4
+  normalization:
+    train_clip: 1.2
+    sample_clip: 1.0
+    kind_scales:
+      T1MAP: 0.0003
+      T2MAP: 0.005
+      T2STARMAP: 0.01
 
 # Optional overrides (defaults in code)
 # model.base_channels: 64
 # model.num_res_blocks: 2
+
 
 data:
   batch_size: 64
   sample_size: [256, 256]
   kind_normalization: 0.3
 
-
 trainer:
   max_steps: 1000000
   gradient_clip_val: 1.0
+
 ```
 
 
