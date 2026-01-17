@@ -91,6 +91,14 @@ show_error_codes = true
 show_error_context = true
 
 [[tool.mypy.overrides]]
+module = "score_qmri.datasets.*"
+disable_error_code = ["import-untyped"]
+
+[[tool.mypy.overrides]]
+module = "examples.mri_reconstruction_dps"
+disable_error_code = ["import-not-found"]
+
+[[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
 disable_error_code = ["union-attr", "arg-type", "call-overload"]
@@ -107,6 +115,16 @@ module = [
     "wandb.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["scipy", "scipy.*"]
+ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
+
+[[tool.mypy.overrides]]
+module = ["mrpro", "mrpro.*"]
+ignore_missing_imports = true
+disable_error_code = ["import-not-found"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["score_qmri"]
