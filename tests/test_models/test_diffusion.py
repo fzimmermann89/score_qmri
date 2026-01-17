@@ -2,6 +2,7 @@
 
 import torch
 
+from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel, DiffusionOutput, DiffusionOutputList
 
 
@@ -14,7 +15,6 @@ def test_diffusion_init():
     assert hasattr(model, "beta")
     assert hasattr(model, "sigma")
     assert hasattr(model, "snr")
-    assert hasattr(model, "normalizer")
 
 
 def test_diffusion_forward():
@@ -169,13 +169,11 @@ def test_diffusion_normalize():
     model.train()
 
     x = torch.randn(4, 64, 64) * 2.0 + 5.0
-    mask = torch.ones(4, 64, 64, dtype=torch.bool)
-    kind = torch.zeros(4, dtype=torch.long)
+    kind = torch.full((4,), int(DatasetKind.T1MAP), dtype=torch.long)
 
-    x_norm = model.normalize(x, kind, mask)
+    x_norm = model.normalize(x, kind)
     assert x_norm.shape == (4, 64, 64)
-    # 3-sigma scaling: x / (3*std). With mean=5, std=2, result mean ≈ 5/(3*2) ≈ 0.83
-    assert x_norm.mean() > 0.5 and x_norm.mean() < 1.5
+    assert torch.allclose(x_norm, x * model._kind_scale_lookup[int(DatasetKind.T1MAP)], atol=1e-6)
 
 
 def test_diffusion_normalize_complex():
@@ -184,10 +182,9 @@ def test_diffusion_normalize_complex():
     model.train()
 
     x = torch.complex(torch.randn(4, 64, 64), torch.randn(4, 64, 64))
-    mask = torch.ones(4, 64, 64, dtype=torch.bool)
-    kind = torch.zeros(4, dtype=torch.long)
+    kind = torch.full((4,), int(DatasetKind.T1MAP), dtype=torch.long)
 
-    x_norm = model.normalize(x, kind, mask)
+    x_norm = model.normalize(x, kind)
     assert x_norm.is_complex()
     assert x_norm.shape == (4, 64, 64)
 
@@ -198,10 +195,9 @@ def test_diffusion_normalize_2ch():
     model.train()
 
     x = torch.randn(4, 2, 64, 64) * 2.0 + 5.0
-    mask = torch.ones(4, 64, 64, dtype=torch.bool)
-    kind = torch.zeros(4, dtype=torch.long)
+    kind = torch.full((4,), int(DatasetKind.T1MAP), dtype=torch.long)
 
-    x_norm = model.normalize(x, kind, mask)
+    x_norm = model.normalize(x, kind)
     assert x_norm.shape == (4, 2, 64, 64)
 
 
@@ -211,10 +207,9 @@ def test_diffusion_denormalize():
     model.train()
 
     x = torch.randn(4, 64, 64) * 2.0 + 5.0
-    mask = torch.ones(4, 64, 64, dtype=torch.bool)
-    kind = torch.zeros(4, dtype=torch.long)
+    kind = torch.full((4,), int(DatasetKind.T1MAP), dtype=torch.long)
 
-    x_norm = model.normalize(x, kind, mask)
+    x_norm = model.normalize(x, kind)
     x_denorm = model.denormalize(x_norm, kind)
 
     assert torch.allclose(x_denorm, x, atol=1e-4)

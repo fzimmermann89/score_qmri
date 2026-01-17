@@ -94,7 +94,7 @@ file.h5
 └── subject_003: ...
 ```
 
-Quantitative maps use a `scaling_factor` to normalize values to ~[0, 1] range.
+Quantitative maps use dataset `scaling_factor` for dataset-level normalization and fixed model `kind_scales` for physical units. The model no longer uses a running-normalization module.
 
 For coilwise training, `ComplexImageDataset` supports:
 - `random_coil=True` (default): Randomly samples a coil per slice for diversity
@@ -164,7 +164,6 @@ score-qmri-train fit --config config.yaml
 │       │   ├── diffusion.py      # VP-SDE diffusion model
 │       │   ├── unet.py           # Dual-head UNet with FiLM conditioning
 │       │   ├── conditioning.py   # Sinusoidal + kind embeddings
-│       │   └── normalization.py  # RunningNormalizer (per-kind EMA stats)
 │       ├── sampling/
 │       │   ├── ddpm_sampler.py   # DDPM sampling
 │       │   └── ddim_sampler.py   # DDIM sampling (used for validation)

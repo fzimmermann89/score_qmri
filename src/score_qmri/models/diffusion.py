@@ -19,13 +19,25 @@ from typing import Literal, cast, overload
 import torch
 from torch import Tensor
 
-from score_qmri.datasets.kind import is_complex_kind
+from score_qmri.datasets.kind import DatasetKind, is_complex_kind, is_mapping_kind
 
 from .conditioning import ConditioningMLP
-from .normalization import RunningNormalizer
 from .unet import UNet
 
 NoiseSchedule = Literal["linear", "cosine"]
+
+DEFAULT_KIND_SCALES: dict[str, float] = {
+    "T1MAP": 0.0003,
+    "T2MAP": 0.005,
+    "T2STARMAP": 0.01,
+}
+
+
+@dataclass
+class NormalizationConfig:
+    train_clip: float = 1.2
+    sample_clip: float = 1.0
+    kind_scales: dict[str, float] | None = None
 
 
 class InputFormat(IntEnum):
@@ -173,6 +185,7 @@ class DiffusionModel(torch.nn.Module):
         attention_levels: tuple[int, ...] = (),
         head_dim: int = 64,
         noise_schedule: NoiseSchedule = "linear",
+        normalization: NormalizationConfig | None = None,
     ) -> None:
         """
         Parameters
@@ -198,11 +211,23 @@ class DiffusionModel(torch.nn.Module):
             Dimension per attention head (default 64, following Stable Diffusion).
         noise_schedule
             Noise schedule type: "linear" (VP-SDE default) or "cosine" (Nichol & Dhariwal).
+        normalization
+            Normalization settings (clipping + mapping kind scales).
         """
         super().__init__()
         self.beta_min = beta_min
         self.beta_max = beta_max
         self.noise_schedule = noise_schedule
+
+        norm = normalization or NormalizationConfig()
+        self.train_clip = norm.train_clip
+        self.sample_clip = norm.sample_clip
+
+        merged_kind_scales = {**DEFAULT_KIND_SCALES, **(norm.kind_scales or {})}
+        self._kind_scale_lookup: dict[int, float] = {}
+        for kind_name, scale in merged_kind_scales.items():
+            kind_enum = DatasetKind[kind_name]
+            self._kind_scale_lookup[int(kind_enum)] = scale
 
         self.cond_mlp = ConditioningMLP(cond_dim=cond_dim, num_kinds=num_kinds)
         unet = UNet(
@@ -216,7 +241,6 @@ class DiffusionModel(torch.nn.Module):
         )
         unet.to(memory_format=torch.channels_last)  # type: ignore[call-overload]
         self.unet = torch.compile(unet, mode="reduce-overhead")
-        self.normalizer = RunningNormalizer(num_kinds=num_kinds)
 
     @property
     def device(self) -> torch.device:
@@ -254,17 +278,17 @@ class DiffusionModel(torch.nn.Module):
         return ab / (1.0 - ab).clamp(min=1e-8)
 
     @overload
-    def normalize(self, x: Tensor, kind: Tensor, mask: Tensor) -> Tensor: ...
+    def normalize(self, x: Tensor, kind: Tensor) -> Tensor: ...
     @overload
-    def normalize(self, x: Sequence[Tensor], kind: Tensor, mask: Tensor) -> list[Tensor]: ...
-    def normalize(self, x: Tensor | Sequence[Tensor], kind: Tensor, mask: Tensor) -> Tensor | list[Tensor]:
-        """Normalize input using per-kind running stats.
+    def normalize(self, x: Sequence[Tensor], kind: Tensor) -> list[Tensor]: ...
+    def normalize(self, x: Tensor | Sequence[Tensor], kind: Tensor) -> Tensor | list[Tensor]:
+        """Normalize input using per-kind fixed scales (mapping kinds only).
 
-        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
-        Returns same format as input (list returns list).
+        For mapping kinds (T1MAP, T2MAP, T2STARMAP): multiply by kind_scale.
+        For all other kinds: identity (no change).
         """
         x_2ch, fmt, metadata = _to_2ch(x, kind)
-        x_norm = self.normalizer.normalize(x_2ch, mask, kind)
+        x_norm = self._apply_kind_scale(x_2ch, kind, inverse=False)
         return _from_2ch(x_norm, fmt, kind, metadata)
 
     @overload
@@ -272,23 +296,50 @@ class DiffusionModel(torch.nn.Module):
     @overload
     def denormalize(self, x: Sequence[Tensor], kind: Tensor) -> list[Tensor]: ...
     def denormalize(self, x: Tensor | Sequence[Tensor], kind: Tensor) -> Tensor | list[Tensor]:
-        """Denormalize output back to original scale.
+        """Denormalize output back to original scale (mapping kinds only).
 
-        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
-        Returns same format as input (list returns list).
+        For mapping kinds: divide by kind_scale to return to physical units (seconds).
+        For all other kinds: identity (no change).
         """
         x_2ch, fmt, metadata = _to_2ch(x, kind)
-        x_denorm = self.normalizer.denormalize(x_2ch, kind)
+        x_denorm = self._apply_kind_scale(x_2ch, kind, inverse=True)
         return _from_2ch(x_denorm, fmt, kind, metadata)
 
-    def clamp_x0(self, x: Tensor, kind: Tensor, limit: float = 1.5) -> Tensor:
-        """Clamp x₀ predictions to kind-specific physical ranges."""
+    def _apply_kind_scale(self, x: Tensor, kind: Tensor, inverse: bool = False) -> Tensor:
+        """Apply or remove kind-specific scaling for mapping kinds."""
         result = x.clone()
+        for k in kind.unique():
+            k_idx = int(k.item())
+            if not is_mapping_kind(k_idx):
+                continue
+            scale = self._kind_scale_lookup.get(k_idx, 1.0)
+            idx = kind == k
+            if inverse:
+                result[idx] = result[idx] / scale
+            else:
+                result[idx] = result[idx] * scale
+        return result
+
+    def clamp_x0(self, x: Tensor, kind: Tensor, limit: float | None = None) -> Tensor:
+        """Clamp x₀ predictions to physical ranges with phase preservation for complex.
+
+        For complex kinds: clips magnitude to [0, limit] while preserving phase.
+        For real kinds: clips to [0, limit] and zeros imaginary channel.
+        """
+        if limit is None:
+            limit = self.sample_clip
+        result = x.clone()
+        eps = 1e-8
         for k in kind.unique():
             k_idx = int(k.item())
             idx = kind == k
             if is_complex_kind(k_idx):
-                result[idx] = result[idx].clamp(-limit, limit)
+                x_k = result[idx]
+                mag = (x_k[:, 0] ** 2 + x_k[:, 1] ** 2).sqrt()
+                mag_clipped = mag.clamp(0.0, limit)
+                scale_factor = mag_clipped / (mag + eps)
+                result[idx, 0] = x_k[:, 0] * scale_factor
+                result[idx, 1] = x_k[:, 1] * scale_factor
             else:
                 result[idx, 0] = result[idx, 0].clamp(0.0, limit)
                 result[idx, 1] = 0.0

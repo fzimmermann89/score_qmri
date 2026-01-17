@@ -56,8 +56,9 @@ def _from_complex(x_complex: Tensor) -> Tensor:
 class DPSSampler:
     """DPS sampler for MRI reconstruction with learned diffusion prior.
 
-    Operates in denormalized image space. The forward operator A maps
-    images to k-space: k = A(x).
+    Operates entirely in normalized space. The forward operator A maps
+    images to k-space: k = A(x). Dataset scaling is assumed already applied
+    to both images and measurements.
     """
 
     def __init__(self, model: DiffusionModel, config: DPSConfig | None = None) -> None:
@@ -79,6 +80,7 @@ class DPSSampler:
         forward_op
             Linear operator A: image → k-space. Must have .H adjoint.
             Expects (B, 1, 1, H, W) complex input, returns tuple (k-data,).
+            Both operator and measurements are assumed to be in dataset-scaled space.
         measurement
             K-space measurement y of shape (B, Coils, 1, k2, k1) complex64.
         kind
@@ -88,7 +90,7 @@ class DPSSampler:
 
         Returns
         -------
-        Reconstructed image (B, 1, 1, H, W) complex64 in denormalized scale.
+        Reconstructed image (B, 1, 1, H, W) complex64 in normalized scale.
         """
         cfg = self.config
         device = self.model.device
@@ -103,13 +105,8 @@ class DPSSampler:
 
         kind_tensor = torch.full((B,), kind_idx, dtype=torch.long, device=device)
 
-        # Initialize in denormalized space using normalizer stats for proper scale
-        if initial_noise is not None:
-            x = initial_noise.to(device)
-        else:
-            x = _create_noise((B, 2, H, W), kind_tensor, device, torch.float32)
-            scale = self.model.normalizer.get_scale(kind_idx)
-            x = x * scale.to(device).view(1, 2, 1, 1)
+        # Initialize in normalized space with standard Gaussian noise
+        x = initial_noise.to(device) if initial_noise is not None else _create_noise((B, 2, H, W), kind_tensor, device, torch.float32)
 
         x = _apply_kind_constraints(x, kind_tensor)
 
@@ -117,15 +114,15 @@ class DPSSampler:
         eps = 1e-3
         timesteps = torch.linspace(1.0 - eps, eps, cfg.num_steps + 1, device=device)
 
-        x0_pred_denorm = x
+        x0_pred = x
 
         for i in range(cfg.num_steps):
             t = timesteps[i].expand(B)
             t_prev = timesteps[i + 1].expand(B)
 
-            x, x0_pred_denorm = self._step(x, t, t_prev, kind_tensor, forward_op, measurement)
+            x, x0_pred = self._step(x, t, t_prev, kind_tensor, forward_op, measurement)
 
-        return _to_complex(x0_pred_denorm)
+        return _to_complex(x0_pred)
 
     def _step(
         self,
@@ -143,22 +140,15 @@ class DPSSampler:
         # Enable gradients for guidance
         x = x.detach().requires_grad_(True)
 
-        # Normalize for model input
-        # Use identity mask (no masking during sampling)
-        mask = torch.ones(B, 1, x.shape[2], x.shape[3], device=x.device)
-        x_norm = self.model.normalize(x, kind, mask)
-
-        # Get noise prediction and x0 estimate
-        output = self.model(x_norm, t, kind)
+        # Get noise prediction and x0 estimate (all in normalized space)
+        output = self.model(x, t, kind)
         noise_pred = output.noise
-        x0_pred_norm = self.model.predict_x0(x_norm, t, noise_pred, kind)
-        x0_pred_norm = self.model.clamp_x0(x0_pred_norm, kind)
-
-        # Denormalize x0 prediction for data fidelity
-        x0_pred_denorm = self.model.denormalize(x0_pred_norm, kind)
+        x0_pred = self.model.predict_x0(x, t, noise_pred, kind)
+        x0_pred = self.model.clamp_x0(x0_pred, kind)
 
         # Data fidelity gradient
-        x0_complex = _to_complex(x0_pred_denorm)  # (B, 1, 1, H, W) complex
+        # For complex kinds, normalize/denormalize is identity, so we can use x0_pred directly
+        x0_complex = _to_complex(x0_pred)  # (B, 1, 1, H, W) complex
         y_pred = forward_op(x0_complex)[0]
 
         # L2 loss in k-space
@@ -167,7 +157,7 @@ class DPSSampler:
         # Flatten to compute vector norm over all dimensions except batch
         loss = torch.linalg.vector_norm(residual.view(B, -1), dim=1).sum()
 
-        # Gradient w.r.t. x (denormalized state)
+        # Gradient w.r.t. x (normalized state)
         (grad,) = torch.autograd.grad(loss, x)
 
         # Process gradient
@@ -181,16 +171,9 @@ class DPSSampler:
         # Detach for DDIM step
         x = x.detach()
         noise_pred = noise_pred.detach()
-        x0_pred_denorm = x0_pred_denorm.detach()
+        x0_pred = x0_pred.detach()
 
-        # DDIM step in denormalized space
-        # We need to transform the DDIM equations to work in denormalized space
-        # Key insight: diffusion happens in normalized space, but we track denormalized x
-
-        # Get normalizer scale (3-sigma scaling: x_norm = x / scale)
-        scale = self.model.normalizer.get_scale(int(kind[0].item()))
-        scale = scale.to(x.device).view(1, 2, 1, 1)
-
+        # DDIM step in normalized space
         ab_t = self.model.alpha_bar(t).view(-1, 1, 1, 1)
         ab_prev = self.model.alpha_bar(t_prev).view(-1, 1, 1, 1)
 
@@ -200,20 +183,17 @@ class DPSSampler:
         sigma_sq = cfg.eta**2 * (one_minus_ab_prev / one_minus_ab_t * (1 - ab_t / ab_prev.clamp(min=1e-8)))
         sigma = sigma_sq.clamp(min=0.0).sqrt()
 
-        # DDIM step in normalized space
+        # DDIM step
         pred_dir = (1 - ab_prev - sigma**2).clamp(min=0.0).sqrt() * noise_pred
-        x_prev_norm = ab_prev.sqrt() * x0_pred_norm + pred_dir
+        x_prev = ab_prev.sqrt() * x0_pred + pred_dir
 
         if cfg.eta > 0 and t_prev[0] > 1e-8:
             noise = _create_noise(x.shape, kind, x.device, x.dtype)
-            x_prev_norm = x_prev_norm + sigma * noise
+            x_prev = x_prev + sigma * noise
 
-        # Convert back to denormalized (3-sigma: x_denorm = x_norm * scale)
-        x_prev = x_prev_norm * scale
-
-        # Apply DPS guidance correction (in denormalized space)
+        # Apply DPS guidance correction (in normalized space)
         x_prev = x_prev - cfg.guidance_scale * grad
 
         x_prev = _apply_kind_constraints(x_prev, kind)
 
-        return x_prev, x0_pred_denorm
+        return x_prev, x0_pred
