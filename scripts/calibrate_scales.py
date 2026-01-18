@@ -1,14 +1,27 @@
-# %%
-from collections.abc import Callable
-from pathlib import Path
-from typing import Any, cast
+from __future__ import annotations
 
-import h5py
+from collections.abc import Callable
+from dataclasses import replace
+from pathlib import Path
+from typing import Any, Protocol, cast
+
 import numpy as np
+import torch
 import yaml  # type: ignore[import-untyped, unused-ignore]
 from jsonargparse import ArgumentParser
 
-from score_qmri.datasets.lightning import MRIDataModule
+from score_qmri.datasets.lightning import (
+    ComplexDatasetConfig,
+    DatasetConfig,
+    MRIDataModule,
+)  # type: ignore[import-untyped, unused-ignore]
+
+
+class _SizedDataset(Protocol):
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, idx: int) -> dict[str, Any]: ...
+
 
 CONFIG_PATH = Path("config.yaml")
 NUM_SAMPLES_PER_DATASET = 100
@@ -63,196 +76,111 @@ STRATEGIES: dict[str, Callable[[np.ndarray], float]] = {
 STRATEGY_NAME = "percentile"
 
 
-def compute_dataset_stats(
-    h5_path: str,
-    num_samples: int = 100,
-    seed: int = 42,
-    strategy_fn: Callable[[np.ndarray], float] | None = None,
-) -> dict[str, Any]:
+def _clone_dataset_config_for_calibration(cfg: DatasetConfig) -> DatasetConfig:
+    return replace(cfg, augmentation_config=None, scaling_factor=1.0)
+
+
+def _iter_signal_values(
+    dataset: _SizedDataset,
+    num_samples: int,
+    seed: int,
+) -> list[np.ndarray]:
     rng = np.random.default_rng(seed)
+    n = int(len(dataset))
+    if n == 0:
+        return []
 
-    with h5py.File(h5_path, "r") as f:
-        container: h5py.File | h5py.Group = f
-        dataset_keys = [k for k in container if isinstance(container[k], h5py.Dataset)]
-        if not dataset_keys:
-            for group_name in f:
-                group = f[group_name]
-                if isinstance(group, h5py.Group):
-                    container = group
-                    dataset_keys = [k for k in container if isinstance(container[k], h5py.Dataset)]
-                    break
+    k = min(num_samples, n)
+    indices = rng.choice(n, size=k, replace=False)
 
-        all_values = []
-        samples_collected = 0
+    values: list[np.ndarray] = []
+    for idx in indices:
+        sample = dataset[int(idx)]
+        image = sample["image"]
+        background_mask = sample["background_mask"]
+        signal_mask = ~background_mask
 
-        keys = list(dataset_keys)
-        rng.shuffle(keys)
-        for key in keys:
-            if samples_collected >= num_samples:
-                break
+        mag = image.abs() if image.is_complex() else image
+        vals = mag[signal_mask]
+        vals = vals[vals > 1e-6]
 
-            dataset = container[key]
-            if not isinstance(dataset, h5py.Dataset):
-                continue
-            data = dataset[:]
+        if vals.numel() > 0:
+            values.append(vals.detach().cpu().numpy().astype(np.float64, copy=False))
 
-            if data.ndim == 3:
-                n_slices = min(data.shape[0], num_samples - samples_collected)
-                indices = rng.choice(data.shape[0], size=n_slices, replace=False)
-                for idx in indices:
-                    slice_data = data[idx]
-                    if np.iscomplexobj(slice_data):
-                        slice_data = np.abs(slice_data)
-                    mask = np.abs(slice_data) > 1e-6
-                    if mask.any():
-                        all_values.extend(slice_data[mask].flatten())
-                    samples_collected += 1
-            elif data.ndim == 4:
-                n_slices = min(data.shape[0], num_samples - samples_collected)
-                indices = rng.choice(data.shape[0], size=n_slices, replace=False)
-                for idx in indices:
-                    slice_data = data[idx]
-                    if np.iscomplexobj(slice_data):
-                        slice_data = np.abs(slice_data)
-                    coil_idx = rng.integers(slice_data.shape[0])
-                    coil_data = slice_data[coil_idx]
-                    mask = np.abs(coil_data) > 1e-6
-                    if mask.any():
-                        all_values.extend(coil_data[mask].flatten())
-                    samples_collected += 1
+    return values
 
-    if not all_values:
+
+def compute_dataset_stats(
+    dataset: _SizedDataset,
+    num_samples: int,
+    seed: int,
+    strategy_fn: Callable[[np.ndarray], float],
+) -> dict[str, Any]:
+    value_chunks = _iter_signal_values(dataset, num_samples=num_samples, seed=seed)
+    if not value_chunks:
         return {"error": "No valid data found"}
 
-    if strategy_fn is None:
-        raise ValueError("strategy_fn must be provided")
-
-    arr = np.array(all_values)
-    recommended_scaling_factor = strategy_fn(arr)
-
-    q99 = float(np.quantile(arr, 0.99))
+    arr = np.concatenate(value_chunks)
+    scaling_factor = strategy_fn(arr)
 
     return {
         "min": float(arr.min()),
         "max": float(arr.max()),
         "mean": float(arr.mean()),
         "std": float(arr.std()),
-        "q99": q99,
-        "recommended_scaling_factor": recommended_scaling_factor,
-        "num_samples": samples_collected,
+        "q99": float(np.quantile(arr, 0.99)),
+        "recommended_scaling_factor": scaling_factor,
+        "num_samples": int(sum(x.size for x in value_chunks)),
     }
 
 
-def analyze_datasets(
-    data_module: MRIDataModule,
-    strategy_fn: Callable[[np.ndarray], float],
-) -> dict[str, dict[str, Any]]:
+def analyze_datasets(data_module: MRIDataModule, strategy_fn: Callable[[np.ndarray], float]) -> dict[str, dict[str, Any]]:
     results: dict[str, dict[str, Any]] = {}
 
-    if not data_module.dataset_configs:
-        print("No datasets found in config")
-        return results
-
     for ds_config in data_module.dataset_configs:
-        h5_path = ds_config.h5_path
-        kind = ds_config.kind.name
-        current_scaling_factor = ds_config.scaling_factor
+        ds_for_cal = _clone_dataset_config_for_calibration(ds_config)
+        dataset = cast(_SizedDataset, ds_for_cal.create())
 
-        if not Path(h5_path).exists():
-            print(f"Skipping {kind}: {h5_path} not found")
+        kind = ds_config.kind.name
+        key = f"{kind}/{ds_config.mode}" if isinstance(ds_config, ComplexDatasetConfig) else kind
+
+        if not Path(ds_config.h5_path).exists():
+            results[key] = {"error": f"File not found: {ds_config.h5_path}"}
             continue
 
-        print(f"Analyzing {kind} from {h5_path}...")
-        stats = compute_dataset_stats(h5_path, NUM_SAMPLES_PER_DATASET, SEED, strategy_fn=strategy_fn)
-        stats["current_scaling_factor"] = current_scaling_factor
-        stats["h5_path"] = h5_path
-        results[kind] = stats
+        stats = compute_dataset_stats(dataset, num_samples=NUM_SAMPLES_PER_DATASET, seed=SEED, strategy_fn=strategy_fn)
+        stats["h5_path"] = ds_config.h5_path
+        stats["kind"] = kind
+        stats["current_scaling_factor"] = ds_config.scaling_factor
+        if isinstance(ds_config, ComplexDatasetConfig):
+            stats["mode"] = ds_config.mode
+        results[key] = stats
 
     return results
 
 
 def print_yaml_fragment(results: dict[str, dict[str, Any]]) -> None:
-    print("\n# Recommended dataset scaling_factors (paste into config.yaml):")
-    print("data:")
-    print("  datasets:")
-
-    for kind, stats in results.items():
+    print("\n# Recommended dataset scaling_factors:")
+    for key, stats in results.items():
         if "error" in stats:
+            print(f"# {key}: {stats['error']}")
             continue
-        print(f"    # {kind}: q99={stats.get('q99', 'N/A'):.4f} max={stats.get('max', 'N/A'):.4f}")
-        print(f"    - kind: {kind}")
-        print(f"      h5_path: {stats['h5_path']}")
-        print(f"      scaling_factor: {stats['recommended_scaling_factor']:.6f}")
-        print()
-
-
-def visualize_samples(h5_path: str, scaling_factor: float = 1.0, num_samples: int = 4) -> None:
-    try:
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("matplotlib not available for visualization")
-        return
-
-    rng = np.random.default_rng(SEED)
-
-    with h5py.File(h5_path, "r") as f:
-        dataset_keys = [k for k in f if isinstance(f[k], h5py.Dataset)]
-        if not dataset_keys:
-            print("No datasets found")
-            return
-
-        fig, axes = plt.subplots(2, num_samples, figsize=(4 * num_samples, 8))
-        keys = list(dataset_keys)
-
-        for i in range(num_samples):
-            key = rng.choice(np.array(keys, dtype=object))
-            dataset = f[key]
-            if not isinstance(dataset, h5py.Dataset):
-                continue
-            data = dataset[:]
-
-            if data.ndim >= 3:
-                z_idx = rng.integers(data.shape[0])
-                slice_data = data[z_idx]
-                if slice_data.ndim == 3:
-                    slice_data = slice_data[0]
-            else:
-                slice_data = data
-
-            if np.iscomplexobj(slice_data):
-                slice_data = np.abs(slice_data)
-
-            axes[0, i].imshow(slice_data, cmap="gray")
-            axes[0, i].set_title(f"Original (max={slice_data.max():.2f})")
-            axes[0, i].axis("off")
-
-            scaled = slice_data * scaling_factor
-            axes[1, i].imshow(scaled, cmap="gray", vmin=0, vmax=1.2)
-            axes[1, i].set_title(f"Scaled (max={scaled.max():.2f})")
-            axes[1, i].axis("off")
-
-        plt.tight_layout()
-        plt.show()
+        mode = stats.get("mode")
+        mode_str = f" mode={mode}" if mode is not None else ""
+        print(f"# {key}:{mode_str} q99={stats['q99']:.4f} max={stats['max']:.4f}")
+        print(f"#   h5_path: {stats['h5_path']}")
+        print(f"#   current_scaling_factor: {stats['current_scaling_factor']}")
+        print(f"#   recommended_scaling_factor: {stats['recommended_scaling_factor']:.6f}\n")
 
 
 if __name__ == "__main__":
     if STRATEGY_NAME not in STRATEGIES:
         raise ValueError(f"Unknown strategy: {STRATEGY_NAME!r}. Available: {sorted(STRATEGIES)}")
 
-    config = load_config(CONFIG_PATH)
-    data_module = load_datamodule(config)
-    results = analyze_datasets(data_module, strategy_fn=STRATEGIES[STRATEGY_NAME])
+    torch.set_grad_enabled(False)
 
-    print("\n" + "=" * 60)
-    print("DATASET STATISTICS")
-    print("=" * 60)
+    cfg = load_config(CONFIG_PATH)
+    dm = load_datamodule(cfg)
+    res = analyze_datasets(dm, strategy_fn=STRATEGIES[STRATEGY_NAME])
 
-    for kind, stats in results.items():
-        print(f"\n{kind}:")
-        for key, value in stats.items():
-            if isinstance(value, float):
-                print(f"  {key}: {value:.6f}")
-            else:
-                print(f"  {key}: {value}")
-
-    print_yaml_fragment(results)
+    print_yaml_fragment(res)
