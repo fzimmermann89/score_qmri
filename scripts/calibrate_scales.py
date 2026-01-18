@@ -138,14 +138,18 @@ def analyze_datasets(data_module: MRIDataModule, strategy_fn: Callable[[np.ndarr
     results: dict[str, dict[str, Any]] = {}
 
     for ds_config in data_module.dataset_configs:
-        ds_for_cal = _clone_dataset_config_for_calibration(ds_config)
-        dataset = cast(_SizedDataset, ds_for_cal.create())
-
         kind = ds_config.kind.name
         key = f"{kind}/{ds_config.mode}" if isinstance(ds_config, ComplexDatasetConfig) else kind
 
         if not Path(ds_config.h5_path).exists():
             results[key] = {"error": f"File not found: {ds_config.h5_path}"}
+            continue
+
+        try:
+            ds_for_cal = _clone_dataset_config_for_calibration(ds_config)
+            dataset = cast(_SizedDataset, ds_for_cal.create())
+        except Exception as e:
+            results[key] = {"error": f"Failed to create dataset: {e}"}
             continue
 
         stats = compute_dataset_stats(dataset, num_samples=NUM_SAMPLES_PER_DATASET, seed=SEED, strategy_fn=strategy_fn)
