@@ -71,6 +71,11 @@ Normalization is currently split across two layers:
 - Purpose: ensure *all* datasets of the same map kind share a canonical normalized distribution, while allowing conversion back to seconds.
 
 ## Correctness review: training, diffusion, sampling
+
+### Calibration script caveat (feedback)
+- The dataset calibration tool must respect complex H5 group layout. Complex files may contain multiple groups (e.g. `coilwise/` and `combined/`) and different dataset configs will target different groups via `mode`.
+- Do not fall back to the first group in the H5 file when the root has no datasets; this can compute a scaling_factor from the wrong group.
+- Preferred implementation: instantiate the actual dataset classes from `dataset_configs` (with augmentation disabled) and draw samples through `__getitem__`, so the calibration logic matches training exactly.
 This section checks the new plan against diffusion math and implementation details.
 
 ### Training distribution and noise
