@@ -117,7 +117,10 @@ class DatasetManager:
         structure = self._get_structure(dataset_idx)
         position = (subject_idx, slice_idx, coil_idx if structure.has_coils else None)
         if position not in structure.position_to_index:
-            raise ValueError("Invalid hierarchy position")
+            raise ValueError(
+                f"Invalid hierarchy position: subject={subject_idx}, slice={slice_idx}, coil={coil_idx}. "
+                f"Max subject={structure.subject_count}"
+            )
         linear_idx = structure.position_to_index[position]
         return self.get_sample(dataset_idx, linear_idx, augment, seed, display_mode, vmin, vmax)
 
@@ -160,6 +163,30 @@ class DatasetManager:
             img = sample["image"]
             images_to_stack.append(img)
             background_masks.append(sample["background_mask"])
+
+        # Pad images to max dimensions if necessary
+        if images_to_stack:
+            max_h = max(img.shape[-2] for img in images_to_stack)
+            max_w = max(img.shape[-1] for img in images_to_stack)
+            
+            padded_images = []
+            padded_masks = []
+            
+            for img, mask in zip(images_to_stack, background_masks):
+                diff_h = max_h - img.shape[-2]
+                diff_w = max_w - img.shape[-1]
+                
+                if diff_h > 0 or diff_w > 0:
+                    # Pad (left, right, top, bottom)
+                    padding = (0, diff_w, 0, diff_h)
+                    padded_images.append(torch.nn.functional.pad(img, padding, value=0))
+                    padded_masks.append(torch.nn.functional.pad(mask, padding, value=True))
+                else:
+                    padded_images.append(img)
+                    padded_masks.append(mask)
+            
+            images_to_stack = padded_images
+            background_masks = padded_masks
 
         batch_tensor = torch.stack(images_to_stack)
         hist_values = batch_tensor.abs().float() if batch_tensor.is_complex() else batch_tensor.float()

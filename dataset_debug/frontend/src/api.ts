@@ -13,6 +13,7 @@ export interface DatasetsResponse {
 export const api = {
   getDatasets: async (): Promise<DatasetsResponse> => {
     const res = await fetch(`${API_ROOT}/datasets`);
+    if (!res.ok) throw new Error((await res.json()).detail || "Failed to fetch datasets");
     const data = await res.json();
     return { datasets: data.datasets, mock_mode: data.mock_mode || false };
   },
@@ -28,6 +29,7 @@ export const api = {
     if (params.vmax !== undefined) search.set('vmax', params.vmax.toString());
 
     const res = await fetch(`${API_ROOT}/datasets/${datasetIdx}/sample?${search.toString()}`);
+    if (!res.ok) throw new Error((await res.json()).detail || "Failed to fetch sample");
     return res.json();
   },
 
@@ -44,6 +46,7 @@ export const api = {
     if (params.vmax !== undefined) search.set('vmax', params.vmax.toString());
 
     const res = await fetch(`${API_ROOT}/datasets/${datasetIdx}/sample-by-hierarchy?${search.toString()}`);
+    if (!res.ok) throw new Error((await res.json()).detail || "Failed to fetch sample by hierarchy");
     return res.json();
   },
 
@@ -53,6 +56,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params)
     });
+    if (!res.ok) throw new Error((await res.json()).detail || "Failed to fetch batch");
     return res.json();
   },
 
@@ -71,6 +75,7 @@ export const api = {
       search.set('index', params.index.toString());
     }
     const res = await fetch(`${API_ROOT}/datasets/${datasetIdx}/histogram?${search.toString()}`);
+    if (!res.ok) throw new Error((await res.json()).detail || "Failed to fetch histogram");
     return res.json();
   },
 
