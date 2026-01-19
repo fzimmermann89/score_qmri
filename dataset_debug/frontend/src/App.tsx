@@ -457,6 +457,7 @@ function App() {
           <div className="flex-grow min-h-0 bg-gray-900/80 rounded-xl relative overflow-hidden border border-gray-800 shadow-inner">
             {viewMode === 'grid' && selectedDataset ? (
                <GridView 
+                  key={selectedDataset.dataset_idx}
                   dataset={selectedDataset}
                   pageStart={gridPageStart}
                   pageSize={gridPageSize}
