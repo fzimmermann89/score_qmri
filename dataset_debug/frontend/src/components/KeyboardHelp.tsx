@@ -22,8 +22,8 @@ export const KeyboardHelp: React.FC<Props> = ({ isOpen, onClose }) => {
         { keys: ["["], desc: "Prev coil" },
         { keys: ["R"], desc: "Random sample" },
         { keys: ["G"], desc: "Jump to index" },
-        { keys: ["1-9", "0"], desc: "Select dataset 1-10" },
-        { keys: ["Q-P"], desc: "Select dataset 11-20" },
+        { keys: ["2"], desc: "Next dataset" },
+        { keys: ["1"], desc: "Prev dataset" },
       ]
     },
     {

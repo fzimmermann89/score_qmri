@@ -23,7 +23,8 @@ interface KeyboardActions {
   onExportAnnotations: () => void;
   onSaveAnnotations: () => void;
   onAddAnnotationField: () => void;
-  onSelectDataset: (idx: number) => void;
+  onNextDataset: () => void;
+  onPrevDataset: () => void;
 }
 
 export function useKeyboardNavigation(actions: KeyboardActions) {
@@ -38,24 +39,15 @@ export function useKeyboardNavigation(actions: KeyboardActions) {
         return;
       }
 
-      const hasCtrl = e.ctrlKey || e.metaKey;
-      const hasShift = e.shiftKey;
-
-      if (!hasCtrl && !hasShift && !e.altKey && /^[0-9]$/.test(e.key)) {
-        const num = parseInt(e.key);
-        if (num >= 1 && num <= 9) actions.onSelectDataset(num - 1);
-        if (num === 0) actions.onSelectDataset(9);
-        return;
-      }
-
-      if (!hasCtrl && !hasShift && !e.altKey && /^[qwertyuiopQWERTYUIOP]$/.test(e.key)) {
-        const keys = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'];
-        const idx = keys.indexOf(e.key.toLowerCase());
-        if (idx !== -1) actions.onSelectDataset(10 + idx);
-        return;
-      }
-
       switch (e.key) {
+        case '2':
+          actions.onNextDataset();
+          break;
+
+        case '1':
+          actions.onPrevDataset();
+          break;
+
         case 'ArrowRight':
         case 'd':
         case 'D':

@@ -332,8 +332,19 @@ function App() {
     onExportAnnotations: () => window.open(api.exportAnnotationsUrl, '_blank'),
     onSaveAnnotations: () => api.setDatasetAnnotations(selectedDsIdx, annotations),
     onAddAnnotationField: () => { },
-    onSelectDataset: (idx) => {
-       if (datasets.find(d => d.dataset_idx === idx)) handleDatasetSelect(idx);
+    onNextDataset: () => {
+      const sortedDs = [...datasets].sort((a, b) => a.dataset_idx - b.dataset_idx);
+      const currentIdx = sortedDs.findIndex(d => d.dataset_idx === selectedDsIdx);
+      if (currentIdx < sortedDs.length - 1) {
+        handleDatasetSelect(sortedDs[currentIdx + 1].dataset_idx);
+      }
+    },
+    onPrevDataset: () => {
+      const sortedDs = [...datasets].sort((a, b) => a.dataset_idx - b.dataset_idx);
+      const currentIdx = sortedDs.findIndex(d => d.dataset_idx === selectedDsIdx);
+      if (currentIdx > 0) {
+        handleDatasetSelect(sortedDs[currentIdx - 1].dataset_idx);
+      }
     }
   });
 
