@@ -146,6 +146,7 @@ class DatasetManager:
                     "variance": 0.0,
                     "signal_fraction": 0.0,
                     "p99": 0.0,
+                    "p99_9": 0.0,
                 },
                 "global_histogram": {
                     "bins": [],
@@ -189,41 +190,36 @@ class DatasetManager:
             background_masks = padded_masks
 
         batch_tensor = torch.stack(images_to_stack)
-        hist_values = batch_tensor.abs().float() if batch_tensor.is_complex() else batch_tensor.float()
-        flat_tensor = hist_values.flatten()
-        flat_tensor = flat_tensor[torch.isfinite(flat_tensor)]
-
-        signal_fraction = 0.0
+        
+        mask_tensor = None
         if background_masks:
             mask_tensor = torch.stack(background_masks)
-            signal_fraction = (~mask_tensor).float().mean().item()
+
+        if batch_tensor.is_complex():
+            abs_stats = self._calculate_statistics(batch_tensor.abs(), mask_tensor)
+            real_stats = self._calculate_statistics(batch_tensor.real, mask_tensor)
+            imag_stats = self._calculate_statistics(batch_tensor.imag, mask_tensor)
+            
+            stats = abs_stats.copy()
+            stats["components"] = {
+                "real": real_stats,
+                "imag": imag_stats,
+                "abs": abs_stats
+            }
+            hist_values = batch_tensor.abs().float()
+        else:
+            stats = self._calculate_statistics(batch_tensor, mask_tensor)
+            hist_values = batch_tensor.float()
+
+        flat_tensor = hist_values.flatten()
+        flat_tensor = flat_tensor[torch.isfinite(flat_tensor)]
 
         if flat_tensor.numel() == 0:
             hist_bins = np.linspace(0.0, 1.0, 2).tolist()
             hist_counts = [0]
-            stats = {
-                "min": 0.0,
-                "max": 0.0,
-                "mean": 0.0,
-                "std": 0.0,
-                "variance": 0.0,
-                "signal_fraction": signal_fraction,
-                "p99": 0.0,
-            }
             render_min = 0.0
             render_max = 1.0
         else:
-            variance = torch.var(flat_tensor, unbiased=False).item()
-            stats = {
-                "min": flat_tensor.min().item(),
-                "max": flat_tensor.max().item(),
-                "mean": flat_tensor.mean().item(),
-                "std": torch.sqrt(torch.tensor(variance)).item(),
-                "variance": variance,
-                "signal_fraction": signal_fraction,
-                "p99": torch.quantile(flat_tensor, 0.99).item(),
-            }
-
             counts, bin_edges = np.histogram(flat_tensor.cpu().numpy(), bins=128)
             hist_bins = bin_edges.tolist()
             hist_counts = counts.tolist()
@@ -418,15 +414,23 @@ class DatasetManager:
         self._summaries[dataset_idx] = summary
         return summary
 
-    def _compute_stats(self, image: torch.Tensor, background_mask: torch.Tensor) -> dict[str, float]:
-        values = image.abs().float() if image.is_complex() else image.float()
+    def _calculate_statistics(self, tensor: torch.Tensor, background_mask: torch.Tensor | None) -> dict[str, Any]:
+        values = tensor.float()
         values = values[torch.isfinite(values)]
+        
+        signal_fraction = 0.0
+        if background_mask is not None:
+            signal_fraction = (~background_mask).float().mean().item()
+
         if values.numel() == 0:
-            return {"min": 0.0, "max": 0.0, "mean": 0.0, "variance": 0.0, "std": 0.0, "signal_fraction": 0.0, "p99": 0.0}
+            return {
+                "min": 0.0, "max": 0.0, "mean": 0.0, "variance": 0.0, "std": 0.0, 
+                "signal_fraction": signal_fraction, "p99": 0.0, "p99_9": 0.0
+            }
 
         variance = torch.var(values, unbiased=False).item()
         std = torch.sqrt(torch.tensor(variance)).item()
-        signal_fraction = (~background_mask).float().mean().item()
+        
         return {
             "min": values.min().item(),
             "max": values.max().item(),
@@ -435,7 +439,24 @@ class DatasetManager:
             "std": std,
             "signal_fraction": signal_fraction,
             "p99": torch.quantile(values, 0.99).item(),
+            "p99_9": torch.quantile(values, 0.999).item(),
         }
+
+    def _compute_stats(self, image: torch.Tensor, background_mask: torch.Tensor) -> dict[str, Any]:
+        if image.is_complex():
+            abs_stats = self._calculate_statistics(image.abs(), background_mask)
+            real_stats = self._calculate_statistics(image.real, background_mask)
+            imag_stats = self._calculate_statistics(image.imag, background_mask)
+            
+            stats = abs_stats.copy()
+            stats["components"] = {
+                "real": real_stats,
+                "imag": imag_stats,
+                "abs": abs_stats
+            }
+            return stats
+        
+        return self._calculate_statistics(image, background_mask)
 
     def _build_metadata(
         self,

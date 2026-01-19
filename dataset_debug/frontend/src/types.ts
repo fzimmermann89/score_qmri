@@ -18,6 +18,12 @@ export interface ImageStats {
   variance: number;
   signal_fraction: number;
   p99: number;
+  p99_9: number;
+  components?: {
+    real: ImageStats;
+    imag: ImageStats;
+    abs: ImageStats;
+  };
 }
 
 export interface NavigationInfo {
