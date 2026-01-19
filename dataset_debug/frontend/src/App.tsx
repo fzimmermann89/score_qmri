@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
 import { 
-  DatasetInfo, SampleResponse, AnnotationField, AnnotationValues, HistogramResponse, DisplayMode, ImageStats 
+  SampleResponse, AnnotationField, AnnotationValues, HistogramResponse, DisplayMode, ImageStats 
 } from './types';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { usePrefetch } from './hooks/usePrefetch';
@@ -151,7 +151,6 @@ function App() {
   const handleDatasetSelect = (idx: number) => {
     setSelectedDsIdx(idx);
     setIntensity({});
-    setGridRandomMode(false);
     setGridPageStart(0);
     loadSample(idx, { index: 0, augment, seed, display_mode: displayMode });
   };

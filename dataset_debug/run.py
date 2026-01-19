@@ -21,7 +21,7 @@ def main() -> None:
     os.environ["DATASET_DEBUG_CONFIG"] = args.config
 
     uvicorn.run(
-        "dataset_debug.backend.main:app",
+        "backend.main:app",
         host=args.host,
         port=args.port,
         reload=args.reload,

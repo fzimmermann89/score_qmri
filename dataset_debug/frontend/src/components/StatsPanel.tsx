@@ -15,6 +15,7 @@ export const StatsPanel: React.FC<{ stats: ImageStats }> = ({ stats }) => {
       <div className="flex flex-col gap-0">
         <StatItem label="Min" value={stats.min.toFixed(4)} />
         <StatItem label="Max" value={stats.max.toFixed(4)} />
+        <StatItem label="99%" value={stats.p99.toFixed(4)} />
         <StatItem label="Mean" value={stats.mean.toFixed(4)} />
         <StatItem label="Std Dev" value={stats.std.toFixed(4)} />
         <StatItem label="Variance" value={stats.variance.toExponential(2)} />

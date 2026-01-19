@@ -161,6 +161,7 @@ class DatasetManager:
                 "std": 0.0,
                 "variance": 0.0,
                 "signal_fraction": signal_fraction,
+                "p99": 0.0,
             }
             render_min = 0.0
             render_max = 1.0
@@ -173,6 +174,7 @@ class DatasetManager:
                 "std": torch.sqrt(torch.tensor(variance)).item(),
                 "variance": variance,
                 "signal_fraction": signal_fraction,
+                "p99": torch.quantile(flat_tensor, 0.99).item(),
             }
 
             counts, bin_edges = np.histogram(flat_tensor.cpu().numpy(), bins=128)
@@ -373,7 +375,7 @@ class DatasetManager:
         values = image.abs().float() if image.is_complex() else image.float()
         values = values[torch.isfinite(values)]
         if values.numel() == 0:
-            return {"min": 0.0, "max": 0.0, "mean": 0.0, "variance": 0.0, "std": 0.0, "signal_fraction": 0.0}
+            return {"min": 0.0, "max": 0.0, "mean": 0.0, "variance": 0.0, "std": 0.0, "signal_fraction": 0.0, "p99": 0.0}
 
         variance = torch.var(values, unbiased=False).item()
         std = torch.sqrt(torch.tensor(variance)).item()
@@ -385,6 +387,7 @@ class DatasetManager:
             "variance": variance,
             "std": std,
             "signal_fraction": signal_fraction,
+            "p99": torch.quantile(values, 0.99).item(),
         }
 
     def _build_metadata(

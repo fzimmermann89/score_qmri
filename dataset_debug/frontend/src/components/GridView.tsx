@@ -132,6 +132,12 @@ export const GridView: React.FC<Props> = ({
     }
   }, [isRandomMode]);
 
+  useEffect(() => {
+    if (isRandomMode) {
+      setRandomIndices([]);
+    }
+  }, [dataset.dataset_idx, isRandomMode]);
+
   const colorbar = globalRange ? (
     <div className="w-8 bg-gray-950 border border-gray-800 rounded flex flex-col items-center py-2">
       <span className="text-[9px] text-gray-400 font-mono">{globalRange[1].toFixed(2)}</span>

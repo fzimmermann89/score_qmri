@@ -17,6 +17,7 @@ export interface ImageStats {
   std: number;
   variance: number;
   signal_fraction: number;
+  p99: number;
 }
 
 export interface NavigationInfo {
