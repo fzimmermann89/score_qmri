@@ -125,6 +125,7 @@ def get_sample(
         result["mock_mode"] = _mock_mode
         return result
     except Exception as exc:  # noqa: BLE001
+        logger.exception("Error in get_sample")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -145,6 +146,7 @@ def get_sample_by_hierarchy(
         result["mock_mode"] = _mock_mode
         return result
     except Exception as exc:  # noqa: BLE001
+        logger.exception("Error in get_sample_by_hierarchy")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -157,6 +159,7 @@ def get_batch_data(dataset_idx: int, payload: dict[str, Any]) -> dict[str, Any]:
         display_mode = payload.get("display_mode", "real_imag")
         return _manager.get_batch_data(dataset_idx, indices, augment, seed, display_mode)
     except Exception as exc:  # noqa: BLE001
+        logger.exception("Error in get_batch_data")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -175,6 +178,7 @@ def get_histogram(
     try:
         return _manager.get_histogram(dataset_idx, index, augment, seed)
     except Exception as exc:  # noqa: BLE001
+        logger.exception("Error in get_histogram")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

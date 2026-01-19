@@ -132,6 +132,26 @@ class DatasetManager:
         dataset = self._get_dataset(dataset_idx, augment=augment)
         self._seed_rng(seed)
 
+        if not indices:
+            return {
+                "samples": [],
+                "global_stats": {
+                    "min": 0.0,
+                    "max": 0.0,
+                    "mean": 0.0,
+                    "std": 0.0,
+                    "variance": 0.0,
+                    "signal_fraction": 0.0,
+                    "p99": 0.0,
+                },
+                "global_histogram": {
+                    "bins": [],
+                    "counts": [],
+                    "stats": {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0},
+                },
+                "global_range": (0.0, 1.0),
+            }
+
         images_to_stack = []
         background_masks = []
 
