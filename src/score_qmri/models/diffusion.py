@@ -69,6 +69,8 @@ class EDMConfig:
     p_mean, p_std
         Log-normal sigma sampling distribution for training:
             log(sigma) ~ Normal(p_mean, p_std^2)
+    rho
+        Exponent for Karras (poly-rho) sigma schedule in sampling.
     """
 
     sigma_min: float = 0.002
@@ -76,6 +78,7 @@ class EDMConfig:
     sigma_data: float = 0.2
     p_mean: float = -1.2
     p_std: float = 1.2
+    rho: float = 7.0
 
 
 class InputFormat(IntEnum):
