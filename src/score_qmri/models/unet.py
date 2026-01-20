@@ -33,7 +33,7 @@ class CoordConcat(torch.nn.Module):
             y_coords = torch.linspace(-1, 1, H, device=x.device, dtype=x.dtype)
             x_coords = torch.linspace(-1, 1, W, device=x.device, dtype=x.dtype)
             grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
-            self._cached_grid = torch.stack([grid_y, grid_x], dim=0)
+            self._cached_grid = torch.stack([grid_y, grid_x], dim=0).clone()
 
         coords = self._cached_grid.unsqueeze(0).expand(B, -1, -1, -1)
         return torch.cat([x, coords], dim=1)
@@ -77,7 +77,7 @@ class SinusoidalPosEmb2D(torch.nn.Module):
 
             emb = torch.cat([y_emb, x_emb], dim=-1)
             emb = emb.permute(2, 0, 1).unsqueeze(0)
-            self._cached_emb = emb
+            self._cached_emb = emb.clone()
 
         return self._cached_emb.to(dtype=x.dtype).expand(B, -1, -1, -1)
 
