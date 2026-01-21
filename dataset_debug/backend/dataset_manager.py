@@ -133,7 +133,9 @@ class DatasetManager:
         display_mode: str,
     ) -> dict[str, Any]:
         dataset = self._get_dataset(dataset_idx, augment=augment)
-        self._seed_rng(seed)
+        # For grid view we want each sample to get a different augmentation, but still be reproducible.
+        # Seeding once would make augmentations depend on iteration order and RNG consumption.
+        base_seed = seed
 
         if not indices:
             return {
@@ -159,7 +161,9 @@ class DatasetManager:
         images_to_stack = []
         background_masks = []
 
-        for idx in indices:
+        for offset, idx in enumerate(indices):
+            if augment and base_seed is not None:
+                self._seed_rng(base_seed + offset)
             sample = dataset[idx]
             img = sample["image"]
             images_to_stack.append(img)
@@ -169,14 +173,14 @@ class DatasetManager:
         if images_to_stack:
             max_h = max(img.shape[-2] for img in images_to_stack)
             max_w = max(img.shape[-1] for img in images_to_stack)
-            
+
             padded_images = []
             padded_masks = []
-            
+
             for img, mask in zip(images_to_stack, background_masks):
                 diff_h = max_h - img.shape[-2]
                 diff_w = max_w - img.shape[-1]
-                
+
                 if diff_h > 0 or diff_w > 0:
                     # Pad (left, right, top, bottom)
                     padding = (0, diff_w, 0, diff_h)
@@ -185,12 +189,12 @@ class DatasetManager:
                 else:
                     padded_images.append(img)
                     padded_masks.append(mask)
-            
+
             images_to_stack = padded_images
             background_masks = padded_masks
 
         batch_tensor = torch.stack(images_to_stack)
-        
+
         mask_tensor = None
         if background_masks:
             mask_tensor = torch.stack(background_masks)
@@ -199,13 +203,9 @@ class DatasetManager:
             abs_stats = self._calculate_statistics(batch_tensor.abs(), mask_tensor)
             real_stats = self._calculate_statistics(batch_tensor.real, mask_tensor)
             imag_stats = self._calculate_statistics(batch_tensor.imag, mask_tensor)
-            
+
             stats = abs_stats.copy()
-            stats["components"] = {
-                "real": real_stats,
-                "imag": imag_stats,
-                "abs": abs_stats
-            }
+            stats["components"] = {"real": real_stats, "imag": imag_stats, "abs": abs_stats}
             hist_values = batch_tensor.abs().float()
         else:
             stats = self._calculate_statistics(batch_tensor, mask_tensor)
@@ -246,15 +246,17 @@ class DatasetManager:
                 vmax=render_max,
             )
 
-            rendered_samples.append({
-                "index": indices[i],
-                "image_left_base64": left_img,
-                "image_right_base64": right_img,
-                "image_left_label": left_lbl,
-                "image_right_label": right_lbl,
-                "colorbar_range": ranges,
-                "shape": list(img.shape[-2:]),
-            })
+            rendered_samples.append(
+                {
+                    "index": indices[i],
+                    "image_left_base64": left_img,
+                    "image_right_base64": right_img,
+                    "image_left_label": left_lbl,
+                    "image_right_label": right_lbl,
+                    "colorbar_range": ranges,
+                    "shape": list(img.shape[-2:]),
+                }
+            )
 
         return {
             "samples": rendered_samples,
@@ -271,7 +273,6 @@ class DatasetManager:
             },
             "global_range": (render_min, render_max),
         }
-
 
     def navigate_next(self, dataset_idx: int, sample_idx: int, nav_type: str) -> int:
         return self._navigate(dataset_idx, sample_idx, nav_type, direction=1)
@@ -364,8 +365,12 @@ class DatasetManager:
         if isinstance(dataset, ComplexImageDataset):
             for idx, (subject_key, slice_idx, coil_idx) in enumerate(dataset._slice_index):
                 subject_idx = subject_key_to_index[subject_key]
-                index_to_position.append((subject_idx, slice_idx, coil_idx))
-                position_to_index[(subject_idx, slice_idx, coil_idx)] = idx
+                # Normalize coil index: only expose a coil dimension for true coilwise datasets.
+                # ComplexImageDataset in flat/combined modes uses a dummy coil_idx=0 internally,
+                # but the viewer treats these as non-coil datasets and omits the coil field.
+                norm_coil_idx = coil_idx if coils_per_subject is not None else None
+                index_to_position.append((subject_idx, slice_idx, norm_coil_idx))
+                position_to_index[(subject_idx, slice_idx, norm_coil_idx)] = idx
                 slices_per_subject[subject_key] = max(slices_per_subject[subject_key], slice_idx + 1)
                 if coils_per_subject is not None:
                     coils_per_subject[subject_key] = max(coils_per_subject[subject_key], coil_idx + 1)
@@ -417,20 +422,26 @@ class DatasetManager:
     def _calculate_statistics(self, tensor: torch.Tensor, background_mask: torch.Tensor | None) -> dict[str, Any]:
         values = tensor.float()
         values = values[torch.isfinite(values)]
-        
+
         signal_fraction = 0.0
         if background_mask is not None:
             signal_fraction = (~background_mask).float().mean().item()
 
         if values.numel() == 0:
             return {
-                "min": 0.0, "max": 0.0, "mean": 0.0, "variance": 0.0, "std": 0.0, 
-                "signal_fraction": signal_fraction, "p99": 0.0, "p99_9": 0.0
+                "min": 0.0,
+                "max": 0.0,
+                "mean": 0.0,
+                "variance": 0.0,
+                "std": 0.0,
+                "signal_fraction": signal_fraction,
+                "p99": 0.0,
+                "p99_9": 0.0,
             }
 
         variance = torch.var(values, unbiased=False).item()
         std = torch.sqrt(torch.tensor(variance)).item()
-        
+
         return {
             "min": values.min().item(),
             "max": values.max().item(),
@@ -447,15 +458,11 @@ class DatasetManager:
             abs_stats = self._calculate_statistics(image.abs(), background_mask)
             real_stats = self._calculate_statistics(image.real, background_mask)
             imag_stats = self._calculate_statistics(image.imag, background_mask)
-            
+
             stats = abs_stats.copy()
-            stats["components"] = {
-                "real": real_stats,
-                "imag": imag_stats,
-                "abs": abs_stats
-            }
+            stats["components"] = {"real": real_stats, "imag": imag_stats, "abs": abs_stats}
             return stats
-        
+
         return self._calculate_statistics(image, background_mask)
 
     def _build_metadata(
