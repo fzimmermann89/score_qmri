@@ -13,28 +13,26 @@ using a learned prior (diffusion model). The goal is to reconstruct quantitative
 ## Current State
 
 The project currently implements:
-- **Training the denoising score model** (VP-SDE diffusion)
-- **Basic image generation for validation** (DDIM sampling with fixed noise per dataset kind)
-
-Posterior sampling for the inverse problem will be added in a future phase.
+- **Training the denoising score model** (VE/EDM diffusion)
+- **Basic image generation for validation** (EDM sampling with Heun solver)
+- **Posterior sampling** (DPS with EDM)
 
 ## Architecture Design Decisions
 
-### VP-SDE Diffusion Model
+### VE/EDM Diffusion Model
 
-We use the Variance Preserving SDE framework (Song et al., ICLR 2021) with **continuous time** t ∈ [ε, 1] where ε = 10⁻⁵:
-- Forward SDE: `dx = -½β(t)x dt + √β(t) dw`
-- Linear noise schedule: `β(t) = β_min + t(β_max - β_min)` with β_min = 0.1, β_max = 10.0
-- Score: `∇_x log p(x_t) = -ε / σ(t)`
-- The lower bound ε avoids numerical singularity at t = 0 where σ(t) → 0
-
+We use the Variance Exploding (VE) framework with EDM (Karras et al., 2022) preconditioning:
+- Forward process: `x = x0 + σ * ε`, where `ε ~ N(0, I)`
+- Sigma distribution: Log-normal `ln(σ) ~ N(P_mean, P_std²)`
+- Preconditioning: Network trained to predict `x0` (or `ε`) with sigma-dependent skip connections to maintain unit variance
+- Loss: `L = weight(σ) * ||D(x, σ) - x0||²`
 
 ### Dual-Head UNet Architecture
 
 The UNet has **two output heads**:
 
-1. **Noise prediction head (ε)**: Trained with MSE loss (L_simple), used for score computation and sampling
-2. **Clean image prediction head (x₀)**: Trained with SSIM + L1 loss as an auxiliary objective
+1. **Main head**: Predicts the clean image `x0`, used for sampling and score computation
+2. **Auxiliary head**: Trained with SSIM + L1 loss as an auxiliary objective
 
 The x₀ head serves two purposes:
 - Helps the network learn better internal representations of true images
@@ -48,7 +46,7 @@ h = h * (1 + scale) + shift
 ```
 
 The conditioning vector combines:
-- **Sinusoidal timestep embedding**: Encodes diffusion time t
+- **Noise level embedding**: `ln(σ) / 4`
 - **Dataset kind embedding**: Tells the network what type of MRI image it's denoising
 
 ### Dataset Kinds (14 types)
@@ -161,13 +159,14 @@ score-qmri-train fit --config config.yaml
 │       │   ├── lightning.py      # LightningDataModule
 │       │   └── config.py         # Augmentation configs
 │       ├── models/
-│       │   ├── diffusion.py      # VP-SDE diffusion model
+│       │   ├── diffusion.py      # VE/EDM diffusion model
 │       │   ├── unet.py           # Dual-head UNet with FiLM conditioning
 │       │   ├── conditioning.py   # Sinusoidal + kind embeddings
 │       ├── sampling/
-│       │   ├── ddpm_sampler.py   # DDPM sampling
-│       │   └── ddim_sampler.py   # DDIM sampling (used for validation)
-│       └── training/
+│       │   ├── edm_sampler.py    # EDM sampling (Heun/Euler)
+│       │   ├── dps_sampler.py    # DPS reconstruction
+│       │   └── generate.py       # Generation entry point
+│       ├── training/
 │           ├── lightning_module.py   # LightningModule for training
 │           ├── losses.py             # Noise MSE + SSIM/L1 losses
 │           └── ema.py                # EMA weight averaging
@@ -226,8 +225,8 @@ class UNet(torch.nn.Module):
 - Only explain non-obvious logic, numerical tricks, paper references.
 
 ```python
-# Apply noise schedule from Ho et al. (2020) eq. 4
-alpha_bar = torch.cumprod(1 - betas, dim=0)
+# Apply noise schedule from Karras et al. (2022)
+sigma = t
 ```
 
 ## PyTorch Guidelines
@@ -285,3 +284,19 @@ prefer moveaxis instead of permute (and einops.rearrange over permute)
 ## Imports
 
 - Do not import `torch.nn as nn` or `torch.nn.functional as F`. Use full path in the code.
+
+## File Safety & Agent Rules
+
+### 1. File Deletion Protocol
+- **NEVER** delete untracked files, backup files, plans, or documentation unless **explicitly** instructed by the user.
+- **NEVER** use wildcard deletions (e.g., `rm *.bak`, `rm -rf temp*`) without confirming exactly which files will be deleted.
+- If cleanup is needed, list the specific files to be deleted and ask for confirmation, or delete them one by one if they are clearly generated artifacts (like `__pycache__`).
+- **NEVER** delete `AGENTS.md`, `README.md`, or any markdown plan files.
+
+### 2. Unknown Files
+- **Do not touch** (edit, move, or delete) files that you do not understand or that were not created by you, unless their purpose is clear and the action is required for the task.
+- If a file seems unused but is not a standard artifact (like `.pyc`), **assume it is important** and leave it alone.
+
+### 3. Restoration
+- If a file is accidentally deleted, **restore it immediately** using `git checkout` or by rewriting the content if known.
+- Report any accidental deletions to the user immediately.

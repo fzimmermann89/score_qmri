@@ -9,13 +9,11 @@ from torch import Tensor
 from score_qmri.datasets.kind import is_complex_kind
 
 
-def create_channel_mask(kind: Tensor, device: torch.device) -> Tensor:
+def create_channel_mask(kind: Tensor) -> Tensor:
     """Create (B, 2, 1, 1) channel mask: [1,1] for complex kinds, [1,0] for real kinds."""
-    B = kind.shape[0]
-    mask = torch.ones(B, 2, 1, 1, device=device)
-    for i in range(B):
-        if not is_complex_kind(int(kind[i].item())):
-            mask[i, 1] = 0.0
+    complex_mask = is_complex_kind(kind)
+    mask = torch.ones(kind.shape[0], 2, 1, 1, device=kind.device)
+    mask[:, 1] = complex_mask.to(dtype=mask.dtype).view(-1, 1, 1)
     return mask
 
 

@@ -60,7 +60,7 @@ def test_hparams_saved(module):
 
 
 def test_create_fixed_noise_for_all_kinds(module):
-    from score_qmri.sampling.ddim_sampler import create_fixed_noise
+    from score_qmri.sampling.edm_sampler import create_fixed_noise
 
     noise = create_fixed_noise((32, 32))
     assert len(noise) == NUM_DATASET_KINDS

@@ -1,6 +1,10 @@
 """Dataset kind enumeration for MRI data types."""
 
 from enum import IntEnum
+from typing import overload
+
+import torch
+from torch import Tensor
 
 
 class DatasetKind(IntEnum):
@@ -59,8 +63,32 @@ _MAPPING_KINDS = frozenset(
 NUM_DATASET_KINDS: int = len(DatasetKind)
 
 
-def is_complex_kind(kind_index: int) -> bool:
-    return kind_index in _COMPLEX_KINDS
+# Vectorized lookup table (CPU): kind_index -> is_complex.
+COMPLEX_KIND_LUT: Tensor = torch.tensor(
+    [i in _COMPLEX_KINDS for i in range(NUM_DATASET_KINDS)],
+    dtype=torch.bool,
+)
+
+
+@overload
+def is_complex_kind(kind_index: int) -> bool: ...
+
+
+@overload
+def is_complex_kind(kind_index: Tensor) -> Tensor: ...
+
+
+def is_complex_kind(kind_index: int | Tensor) -> bool | Tensor:
+    """Check whether dataset kind(s) represent complex-valued data.
+
+    For tensor inputs, this is a vectorized lookup without per-element `.item()`
+    calls.
+    """
+    if isinstance(kind_index, int):
+        if not (0 <= kind_index < NUM_DATASET_KINDS):
+            raise IndexError(f"kind_index {kind_index} out of range [0, {NUM_DATASET_KINDS})")
+        return bool(COMPLEX_KIND_LUT[kind_index].item())
+    return COMPLEX_KIND_LUT.to(device=kind_index.device)[kind_index]
 
 
 def is_magnitude_kind(kind_index: int) -> bool:

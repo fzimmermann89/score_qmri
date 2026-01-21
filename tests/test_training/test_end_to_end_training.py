@@ -28,11 +28,15 @@ def training_yaml_config(sample_h5_file_magnitude: str) -> Generator[str, None, 
     - 1
     - 2
   cond_dim: 64
-  beta_min: 0.1
-  beta_max: 20.0
+  sigma_min: 0.01
+  sigma_max: 10.0
+  sigma_data: 0.5
+  p_mean: -1.2
+  p_std: 1.2
+  rho: 7.0
   learning_rate: 1e-4
-  noise_weight: 1.0
-  x0_weight: 0.1
+  main_weight: 1.0
+  aux_weight: 0.1
   ssim_weight: 0.5
   l1_weight: 0.5
   validation_size: 32
@@ -119,11 +123,15 @@ def small_model_kwargs():
         "num_res_blocks": 2,
         "channel_mult": (1, 2),
         "cond_dim": 64,
-        "beta_min": 0.1,
-        "beta_max": 20.0,
+        "sigma_min": 0.01,
+        "sigma_max": 10.0,
+        "sigma_data": 0.5,
+        "p_mean": -1.2,
+        "p_std": 1.2,
+        "rho": 7.0,
         "learning_rate": 1e-4,
-        "noise_weight": 1.0,
-        "x0_weight": 0.1,
+        "main_weight": 1.0,
+        "aux_weight": 0.1,
         "ssim_weight": 0.5,
         "l1_weight": 0.5,
         "validation_size": 32,

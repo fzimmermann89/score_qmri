@@ -60,13 +60,25 @@ def test_unet_gradient_flow():
     assert len(params_with_grad) > 0
 
 
-def test_unet_dual_heads_different():
-    """Test x0 and noise heads produce different outputs."""
+def test_unet_heads_are_independent():
+    """Test the two output heads are not tied.
+
+    Heads are zero-initialized for stability, so their initial outputs can be equal.
+    This test verifies independence by perturbing only one head.
+    """
     unet = UNet(in_channels=2, base_channels=16, num_res_blocks=2, channel_mult=(1, 2), cond_dim=64)
     x = torch.randn(1, 2, 32, 32)
     cond = torch.randn(1, 64)
-    x0, noise = unet(x, cond)
-    assert not torch.allclose(x0, noise)
+
+    out_main, out_aux = unet(x, cond)
+    assert out_main.shape == out_aux.shape
+    assert unet.main_head is not unet.aux_head
+
+    with torch.no_grad():
+        unet.main_head.weight.data += 0.01  # type: ignore[assignment,operator]
+
+    out_main_2, out_aux_2 = unet(x, cond)
+    assert not torch.allclose(out_main_2, out_aux_2)
 
 
 def test_attention_forward():

@@ -73,7 +73,7 @@ class ConditioningMLP(torch.nn.Module):
             torch.nn.Linear(cond_dim, cond_dim),
         )
 
-    def forward(self, t: Tensor, kind: Tensor) -> Tensor:
+    def forward(self, t: Tensor, kind: Tensor, mask: Tensor | None = None) -> Tensor:
         """
         Embed timestep and kind into conditioning vector.
 
@@ -83,6 +83,10 @@ class ConditioningMLP(torch.nn.Module):
             Timesteps of shape (B,).
         kind
             Dataset kind indices of shape (B,).
+        mask
+            Optional boolean/float mask of shape (B,) or (B, 1).
+            Entries with 0 will zero out the kind embedding (dropout).
+            Entries with 1 will keep it.
 
         Returns
         -------
@@ -91,5 +95,12 @@ class ConditioningMLP(torch.nn.Module):
         """
         t_emb = self.time_embed(t)
         k_emb = self.kind_embed(kind)
+
+        if mask is not None:
+            # Ensure mask is broadcastable (B, 1)
+            if mask.ndim == 1:
+                mask = mask.unsqueeze(1)
+            k_emb = k_emb * mask
+
         cond: Tensor = self.mlp(torch.cat([t_emb, k_emb], dim=-1))
         return cond

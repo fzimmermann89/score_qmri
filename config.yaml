@@ -1,15 +1,6 @@
 model:
-  normalization:
-    train_clip: 1.2
-    sample_clip: 1.0
-    kind_scales:
-      T1MAP: 0.0003
-      T2MAP: 0.005
-      T2STARMAP: 0.01
-
   attention_levels: [3, 4]
   learning_rate: 1e-4
-  noise_schedule: cosine
 
 data:
   class_path: score_qmri.datasets.lightning.MRIDataModule

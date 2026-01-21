@@ -1,4 +1,6 @@
-"""PyTorch Lightning module for diffusion training."""
+"""PyTorch Lightning module for VE/EDM diffusion training."""
+
+from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -14,12 +16,12 @@ from torch import Tensor
 from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind, is_complex_kind
 from score_qmri.models.diffusion import (
     DiffusionModel,
-    NoiseSchedule,
+    EDMConfig,
     NormalizationConfig,
     _apply_kind_constraints,
     _create_noise,
 )
-from score_qmri.sampling.ddim_sampler import DDIMSampler, SamplingStats, create_fixed_noise
+from score_qmri.sampling.edm_sampler import EDMSampler, SamplingStats, create_fixed_noise
 from score_qmri.training.ema import EMA
 from score_qmri.training.losses import create_channel_mask, l1_loss, noise_loss, ssim_loss
 
@@ -42,30 +44,41 @@ class DiffusionHparams:
     num_res_blocks: int
     channel_mult: tuple[int, ...]
     cond_dim: int
-    beta_min: float
-    beta_max: float
     learning_rate: float
     weight_decay: float
-    noise_weight: float
-    x0_weight: float
+
+    main_weight: float
+    aux_weight: float
     ssim_weight: float
     l1_weight: float
+
     penumbra_weight: float
     background_weight: float
+
     validation_size: int
     validation_steps: int
     validation_interval: int
     log_batch_interval: int
     warmup_steps: int
     ema_decay: float
+
+    cond_dropout_rate: float
+
     attention_levels: tuple[int, ...]
     head_dim: int
-    noise_schedule: NoiseSchedule
+
+    sigma_min: float
+    sigma_max: float
+    sigma_data: float
+    p_mean: float
+    p_std: float
+    rho: float
+
     normalization: NormalizationConfig
 
 
 class DiffusionLightningModule(LightningModule):
-    """Lightning module for diffusion training with dual prediction heads."""
+    """Lightning module for VE/EDM diffusion training with two x0 heads."""
 
     hparams: DiffusionHparams  # type: ignore[assignment]
 
@@ -75,86 +88,44 @@ class DiffusionLightningModule(LightningModule):
         num_res_blocks: int = 2,
         channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
         cond_dim: int = 128,
-        beta_min: float = 0.1,
-        beta_max: float = 10.0,
         learning_rate: float = 5e-5,
         weight_decay: float = 0.01,
-        noise_weight: float = 1.0,
-        x0_weight: float = 0.1,
+        main_weight: float = 1.0,
+        aux_weight: float = 0.1,
         ssim_weight: float = 0.5,
         l1_weight: float = 0.5,
         penumbra_weight: float = 0.0,
         background_weight: float = 0.5,
         validation_size: int = 128,
-        validation_steps: int = 250,
+        validation_steps: int = 50,
         validation_interval: int = 1000,
         log_batch_interval: int = 200,
         warmup_steps: int = 2000,
         ema_decay: float = 0.9999,
+        cond_dropout_rate: float = 0.1,
         attention_levels: tuple[int, ...] = (),
         head_dim: int = 64,
-        noise_schedule: NoiseSchedule = "linear",
+        sigma_min: float = 0.01,
+        sigma_max: float = 100.0,
+        sigma_data: float = 0.5,
+        p_mean: float = -1.2,
+        p_std: float = 1.2,
+        rho: float = 7.0,
         normalization: NormalizationConfig | None = None,
     ) -> None:
-        """
-        Parameters
-        ----------
-        base_channels
-            UNet base channel count.
-        num_res_blocks
-            Number of ResBlocks per level.
-        channel_mult
-            Channel multipliers per level (e.g., (1, 2, 4, 8) gives 4 levels).
-        cond_dim
-            Conditioning embedding dimension.
-        beta_min
-            Minimum noise rate at t=0.
-        beta_max
-            Maximum noise rate at t=1.
-        learning_rate
-            Optimizer learning rate.
-        weight_decay
-            AdamW weight decay.
-        noise_weight
-            Weight for noise prediction loss.
-        x0_weight
-            Weight for clean image prediction loss.
-        ssim_weight
-            SSIM weight within x0 loss.
-        l1_weight
-            L1 weight within x0 loss.
-        penumbra_weight
-            Loss weight for penumbra zone (0 = ignore).
-        background_weight
-            Loss weight for background zone (0.5 = half weight).
-        validation_size
-            Image size for validation sampling.
-        validation_steps
-            DDIM sampling steps for validation.
-        validation_interval
-            Steps between validation samples.
-        log_batch_interval
-            Steps between training batch visualizations.
-        warmup_steps
-            Number of warmup steps for linear LR warmup.
-        ema_decay
-            EMA decay rate for weight averaging.
-        attention_levels
-            Tuple of level indices where self-attention is applied.
-        head_dim
-            Dimension per attention head.
-        noise_schedule
-            Noise schedule type ("linear" or "cosine").
-        normalization
-            Normalization settings for clipping and per-kind scales.
-        """
         super().__init__()
         normalization = normalization or NormalizationConfig()
         self.save_hyperparameters()
 
+        edm = EDMConfig(
+            sigma_min=sigma_min,
+            sigma_max=sigma_max,
+            sigma_data=sigma_data,
+            p_mean=p_mean,
+            p_std=p_std,
+        )
+
         self.model = DiffusionModel(
-            beta_min=beta_min,
-            beta_max=beta_max,
             base_channels=base_channels,
             num_res_blocks=num_res_blocks,
             channel_mult=channel_mult,
@@ -162,10 +133,11 @@ class DiffusionLightningModule(LightningModule):
             num_kinds=NUM_DATASET_KINDS,
             attention_levels=attention_levels,
             head_dim=head_dim,
-            noise_schedule=noise_schedule,
+            edm=edm,
             normalization=normalization,
         )
-        self.sampler: DDIMSampler = DDIMSampler(self.model, num_steps=validation_steps)
+
+        self.sampler: EDMSampler = EDMSampler(self.model, num_steps=validation_steps, rho=rho)
         self._fixed_noise: dict[int, Tensor] | None = None
         self.ema: EMA[DiffusionModel] | None = None
 
@@ -181,15 +153,15 @@ class DiffusionLightningModule(LightningModule):
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         beta1, beta2 = 0.9, 0.999
 
-        hparams = {
-            "model/total_params": total_params,
-            "model/trainable_params": trainable_params,
-            "optimizer/weight_decay": self.hparams.weight_decay,
-            "optimizer/beta1": beta1,
-            "optimizer/beta2": beta2,
-        }
-
-        self.logger.log_hyperparams(hparams)
+        self.logger.log_hyperparams(
+            {
+                "model/total_params": total_params,
+                "model/trainable_params": trainable_params,
+                "optimizer/weight_decay": self.hparams.weight_decay,
+                "optimizer/beta1": beta1,
+                "optimizer/beta2": beta2,
+            }
+        )
 
         if wandb.run is not None:
             project_root = Path(__file__).parent.parent
@@ -208,16 +180,16 @@ class DiffusionLightningModule(LightningModule):
         if self.global_step % 100 != 0:
             return
 
-        x0_grads, noise_grads, backbone_grads = [], [], []
+        main_grads, aux_grads, backbone_grads = [], [], []
 
         for name, p in self.model.named_parameters():
             if p.grad is None:
                 continue
             grad = p.grad.detach().flatten()
-            if "x0_head" in name:
-                x0_grads.append(grad)
-            elif "noise_head" in name:
-                noise_grads.append(grad)
+            if "main_head" in name:
+                main_grads.append(grad)
+            elif "aux_head" in name:
+                aux_grads.append(grad)
             else:
                 backbone_grads.append(grad)
 
@@ -226,9 +198,9 @@ class DiffusionLightningModule(LightningModule):
 
         self.log_dict(
             {
-                "gradients/total_norm": norm(x0_grads + noise_grads + backbone_grads),
-                "gradients/x0_head_norm": norm(x0_grads),
-                "gradients/noise_head_norm": norm(noise_grads),
+                "gradients/total_norm": norm(main_grads + aux_grads + backbone_grads),
+                "gradients/main_head_norm": norm(main_grads),
+                "gradients/aux_head_norm": norm(aux_grads),
                 "gradients/backbone_norm": norm(backbone_grads),
             },
             on_step=True,
@@ -250,82 +222,93 @@ class DiffusionLightningModule(LightningModule):
         x0_norm = torch.where(signal_mask.unsqueeze(1), x0_norm, torch.zeros_like(x0_norm))
         x0 = self.model.clamp_x0(x0_norm, kind, limit=self.model.train_clip)
 
-        eps = 1e-5
-        t = torch.rand(x0.shape[0], device=self.device) * (1.0 - eps) + eps
+        # Sample sigma per example (continuous)
+        sigma = self.model.sample_sigmas(x0.shape[0], device=self.device)
 
         noise = _create_noise(x0.shape, kind, self.device, x0.dtype)
-        x_t = self.model.q_sample(x0, t, kind, noise)
+        x_sigma = x0 + sigma.view(-1, 1, 1, 1) * noise
 
-        output = self.model(x_t, t, kind)
+        # Classifier-free guidance dropout (drop only kind embedding)
+        cond_mask = None
+        if self.hparams.cond_dropout_rate > 0.0:
+            keep_prob = 1.0 - self.hparams.cond_dropout_rate
+            cond_mask = torch.bernoulli(torch.full((x0.shape[0],), keep_prob, device=self.device)).unsqueeze(1)
+
+        output = self.model(x_sigma, sigma, kind, cond_mask=cond_mask)
 
         valid_counts = signal_mask.sum(dim=(-2, -1))
         valid_samples = valid_counts >= 1000
         n_valid = int(valid_samples.sum().item())
-
         if n_valid == 0:
             print(f"[Rank {self.global_rank}] Skipping step {self.global_step}: no valid samples")
-            return (output.x0.sum() + output.noise.sum()).nan_to_num() * 0.0
+            return torch.nan_to_num(output.x0_main.sum() + output.x0_aux.sum()) * 0.0
 
         x0_v = x0[valid_samples]
-        noise_v = noise[valid_samples]
+        x_sigma_v = x_sigma[valid_samples]
+        sigma_v = sigma[valid_samples]
         penumbra_mask_v = penumbra_mask[valid_samples]
         background_mask_v = background_mask[valid_samples]
         kind_v = kind[valid_samples]
-        pred_noise_v = output.noise[valid_samples]
-        pred_x0_v = output.x0[valid_samples]
+        x0_main_v = output.x0_main[valid_samples]
+        x0_aux_v = output.x0_aux[valid_samples]
 
         loss_weight = torch.ones_like(background_mask_v, dtype=x0_v.dtype)
         loss_weight = torch.where(background_mask_v, self.hparams.background_weight, loss_weight)
         loss_weight = torch.where(penumbra_mask_v, self.hparams.penumbra_weight, loss_weight)
         loss_weight = loss_weight.unsqueeze(1)
-        channel_mask = create_channel_mask(kind_v, self.device)
 
-        t_v = t[valid_samples]
-        signal_weight = self.model.alpha_bar(t_v)
+        channel_mask = create_channel_mask(kind_v)
 
-        loss_noise = noise_loss(pred_noise_v, noise_v, loss_weight, channel_mask)
-        loss_l1 = l1_loss(pred_x0_v, x0_v, loss_weight, channel_mask, reduction="none")
-        loss_ssim = ssim_loss(pred_x0_v, x0_v, loss_weight, channel_mask, reduction="none").squeeze(-1)
+        # EDM main loss (weighted L2 on x0_main)
+        sigma_data = torch.tensor(self.model.sigma_data, device=self.device, dtype=torch.float32)
+        sigma_f = sigma_v.float()
+        w = (sigma_f.square() + sigma_data.square()) / (sigma_f * sigma_data).square().clamp(min=1e-8)
 
-        loss_l1 = (loss_l1 * signal_weight).mean()
-        loss_ssim = (loss_ssim * signal_weight).mean()
+        main_mse = noise_loss(x0_main_v, x0_v, loss_weight, channel_mask, reduction="none")
+        loss_main = (main_mse * w).mean()
 
-        x0_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
-        total_loss = self.hparams.noise_weight * loss_noise + self.hparams.x0_weight * x0_loss
+        # Auxiliary SSIM+L1 (weighted towards low sigma)
+        sigma_floor = float(self.model.sigma_min)
+        aux_w = 1.0 / (sigma_f.square() + sigma_floor**2)
+
+        loss_l1 = l1_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
+        loss_ssim = ssim_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
+        aux_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
+        loss_aux = (aux_loss * aux_w).mean()
+
+        total_loss = self.hparams.main_weight * loss_main + self.hparams.aux_weight * loss_aux
 
         if not torch.isfinite(total_loss) or total_loss > LOSS_ANOMALY_THRESHOLD:
             loss_val = total_loss.item() if torch.isfinite(total_loss) else float("nan")
             print(f"[Rank {self.global_rank}] Skipping step {self.global_step}: loss={loss_val:.2f}")
-            return (output.x0.sum() + output.noise.sum()).nan_to_num() * 0.0
+            return torch.nan_to_num(output.x0_main.sum() + output.x0_aux.sum()) * 0.0
 
         self.log("train/loss", total_loss, prog_bar=True, sync_dist=True)
         self.log_dict(
             {
-                "train/noise_mse": loss_noise,
-                "train/x0_l1": loss_l1,
-                "train/x0_ssim": 1.0 - loss_ssim,
+                "train/main_l2": loss_main,
+                "train/aux_l1": loss_l1.mean(),
+                "train/aux_ssim": 1.0 - loss_ssim.mean(),
+                "train/sigma_mean": sigma_f.mean(),
+                "train/sigma_p95": torch.quantile(sigma_f, 0.95),
             },
             prog_bar=True,
             rank_zero_only=True,
         )
 
         if self.global_step > 0 and self.global_step % self.hparams.log_batch_interval == 0:
-            x_t_v = x_t[valid_samples]
-            x0_tweedie_v = self.model.predict_x0(x_t_v, t_v, pred_noise_v, kind_v)
-            self._log_training_batch(x0_v, x_t_v, noise_v, pred_noise_v, x0_tweedie_v, pred_x0_v, kind_v, t_v)
+            self._log_training_batch(x0_v, x_sigma_v, x0_main_v, x0_aux_v, kind_v, sigma_v)
 
         return total_loss
 
     def _log_training_batch(
         self,
         x0_gt: Tensor,
-        x_t: Tensor,
-        noise_gt: Tensor,
-        noise_pred: Tensor,
-        x0_tweedie: Tensor,
-        x0_pred: Tensor,
+        x_sigma: Tensor,
+        x0_main: Tensor,
+        x0_aux: Tensor,
         kind: Tensor,
-        t: Tensor,
+        sigma: Tensor,
     ) -> None:
         if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
             return
@@ -334,45 +317,31 @@ class DiffusionLightningModule(LightningModule):
         import wandb
 
         B = min(x0_gt.shape[0], 8)
-        fig, axes = plt.subplots(6, B, figsize=(2.5 * B, 15), squeeze=False)
+        fig, axes = plt.subplots(4, B, figsize=(2.5 * B, 10), squeeze=False)
 
         def to_np(x: Tensor, kind_tensor: Tensor) -> list:
             result = []
             for i in range(B):
                 sample = x[i]
                 k_idx = int(kind_tensor[i].item())
-                mag = (sample[0] ** 2 + sample[1] ** 2).sqrt() if is_complex_kind(k_idx) else sample[0]
-                result.append(mag.detach().cpu().numpy())
+                img = (sample[0] ** 2 + sample[1] ** 2).sqrt() if is_complex_kind(k_idx) else sample[0]
+                result.append(img.detach().cpu().numpy())
             return result
 
-        gt = to_np(x0_gt, kind)
-        noised = to_np(x_t, kind)
-        n_gt = to_np(noise_gt, kind)
-        n_pred = to_np(noise_pred, kind)
-        x0_tw = to_np(x0_tweedie, kind)
-        x0_p = to_np(x0_pred, kind)
-        kind_names = [DatasetKind(int(kind[i].item())).name for i in range(B)]
+        rows = [to_np(x0_gt, kind), to_np(x_sigma, kind), to_np(x0_main, kind), to_np(x0_aux, kind)]
+        row_labels = ["x0 GT", "x_sigma", "x0 main", "x0 aux"]
 
-        row_labels = ["x0 GT", "x_t (noised)", "noise GT", "noise pred", "x0 Tweedie", "x0 pred"]
+        kind_names = [DatasetKind(int(kind[i].item())).name for i in range(B)]
         for i in range(B):
-            for row, data in enumerate([gt, noised, n_gt, n_pred, x0_tw, x0_p]):
-                axes[row, i].imshow(data[i], cmap="gray")
-                axes[row, i].axis("off")
+            for r, data in enumerate(rows):
+                axes[r, i].imshow(data[i], cmap="gray")
+                axes[r, i].axis("off")
                 if i == 0:
-                    axes[row, i].text(
-                        -0.05,
-                        0.5,
-                        row_labels[row],
-                        fontsize=8,
-                        transform=axes[row, i].transAxes,
-                        ha="right",
-                        va="center",
-                    )
-            axes[0, i].set_title(f"{kind_names[i]}\nt={t[i].item():.2f}", fontsize=7)
+                    axes[r, i].text(-0.05, 0.5, row_labels[r], fontsize=8, transform=axes[r, i].transAxes, ha="right", va="center")
+            axes[0, i].set_title(f"{kind_names[i]}\nσ={sigma[i].item():.3f}", fontsize=7)
 
         fig.suptitle(f"Training batch @ step {self.global_step}", fontsize=10)
         fig.tight_layout()
-
         self.logger.experiment.log({"train/batch_visualization": wandb.Image(fig)})
         plt.close(fig)
 
@@ -403,7 +372,7 @@ class DiffusionLightningModule(LightningModule):
 
         sample_model: DiffusionModel = self.ema.shadow if self.ema is not None else self.model
         sample_model.eval()
-        sampler = DDIMSampler(sample_model, num_steps=self.hparams.validation_steps)
+        sampler = EDMSampler(sample_model, num_steps=self.hparams.validation_steps, rho=self.hparams.rho)
 
         with torch.no_grad():
             for kind_enum in VALIDATION_KINDS:
@@ -452,11 +421,11 @@ class DiffusionLightningModule(LightningModule):
 
         fig, axes = plt.subplots(2, n, figsize=(2.5 * n, 5), squeeze=False)
 
-        for j, (inter, step, t_val) in enumerate(zip(stats.intermediates, stats.steps, stats.t_values, strict=True)):
+        for j, (inter, step, sigma_val) in enumerate(zip(stats.intermediates, stats.steps, stats.sigma, strict=True)):
             img = (inter[0, 0] ** 2 + inter[0, 1] ** 2).sqrt().numpy() if inter.shape[1] == 2 else inter[0, 0].numpy()
             axes[0, j].imshow(img, cmap="gray")
             axes[0, j].axis("off")
-            axes[0, j].set_title(f"step {step}\nt={t_val:.3f}", fontsize=7)
+            axes[0, j].set_title(f"step {step}\nσ={sigma_val:.3f}", fontsize=7)
 
         ax_stats = axes[1, 0]
         for ax in axes[1, 1:]:
@@ -464,7 +433,6 @@ class DiffusionLightningModule(LightningModule):
 
         ax_stats.plot(stats.steps, stats.x0_std, "b-", label="x0 std", linewidth=1.5)
         ax_stats.plot(stats.steps, stats.x_std, "g--", label="x std", linewidth=1.5)
-        ax_stats.plot(stats.steps, stats.noise_std, "r:", label="noise std", linewidth=1.5)
         ax_stats.set_xlabel("step")
         ax_stats.set_ylabel("std")
         ax_stats.legend(fontsize=6)
@@ -475,18 +443,6 @@ class DiffusionLightningModule(LightningModule):
 
         self.logger.experiment.log({"samples/progression": wandb.Image(fig), "global_step": self.global_step})
         plt.close(fig)
-
-        table_data = [
-            [step, f"{t:.4f}", f"{ab:.6f}", f"{x0_mean:.3f}", f"{x0_std:.3f}", f"{n_std:.3f}"]
-            for step, t, ab, x0_mean, x0_std, n_std in zip(
-                stats.steps, stats.t_values, stats.alpha_bar, stats.x0_mean, stats.x0_std, stats.noise_std, strict=True
-            )
-        ]
-        table = wandb.Table(
-            columns=["step", "t", "alpha_bar", "x0_mean", "x0_std", "noise_std"],
-            data=table_data,
-        )
-        self.logger.experiment.log({"samples/stats_table": table, "global_step": self.global_step})
 
     def configure_optimizers(self) -> OptimizerLRSchedulerConfig:
         use_fused = torch.cuda.is_available() and self.device.type == "cuda"

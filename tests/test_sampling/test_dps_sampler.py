@@ -1,5 +1,7 @@
 """Tests for DPS sampler."""
 
+from typing import cast
+
 import torch
 
 from score_qmri.datasets.kind import DatasetKind
@@ -54,17 +56,17 @@ class MaskingOperatorAdjoint:
 
 def test_dps_config_defaults():
     cfg = DPSConfig()
-    assert cfg.num_steps == 100
-    assert cfg.eta == 0.0
+    assert cfg.num_steps == 50
     assert cfg.guidance_scale == 1.0
     assert cfg.gradient_clipping == 1.0
     assert cfg.normalize_gradient is True
+    assert cfg.rho == 7.0
 
 
 def test_dps_config_custom():
-    cfg = DPSConfig(num_steps=50, eta=0.5, guidance_scale=0.1)
-    assert cfg.num_steps == 50
-    assert cfg.eta == 0.5
+    cfg = DPSConfig(num_steps=20, rho=5.0, guidance_scale=0.1)
+    assert cfg.num_steps == 20
+    assert cfg.rho == 5.0
     assert cfg.guidance_scale == 0.1
 
 
@@ -89,7 +91,7 @@ def test_dps_sampler_output_shape():
     sampler = DPSSampler(model, config)
 
     B, H, W = 2, 32, 32
-    op = IdentityOperator()
+    op = cast(LinearOperatorProtocol, IdentityOperator())
 
     # Create measurement in mrpro format
     y = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
@@ -110,7 +112,7 @@ def test_dps_sampler_with_masking_operator():
     # Create random undersampling mask
     mask = torch.rand(1, 1, 1, H, W) > 0.5
     mask = mask.float()
-    op = MaskingOperator(mask)
+    op = cast(LinearOperatorProtocol, MaskingOperator(mask))
 
     # Create measurement
     y = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
@@ -125,7 +127,7 @@ def test_dps_sampler_rejects_real_kinds():
     model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
     sampler = DPSSampler(model)
 
-    op = IdentityOperator()
+    op = cast(LinearOperatorProtocol, IdentityOperator())
     y = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
 
     import pytest
@@ -140,7 +142,7 @@ def test_dps_sampler_with_initial_noise():
     sampler = DPSSampler(model, config)
 
     B, H, W = 1, 32, 32
-    op = IdentityOperator()
+    op = cast(LinearOperatorProtocol, IdentityOperator())
     y = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
 
     initial_noise = torch.randn(B, 2, H, W)
@@ -152,10 +154,10 @@ def test_dps_sampler_with_initial_noise():
 def test_dps_sampler_deterministic_with_fixed_noise():
     model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
     model.eval()  # Important: freeze normalizer stats
-    config = DPSConfig(num_steps=3, eta=0.0)
+    config = DPSConfig(num_steps=3)
     sampler = DPSSampler(model, config)
 
-    op = IdentityOperator()
+    op = cast(LinearOperatorProtocol, IdentityOperator())
     y = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
 
     noise = torch.randn(1, 2, 32, 32)
@@ -172,7 +174,7 @@ def test_dps_gradient_flows():
     config = DPSConfig(num_steps=2, guidance_scale=1.0)
     sampler = DPSSampler(model, config)
 
-    op = IdentityOperator()
+    op = cast(LinearOperatorProtocol, IdentityOperator())
     y = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
 
     # Should not raise - gradients are computed internally

@@ -3,12 +3,12 @@
 Diffusion model framework for learning MRI priors (2-channel real/imag or mag/zeros) for qMRI reconstruction.
 
 ## Highlights
-- VP-SDE diffusion with dual heads (noise ε + clean x₀)
-- FiLM conditioning on timestep + dataset kind
+- VE-SDE (EDM/Karras) diffusion with dual x₀ heads (main + aux)
+- FiLM conditioning on log(σ) + dataset kind
 - Pre-Norm UNet with optional SDPA attention (`attention_levels`)
-- Cosine or linear noise schedule (cosine default)
+- Karras (poly-ρ) sigma schedule for sampling
 - Fixed per-kind normalization for mapping kinds (`kind_scales`)
-- DDIM validation sampling with fixed noise
+- EDM validation sampling with fixed noise
 
 ## Quick Start
 ```bash
@@ -22,8 +22,16 @@ score-qmri-train fit --config config.yaml
 model:
   attention_levels: [3, 4]
   head_dim: 64
-  noise_schedule: cosine
   learning_rate: 1e-4
+
+  # EDM parameters (defaults shown)
+  sigma_min: 0.01
+  sigma_max: 100.0
+  sigma_data: 0.5
+  p_mean: -1.2
+  p_std: 1.2
+  rho: 7.0
+
   normalization:
     train_clip: 1.2
     sample_clip: 1.0
@@ -59,7 +67,7 @@ pre-commit run --all-files
 ```
 
 ## References
+- Karras et al., NeurIPS 2022 (EDM)
 - Song et al., ICLR 2021 (Score-Based SDEs)
-- Ho et al., NeurIPS 2020 (DDPM)
-- Nichol & Dhariwal, 2021 (Cosine schedule)
+- Chung et al., ICLR 2023 (DPS)
 - Perez et al., AAAI 2018 (FiLM)
