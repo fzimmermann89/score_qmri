@@ -27,7 +27,7 @@ from typing import Any
 
 import numpy as np
 import torch
-import yaml  # type: ignore[import-untyped]
+import yaml
 from jsonargparse import ArgumentParser
 from torch.utils.data import DataLoader, Subset
 
