@@ -30,9 +30,9 @@ from .conditioning import ConditioningMLP
 from .unet import UNet
 
 DEFAULT_KIND_SCALES: dict[str, float] = {
-    "T1MAP": 0.0003,
-    "T2MAP": 0.005,
-    "T2STARMAP": 0.01,
+    "T1MAP": 1 / 4,
+    "T2MAP": 2,
+    "T2STARMAP": 5,
 }
 
 

@@ -15,7 +15,7 @@ separately* (treating them as separate samples), not on magnitude.
 
 Example
 -------
-python scripts/dataset_stats.py --config config.yaml --num_samples 200 --batch_size 8
+python scripts/dataset_stats.py --config config.yaml --num_samples 400 --batch_size 8
 """
 
 from __future__ import annotations
@@ -68,11 +68,8 @@ def _instantiate_datamodule(cfg: dict[str, Any]) -> MRIDataModule:
 
 def _parse_kind_scales(cfg: dict[str, Any]) -> dict[int, float]:
     # Defaults mirrored from repo config convention.
-    default: dict[str, float] = {
-        "T1MAP": 0.0003,
-        "T2MAP": 0.005,
-        "T2STARMAP": 0.01,
-    }
+    from score_qmri.models.diffusion import DEFAULT_KIND_SCALES as default
+
     model_obj = cfg.get("model")
     model_cfg: dict[str, Any] = model_obj if isinstance(model_obj, dict) else {}
 
@@ -162,11 +159,13 @@ def _values_for_stats(
     background_mask: torch.Tensor,
     *,
     signal_only: bool,
+    min_active_pixels: int = 1000,
 ) -> torch.Tensor:
     """Extract values for statistics.
 
     - Complex kinds: treat real and imag channels as separate samples.
     - Real kinds: use only channel 0.
+    - Filters out samples with fewer than min_active_pixels active pixels.
 
     Parameters
     ----------
@@ -178,6 +177,8 @@ def _values_for_stats(
         Boolean mask of shape (B, H, W).
     signal_only
         If True, restrict stats to ~background_mask.
+    min_active_pixels
+        Minimum number of active pixels per sample to include.
 
     Returns
     -------
@@ -185,6 +186,18 @@ def _values_for_stats(
         Flattened values.
     """
     sig = ~background_mask if signal_only else torch.ones_like(background_mask, dtype=torch.bool)
+
+    # Filter samples by active pixel count
+    active_counts = sig.sum(dim=(1, 2))  # (B,)
+    valid_mask = active_counts >= min_active_pixels
+
+    if not valid_mask.any():
+        return torch.empty(0)
+
+    # Apply filtering
+    x_2ch = x_2ch[valid_mask]
+    kind = kind[valid_mask]
+    sig = sig[valid_mask]
 
     chunks: list[torch.Tensor] = []
     for k in kind.unique():
@@ -207,28 +220,29 @@ def _values_for_stats(
 def _compute_stats(values: torch.Tensor) -> dict[str, float]:
     if values.numel() == 0:
         return {}
-    v = values.float()
+    v_np = values.float().cpu().numpy()
     return {
-        "min": float(v.min().item()),
-        "mean": float(v.mean().item()),
-        "std": float(v.std(unbiased=False).item()),
-        "p99": float(torch.quantile(v, 0.99).item()),
-        "max": float(v.max().item()),
+        "min": float(np.min(v_np)),
+        "mean": float(np.mean(v_np)),
+        "std": float(np.std(v_np)),
+        "p99": float(np.quantile(v_np, 0.99)),
+        "p99.9": float(np.quantile(v_np, 0.999)),
+        "max": float(np.max(v_np)),
     }
 
 
 def _format_stats(stats: dict[str, float]) -> str:
     if not stats:
         return "(no values)"
-    return " ".join(f"{k}={stats[k]:.6g}" for k in ["min", "mean", "std", "p99", "max"])
+    return " ".join(f"{k}={stats[k]:.6g}" for k in ["min", "mean", "std", "p99", "p99.9", "max"])
 
 
 def main() -> None:
     parser = ArgumentParser()
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
-    parser.add_argument("--num_samples", type=int, default=200)
+    parser.add_argument("--num_samples", type=int, default=400)
     parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--signal_only", type=bool, default=True)
     parser.add_argument("--apply_train_clip", type=bool, default=False)
@@ -259,6 +273,8 @@ def main() -> None:
     print(f"batch_size: {batch_size} num_workers: {num_workers}")
     print(f"signal_only: {signal_only} apply_train_clip: {apply_train_clip} (train_clip={train_clip})")
     print("")
+
+    results: list[tuple[str, dict[str, float], int, str, str]] = []  # (label, stats, kind_enum, scale_str, zoom_str)
 
     for i, ds_cfg in enumerate(dm.dataset_configs):
         label = _dataset_label(i, ds_cfg)
@@ -314,10 +330,58 @@ def main() -> None:
             scale_str = f"scaling_factor={getattr(ds_cfg, 'scaling_factor', 1.0)}"
             aug_str = "aug=on" if ds_cfg.augmentation_config is not None else "aug=off"
             print(f"{label}  {scale_str} {aug_str}  n_slices={n} sampled={k}  {_format_stats(stats)}")
+
+            # Extract zoom (mean of scale_range) from augmentation_config
+            zoom_str = " "
+            if ds_cfg.augmentation_config is not None:
+                scale_range = getattr(ds_cfg.augmentation_config, "scale_range", None)
+                if scale_range is not None:
+                    try:
+                        # Handle both tuple and list
+                        if len(scale_range) == 2:
+                            zoom_mean = (float(scale_range[0]) + float(scale_range[1])) / 2.0
+                            zoom_str = f"{zoom_mean:.3f}"
+                    except (TypeError, ValueError, IndexError):
+                        pass
+
+            # Store for later sorting by kind
+            kind_enum = int(ds_cfg.kind)
+            results.append((label, stats, kind_enum, scale_str, zoom_str))
         except Exception as ex:
             print(f"{label}  -> failed: {type(ex).__name__}: {ex}")
         finally:
             _close_dataset_file(ds)
+
+    # Print results again, sorted by kind, as a table
+    if results:
+        print("")
+        print("=" * 120)
+        print("Results sorted by kind:")
+        print("=" * 120)
+        results_sorted = sorted(results, key=lambda x: (x[2], x[0]))  # Sort by kind_enum, then label
+
+        # Table header
+        header = f"{'Label':<50} {'Scale':<15} {'Zoom':<8} {'Min':<10} {'Mean':<10} {'Std':<10} {'P99':<10} {'P99.9':<10} {'Max':<10}"
+        print(header)
+        print("-" * 120)
+
+        # Table rows
+        for label, stats, _kind_enum, scale_str, zoom_str in results_sorted:
+            if stats:
+                # Extract scaling_factor value from scale_str
+                scale_val = scale_str.split("=")[1] if "=" in scale_str else "1.0"
+                row = (
+                    f"{label:<50} "
+                    f"{scale_val:<15} "
+                    f"{zoom_str:<8} "
+                    f"{stats['min']:<10.6g} "
+                    f"{stats['mean']:<10.6g} "
+                    f"{stats['std']:<10.6g} "
+                    f"{stats['p99']:<10.6g} "
+                    f"{stats['p99.9']:<10.6g} "
+                    f"{stats['max']:<10.6g}"
+                )
+                print(row)
 
 
 if __name__ == "__main__":
