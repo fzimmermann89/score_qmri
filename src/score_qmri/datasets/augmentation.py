@@ -95,6 +95,11 @@ class AugmentationPipeline:
             resample="bilinear",
             p=1.0,
         )
+        self._scale = K.RandomAffine(
+            degrees=0.0,
+            scale=config.scale_range,
+            p=1.0,
+        )
         self._hflip = K.RandomHorizontalFlip(p=config.flip_prob)
         self.phase_aug = (
             PhaseAugmentation(
@@ -175,11 +180,10 @@ class AugmentationPipeline:
         img = self._hflip(img)
         mask = self._hflip(mask, params=self._hflip._params)
 
-        if torch.rand(()) < self.config.geometric_prob:
-            stacked = torch.cat([img, mask], dim=1)
-            stacked = self._affine(stacked)
-            img, mask = stacked[:, :-1], stacked[:, -1:]
+        stacked = torch.cat([img, mask], dim=1)
+        stacked = self._affine(stacked) if torch.rand(()) < self.config.geometric_prob else self._scale(stacked)
 
+        img, mask = stacked[:, :-1], stacked[:, -1:]
         return img, mask
 
     def _apply_gamma(self, image: Tensor) -> Tensor:
