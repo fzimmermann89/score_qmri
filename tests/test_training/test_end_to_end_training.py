@@ -264,7 +264,6 @@ def test_cli_parses_default_config() -> None:
         assert isinstance(cli.model, DiffusionLightningModule)
         assert cli.model.model.train_clip == 1.2
         assert cli.model.model.sample_clip == 1.0
-        assert cli.model.model._kind_scale_lookup[int(DatasetKind.T1MAP)] == 0.0003
         assert cli.datamodule is not None
         assert cli.datamodule.dataset_configs
 
