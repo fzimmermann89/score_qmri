@@ -6,7 +6,7 @@ from score_qmri.utils.config import normalize_config
 def test_normalize_config_stability():
     """Test that normalize_config produces stable output across different representations."""
     config_a = {
-        "model": {"beta_max": 10, "lr": 1e-4},
+        "model": {"sigma_max": 10, "lr": 1e-4},
         "trainer": {
             "max_steps": 100,
             "logger": "<wandb.logger object at 0x123>",
@@ -16,7 +16,7 @@ def test_normalize_config_stability():
     }
 
     config_b = {
-        "model": {"beta_max": 10.0, "lr": 1e-4},  # float instead of int
+        "model": {"sigma_max": 10.0, "lr": 1e-4},  # float instead of int
         "trainer": {
             "max_steps": 100,
             "logger": "<wandb.logger object at 0x999>",  # different address
@@ -31,8 +31,8 @@ def test_normalize_config_stability():
     assert norm_a == norm_b
     assert "logger" not in norm_a["trainer"]
     assert "callbacks" not in norm_a["trainer"]
-    assert isinstance(norm_a["model"]["beta_max"], float)
-    assert norm_a["model"]["beta_max"] == 10.0
+    assert isinstance(norm_a["model"]["sigma_max"], float)
+    assert norm_a["model"]["sigma_max"] == 10.0
 
 
 def test_normalize_nested_structures():

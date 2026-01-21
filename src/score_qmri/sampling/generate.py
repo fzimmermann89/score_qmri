@@ -6,8 +6,7 @@ from torch import Tensor
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel, _create_noise
 
-from .ddim_sampler import DDIMSampler
-from .ddpm_sampler import DDPMSampler
+from .edm_sampler import EDMSampler
 
 
 def generate_samples(
@@ -15,9 +14,8 @@ def generate_samples(
     kind: DatasetKind,
     n_samples: int = 1,
     size: int = 256,
-    sampler_type: str = "ddim",
+    sampler_type: str = "edm",
     num_steps: int = 100,
-    eta: float = 0.0,
     seed: int | None = None,
 ) -> Tensor:
     """Generate samples from diffusion model.
@@ -33,11 +31,9 @@ def generate_samples(
     size
         Image size (height = width).
     sampler_type
-        Either "ddim" or "ddpm".
+        Sampling algorithm. Currently only "edm" is supported.
     num_steps
         Number of sampling steps.
-    eta
-        DDIM stochasticity parameter (0 = deterministic).
     seed
         Random seed for reproducibility. None for random.
 
@@ -55,13 +51,10 @@ def generate_samples(
     shape = (n_samples, 2, size, size)
     noise = _create_noise(shape, kind_tensor, device, torch.float32)
 
-    sampler: DDIMSampler | DDPMSampler
-    if sampler_type.lower() == "ddim":
-        sampler = DDIMSampler(model, num_steps=num_steps, eta=eta)
-    elif sampler_type.lower() == "ddpm":
-        sampler = DDPMSampler(model, num_steps=num_steps)
-    else:
-        raise ValueError(f"Unknown sampler: {sampler_type!r}. Use 'ddim' or 'ddpm'.")
+    if sampler_type.lower() != "edm":
+        raise ValueError(f"Unknown sampler: {sampler_type!r}. Use 'edm'.")
+
+    sampler = EDMSampler(model, num_steps=num_steps)
 
     with torch.no_grad():
         samples = sampler.sample(shape, kind_tensor, noise)

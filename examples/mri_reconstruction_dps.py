@@ -9,7 +9,10 @@
 
 # ruff: noqa: E402
 # %%
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
 import torch
@@ -19,23 +22,24 @@ from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
 from score_qmri.sampling import DPSConfig, DPSSampler
 
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+
 # %%
 # Configuration
 CHECKPOINT_PATH = Path("checkpoints/diffusion_model.ckpt")  # Update with your checkpoint
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# DPS parameters
+# DPS parameters (VE/EDM sampler)
 NUM_STEPS = 100
 GUIDANCE_SCALE = 0.5
-ETA = 0.0  # Deterministic DDIM
 
 # %%
-# Load the diffusion model
+# Load the diffusion model (VE/EDM framework)
 model = DiffusionModel(
     base_channels=64,
     channel_mult=(1, 2, 4, 8, 16),
     attention_levels=(3, 4),
-    noise_schedule="cosine",
 )
 
 if CHECKPOINT_PATH.exists():
@@ -115,15 +119,14 @@ except ImportError:
             self.mask = mask
 
         def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
-            # x: (B, 1, 1, H, W) complex
             k = torch.fft.fft2(x, norm="ortho")
             return (k * self.mask,)
 
         @property
-        def H(self) -> "SimpleMaskedFourierOpAdjoint":
-            return SimpleMaskedFourierOpAdjoint(self.mask)
+        def H(self) -> Any:
+            return _SimpleMaskedFourierOpAdjoint(self.mask)
 
-    class SimpleMaskedFourierOpAdjoint:
+    class _SimpleMaskedFourierOpAdjoint:
         def __init__(self, mask: torch.Tensor) -> None:
             self.mask = mask
 
@@ -131,10 +134,10 @@ except ImportError:
             return (torch.fft.ifft2(y * self.mask, norm="ortho"),)
 
         @property
-        def H(self) -> SimpleMaskedFourierOp:
+        def H(self) -> Any:
             return SimpleMaskedFourierOp(self.mask)
 
-    forward_op = SimpleMaskedFourierOp(mask)
+    forward_op: Any = SimpleMaskedFourierOp(mask)  # type: ignore[no-redef]
     print("Using simple masked FFT operator (mrpro not installed)")
 
 # %%
@@ -146,10 +149,9 @@ kspace_undersampled = kspace_full * mask
 zero_filled = torch.fft.ifft2(kspace_undersampled, norm="ortho")
 
 # %%
-# Run DPS reconstruction
+# Run DPS reconstruction (VE/EDM-based DPS with Karras sigma schedule)
 config = DPSConfig(
     num_steps=NUM_STEPS,
-    eta=ETA,
     guidance_scale=GUIDANCE_SCALE,
     normalize_gradient=True,
     gradient_clipping=1.0,
@@ -171,7 +173,7 @@ print("DPS reconstruction complete!")
 # Visualize results
 
 
-def show_complex(img: torch.Tensor, title: str, ax: plt.Axes) -> None:
+def show_complex(img: torch.Tensor, title: str, ax: Axes) -> None:
     """Display magnitude of complex image."""
     mag = img.squeeze().abs().cpu().numpy()
     ax.imshow(mag, cmap="gray")

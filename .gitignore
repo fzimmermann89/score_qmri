@@ -224,3 +224,6 @@ uv.lock
 
 # OpenCode AI assistant
 .opencode/
+
+# Node.js / Frontend
+node_modules/

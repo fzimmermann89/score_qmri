@@ -10,6 +10,13 @@ from torch import Tensor
 UpsampleMode = Literal["nearest", "pixelshuffle"]
 
 
+def zero_module(module: torch.nn.Module) -> torch.nn.Module:
+    """Zero out the parameters of a module and return it."""
+    for p in module.parameters():
+        p.detach().zero_()
+    return module
+
+
 class CoordConcat(torch.nn.Module):
     """Concatenate normalized (x, y) coordinate channels to input.
 
@@ -146,9 +153,10 @@ def get_groups(channels: int) -> int:
 
 
 class ResBlock(torch.nn.Module):
-    """Residual block with FiLM conditioning and ReZero initialization.
+    """Residual block with FiLM conditioning.
 
-    Uses Pre-Norm architecture (GroupNorm -> SiLU -> Conv) for better gradient flow.
+    Uses Pre-Norm architecture (GroupNorm -> SiLU -> Conv).
+    The last convolution is zero-initialized to act as identity at start.
     """
 
     def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128) -> None:
@@ -163,18 +171,17 @@ class ResBlock(torch.nn.Module):
         self.block2 = torch.nn.Sequential(
             GroupNorm32(groups2, out_ch),
             torch.nn.SiLU(),
-            torch.nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            zero_module(torch.nn.Conv2d(out_ch, out_ch, 3, padding=1)),
         )
         self.cond_proj = torch.nn.Linear(cond_dim, out_ch * 2)
         self.skip = torch.nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else torch.nn.Identity()
-        self.alpha = torch.nn.Parameter(torch.tensor(0.1))
 
     def forward(self, x: Tensor, cond: Tensor) -> Tensor:
         h: Tensor = self.block1(x)
         scale, shift = self.cond_proj(cond)[:, :, None, None].chunk(2, dim=1)
         h = h * (1 + scale) + shift
         h = self.block2(h)
-        out: Tensor = self.skip(x) + self.alpha * h
+        out: Tensor = self.skip(x) + h
         return out
 
 
@@ -277,30 +284,13 @@ class DecoderBlock(torch.nn.Module):
         return h, h
 
 
-class OutputHead(torch.nn.Module):
-    """ResBlock output head with optional input skip connection."""
-
-    def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128, skip_ch: int = 0) -> None:
-        super().__init__()
-        self.res = ResBlock(in_ch + skip_ch, in_ch, cond_dim)
-        self.conv = torch.nn.Conv2d(in_ch, out_ch, 3, padding=1)
-
-    def forward(self, x: Tensor, cond: Tensor, skip: Tensor | None = None) -> Tensor:
-        if skip is not None:
-            x = torch.cat([x, skip], dim=1)
-        out: Tensor = self.conv(self.res(x, cond))
-        return out
-
-
 class UNet(torch.nn.Module):
-    """UNet with dual prediction heads, FiLM conditioning, and optional attention.
+    """UNet backbone with two output heads.
 
-    Predicts both clean image (x₀) and noise (ε) through separate output heads.
-    Architecture uses symmetric EncoderBlock/DecoderBlock with skip connections.
-    Attention is applied at specified resolution levels for global context.
-
-    Input: 2 channels (real/imag for complex MRI)
-    Output: (x0_pred, noise_pred), each (B, 2, H, W)
+    The diffusion wrapper (EDM/VE) interprets both heads as *clean-image* predictors
+    via external preconditioning:
+    - main head: trained with EDM-weighted L2
+    - aux head: trained with SSIM + L1
     """
 
     def __init__(
@@ -377,11 +367,10 @@ class UNet(torch.nn.Module):
                 )
                 ch = out_ch
 
-        self.x0_head = OutputHead(ch, 2, cond_dim, skip_ch=in_channels)
-        self.noise_head = OutputHead(ch, 2, cond_dim, skip_ch=in_channels)
+        self.main_head = zero_module(torch.nn.Conv2d(ch, in_channels, 3, padding=1))
+        self.aux_head = zero_module(torch.nn.Conv2d(ch, in_channels, 3, padding=1))
 
     def forward(self, x: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
-        x_in = x
         if self.coord_concat is not None:
             x = self.coord_concat(x)
         x = self.input_conv(x)
@@ -398,4 +387,6 @@ class UNet(torch.nn.Module):
         for block in self.decoder:
             x, _ = block(x, skips.pop(), cond)
 
-        return self.x0_head(x, cond, x_in), self.noise_head(x, cond, x_in)
+        main: Tensor = self.main_head(x)
+        aux: Tensor = self.aux_head(x)
+        return main, aux

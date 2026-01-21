@@ -52,18 +52,6 @@ class TestGenerateSamples:
         assert samples.shape == (2, 32, 32)
         assert samples.is_complex()
 
-    def test_ddpm_sampler(self, small_model: DiffusionModel) -> None:
-        samples = generate_samples(
-            model=small_model,
-            kind=DatasetKind.T1MAP,
-            n_samples=1,
-            size=32,
-            sampler_type="ddpm",
-            num_steps=3,
-            seed=42,
-        )
-        assert samples.shape == (1, 32, 32)
-
     def test_reproducibility_with_seed(self, small_model: DiffusionModel) -> None:
         samples1 = generate_samples(
             model=small_model,
@@ -92,19 +80,6 @@ class TestGenerateSamples:
                 size=32,
                 sampler_type="invalid",
             )
-
-    def test_ddim_eta_parameter(self, small_model: DiffusionModel) -> None:
-        samples = generate_samples(
-            model=small_model,
-            kind=DatasetKind.T1W_MAGNITUDE,
-            n_samples=1,
-            size=32,
-            sampler_type="ddim",
-            num_steps=3,
-            eta=1.0,
-            seed=42,
-        )
-        assert samples.shape == (1, 32, 32)
 
 
 class TestPlotSamplesGrid:

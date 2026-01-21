@@ -71,9 +71,8 @@ class DiffusionTrainer(Trainer):
         kind: str = "T1W_MAGNITUDE",
         n: int = 4,
         size: int = 256,
-        sampler: str = "ddim",
+        sampler: str = "edm",
         steps: int = 100,
-        eta: float = 0.0,
         seed: int | None = None,
         output: str | None = None,
         device: str = "cuda",
@@ -93,11 +92,9 @@ class DiffusionTrainer(Trainer):
         size
             Image size (height = width).
         sampler
-            Sampling algorithm: "ddim" or "ddpm".
+            Sampling algorithm. Currently only "edm" is supported.
         steps
             Number of denoising steps.
-        eta
-            DDIM stochasticity (0 = deterministic, 1 = full stochastic).
         seed
             Random seed for reproducibility.
         output
@@ -131,7 +128,6 @@ class DiffusionTrainer(Trainer):
             size=size,
             sampler_type=sampler,
             num_steps=steps,
-            eta=eta,
             seed=seed,
         )
 
