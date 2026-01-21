@@ -445,12 +445,10 @@ class DiffusionLightningModule(LightningModule):
         plt.close(fig)
 
     def configure_optimizers(self) -> OptimizerLRSchedulerConfig:
-        use_fused = torch.cuda.is_available() and self.device.type == "cuda"
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay,
-            fused=use_fused,
         )
 
         def warmup_lambda(step: int) -> float:
