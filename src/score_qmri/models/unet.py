@@ -21,28 +21,16 @@ class CoordConcat(torch.nn.Module):
     """Concatenate normalized (x, y) coordinate channels to input.
 
     Breaks translation invariance by providing absolute spatial position.
-    Caches the coordinate grid for efficiency when resolution is unchanged.
     """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._cached_grid: Tensor | None = None
 
     def forward(self, x: Tensor) -> Tensor:
         B, C, H, W = x.shape
 
-        if (
-            self._cached_grid is None
-            or self._cached_grid.shape[-2:] != (H, W)
-            or self._cached_grid.device != x.device
-            or self._cached_grid.dtype != x.dtype
-        ):
-            y_coords = torch.linspace(-1, 1, H, device=x.device, dtype=x.dtype)
-            x_coords = torch.linspace(-1, 1, W, device=x.device, dtype=x.dtype)
-            grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
-            self._cached_grid = torch.stack([grid_y, grid_x], dim=0).clone()
-
-        coords = self._cached_grid.unsqueeze(0).expand(B, -1, -1, -1)
+        y_coords = torch.linspace(-1, 1, H, device=x.device, dtype=x.dtype)
+        x_coords = torch.linspace(-1, 1, W, device=x.device, dtype=x.dtype)
+        grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
+        coords = torch.stack([grid_y, grid_x], dim=0)
+        coords = coords.unsqueeze(0).expand(B, -1, -1, -1)
         return torch.cat([x, coords], dim=1)
 
 
@@ -50,13 +38,12 @@ class SinusoidalPosEmb2D(torch.nn.Module):
     """2D sinusoidal positional embeddings for attention layers.
 
     Generates separate embeddings for height and width dimensions,
-    then combines them. Caches for efficiency when resolution is unchanged.
+    then combines them.
     """
 
     def __init__(self, channels: int) -> None:
         super().__init__()
         self.channels = channels
-        self._cached_emb: Tensor | None = None
 
     def _get_1d_sincos(self, positions: Tensor, dim: int) -> Tensor:
         half_dim = dim // 2
@@ -69,24 +56,21 @@ class SinusoidalPosEmb2D(torch.nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         B, C, H, W = x.shape
 
-        if self._cached_emb is None or self._cached_emb.shape[-2:] != (H, W) or self._cached_emb.device != x.device:
-            dim_y = self.channels // 2
-            dim_x = self.channels - dim_y
+        dim_y = self.channels // 2
+        dim_x = self.channels - dim_y
 
-            y_pos = torch.arange(H, device=x.device)
-            x_pos = torch.arange(W, device=x.device)
+        y_pos = torch.arange(H, device=x.device)
+        x_pos = torch.arange(W, device=x.device)
 
-            y_emb = self._get_1d_sincos(y_pos, dim_y)
-            x_emb = self._get_1d_sincos(x_pos, dim_x)
+        y_emb = self._get_1d_sincos(y_pos, dim_y)
+        x_emb = self._get_1d_sincos(x_pos, dim_x)
 
-            y_emb = y_emb[:, None, :].expand(H, W, -1)
-            x_emb = x_emb[None, :, :].expand(H, W, -1)
+        y_emb = y_emb[:, None, :].expand(H, W, -1)
+        x_emb = x_emb[None, :, :].expand(H, W, -1)
 
-            emb = torch.cat([y_emb, x_emb], dim=-1)
-            emb = emb.permute(2, 0, 1).unsqueeze(0)
-            self._cached_emb = emb.clone()
-
-        return self._cached_emb.to(dtype=x.dtype).expand(B, -1, -1, -1)
+        emb = torch.cat([y_emb, x_emb], dim=-1)
+        emb = emb.moveaxis(-1, 0).unsqueeze(0)
+        return emb.to(dtype=x.dtype).expand(B, -1, -1, -1)
 
 
 class GroupNorm32(torch.nn.GroupNorm):
