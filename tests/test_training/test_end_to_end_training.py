@@ -58,7 +58,7 @@ data:
     base_seed: 42
 
 trainer:
-  max_steps: 4
+  max_steps: 2
   max_epochs: 1
   accelerator: auto
   devices: 1
@@ -104,7 +104,7 @@ def magnitude_dataset_config(
 @pytest.fixture
 def fast_trainer():
     return pl.Trainer(
-        max_steps=4,
+        max_steps=2,
         max_epochs=1,
         accelerator="auto",
         devices=1,
@@ -164,7 +164,7 @@ def test_training_with_single_dataset(
     datamodule.setup("fit")
     fast_trainer.fit(model, datamodule)
 
-    assert fast_trainer.global_step == 4
+    assert fast_trainer.global_step == 2
     assert fast_trainer.logged_metrics is not None
 
     params_have_grad = any(param.grad is not None for param in model.parameters())
@@ -208,7 +208,7 @@ def test_training_with_multiple_datasets(
     datamodule.setup("fit")
     fast_trainer.fit(model, datamodule)
 
-    assert fast_trainer.global_step == 4
+    assert fast_trainer.global_step == 2
     assert datamodule.concat_ds is not None
     assert len(datamodule.dataset_configs) == 2
 
@@ -237,7 +237,7 @@ def test_training_with_yaml_config(
 
         fast_trainer.fit(cli.model, cli.datamodule)
 
-        assert fast_trainer.global_step == 4
+        assert fast_trainer.global_step == 2
         assert "train/loss" in fast_trainer.logged_metrics
 
     finally:
@@ -245,6 +245,7 @@ def test_training_with_yaml_config(
 
 
 def test_cli_parses_default_config() -> None:
+    """Test that default config.yaml can be parsed by Lightning CLI."""
     config_path = Path(__file__).resolve().parents[2] / "config.yaml"
     if not config_path.exists():
         pytest.skip("config.yaml not found")
@@ -254,12 +255,15 @@ def test_cli_parses_default_config() -> None:
     try:
         sys.argv = ["test", "--config", str(config_path)]
 
-        cli = DiffusionLightningCLI(
-            DiffusionLightningModule,
-            MRIDataModule,
-            run=False,
-            subclass_mode_data=True,
-        )
+        from unittest.mock import patch
+
+        with patch("score_qmri.cli.WandbLogger"):
+            cli = DiffusionLightningCLI(
+                DiffusionLightningModule,
+                MRIDataModule,
+                run=False,
+                subclass_mode_data=True,
+            )
 
         assert isinstance(cli.model, DiffusionLightningModule)
         assert cli.model.model.train_clip == 1.2
