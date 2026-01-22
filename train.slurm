@@ -3,16 +3,21 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --time=3-00:00:00
-#SBATCH --mem=256GB
-#SBATCH --gres=gpu:H100:4
+#SBATCH --mem=128GB
+#SBATCH --gres=gpu:L40S:4
 #SBATCH --partition=equipment_typeG
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --signal=SIGUSR1@90
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
-#SBATCH --array=1-10%1
+#SBATCH --array=1-2%1
 
 JOB_NAME="score-training"
+
+HOST="$(hostname -s)"
+#export TRITON_CACHE_DIR="/scratch2/fast/zimmer08/triton/${HOST}/${SLURM_JOB_ID}"
+export TRITON_CACHE_DIR=/dev/shm/${USER}/${JOB_NAME}-triton
+mkdir -p "${TRITON_CACHE_DIR}"
 
 mkdir -p logs
 
