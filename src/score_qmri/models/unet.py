@@ -4,9 +4,11 @@ import math
 from typing import Literal
 
 import torch
+import torch._dynamo as dynamo
 from einops import rearrange
 from torch import Tensor
 
+dynamo.config.recompile_limit = max(64, dynamo.config.recompile_limit)
 UpsampleMode = Literal["nearest", "pixelshuffle"]
 
 
