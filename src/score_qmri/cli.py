@@ -39,26 +39,79 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         trainer: Trainer,
         pl_module: LightningModule,
     ) -> None:
-        """Log config as W&B artifact after training starts (DDP-safe)."""
         if not isinstance(trainer.logger, WandbLogger):
             return
 
-        log_dir = trainer.log_dir
+        logger = trainer.logger
+        fit_config = self.config.get("fit")
+        if hasattr(fit_config, "as_dict"):
+            fit_config_dict = fit_config.as_dict()
+        elif isinstance(fit_config, dict):
+            fit_config_dict = fit_config
+        else:
+            fit_config_dict = {}
+
+        run_name = logger.experiment.name
+
+        if isinstance(trainer.datamodule, MRIDataModule):  # type: ignore[attr-defined]
+            logger.log_hyperparams(trainer.datamodule.get_config_summary())  # type: ignore[attr-defined]
+
         trainer.strategy.barrier("on_train_start_log_dir")
 
         if not trainer.is_global_zero:
             return
 
-        import wandb
-
+        log_dir = trainer.log_dir
         config_path = Path(log_dir) / self.config_filename if log_dir else None
         if config_path is None or not config_path.exists():
             return
+        import wandb
+
         if wandb.run is None:
             return
         artifact = wandb.Artifact(f"config-{wandb.run.id}", type="config")
         artifact.add_file(str(config_path))
         wandb.run.log_artifact(artifact)
+
+        experiment = logger.experiment
+        if hasattr(experiment, "config"):
+            update = getattr(experiment.config, "update", None)
+            if callable(update):
+                update({"cli_config": normalize_config(fit_config_dict)})
+
+        logger.log_hyperparams(
+            {
+                "trainer/max_steps": trainer.max_steps,
+                "trainer/max_epochs": trainer.max_epochs,
+                "trainer/precision": str(trainer.precision),
+                "trainer/gradient_clip_val": trainer.gradient_clip_val,
+                "trainer/accumulate_grad_batches": trainer.accumulate_grad_batches,
+                "trainer/num_devices": trainer.num_devices,
+                "trainer/accelerator": str(trainer.accelerator),
+            }
+        )
+
+        system_info: dict[str, object] = {
+            "system/cuda_available": torch.cuda.is_available(),
+            "system/cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+            "system/torch_version": torch.__version__,
+        }
+        if torch.cuda.is_available():
+            system_info["system/cuda_version"] = torch.version.cuda
+            for i in range(torch.cuda.device_count()):
+                system_info[f"system/gpu_{i}_name"] = torch.cuda.get_device_name(i)
+                mem = torch.cuda.get_device_properties(i).total_memory / 1e9
+                system_info[f"system/gpu_{i}_memory_gb"] = round(mem, 2)
+        logger.log_hyperparams(system_info)
+
+        logger.log_hyperparams(
+            {
+                "experiment/job_name": fit_config_dict.get("job_name"),
+                "experiment/run_name": run_name,
+                "experiment/wandb_project": fit_config_dict.get("wandb_project"),
+                "experiment/checkpoint_dir": fit_config_dict.get("checkpoint_dir"),
+            }
+        )
 
 
 class DiffusionTrainer(Trainer):
@@ -143,7 +196,7 @@ class DiffusionLightningCLI(LightningCLI):
         parser.add_argument(
             "--job_name",
             type=str | None,
-            default=None,
+            default="",
             help="Unique job name for resumption. WandB auto-generates if omitted.",
         )
         parser.add_argument("--wandb_project", type=str, default="mri-diffusion", help="WandB project name.")
@@ -158,8 +211,8 @@ class DiffusionLightningCLI(LightningCLI):
         config = getattr(self.config, self.subcommand)
 
         logger = WandbLogger(
-            id=config.job_name,
-            name=config.job_name,
+            id=config.job_name if config.job_name else None,
+            name=config.job_name if config.job_name else None,
             resume="allow" if config.job_name else None,
             project=config.wandb_project,
             entity=config.wandb_entity,
@@ -168,8 +221,16 @@ class DiffusionLightningCLI(LightningCLI):
         )
         config.trainer.logger = logger
 
+        checkpoint_dir = Path(config.checkpoint_dir)
+        if config.job_name:
+            checkpoint_dir = checkpoint_dir / config.job_name
+            last_ckpt = checkpoint_dir / "last.ckpt"
+            if last_ckpt.exists() and not getattr(config, "ckpt_path", None):
+                print(f"Auto-resuming from: {last_ckpt}")
+                config.ckpt_path = str(last_ckpt)
+
         checkpoint_callback = ModelCheckpoint(
-            dirpath=config.checkpoint_dir,
+            dirpath=str(checkpoint_dir),
             monitor="train/loss",
             mode="min",
             save_top_k=3,
@@ -185,97 +246,7 @@ class DiffusionLightningCLI(LightningCLI):
         ]
 
     def after_instantiate_classes(self) -> None:
-        if self.subcommand != "fit":
-            return
-
-        config = getattr(self.config, self.subcommand)
-        logger = self.trainer.logger
-
-        if not isinstance(logger, WandbLogger):
-            return
-
-        run_name = self._get_synced_run_name(config.job_name)
-        run_dir = Path(config.checkpoint_dir) / run_name
-
-        if self.trainer.global_rank == 0:
-            run_dir.mkdir(parents=True, exist_ok=True)
-        self.trainer.strategy.barrier("after_instantiate_mkdir")
-
-        for callback in self.trainer.callbacks:  # type: ignore[attr-defined]
-            if isinstance(callback, ModelCheckpoint):
-                callback.dirpath = str(run_dir)
-                break
-
-        last_ckpt = run_dir / "last.ckpt"
-        if last_ckpt.exists() and not config.ckpt_path:
-            print(f"Auto-resuming from: {last_ckpt}")
-            self.trainer.ckpt_path = str(last_ckpt)
-
-        self._log_hyperparams(config, run_name)
-
-    def _get_synced_run_name(self, job_name: str | None) -> str:
-        if job_name:
-            return job_name
-
-        if self.trainer.global_rank == 0:
-            logger = self.trainer.logger
-            assert isinstance(logger, WandbLogger)
-            run_name: str | None = logger.experiment.name
-        else:
-            run_name = None
-
-        synced_name = self.trainer.strategy.broadcast(run_name, src=0)
-        assert isinstance(synced_name, str)
-        return synced_name
-
-    def _log_hyperparams(self, config: jsonargparse.Namespace, run_name: str) -> None:
-        logger = self.trainer.logger
-        if not isinstance(logger, WandbLogger):
-            return
-
-        experiment = logger.experiment
-        if hasattr(experiment, "config"):
-            update = getattr(experiment.config, "update", None)
-            if callable(update):
-                normalized_config = normalize_config(config.as_dict())
-                update({"cli_config": normalized_config})
-
-        if isinstance(self.datamodule, MRIDataModule):
-            logger.log_hyperparams(self.datamodule.get_config_summary())
-
-        logger.log_hyperparams(
-            {
-                "trainer/max_steps": self.trainer.max_steps,
-                "trainer/max_epochs": self.trainer.max_epochs,
-                "trainer/precision": str(self.trainer.precision),
-                "trainer/gradient_clip_val": self.trainer.gradient_clip_val,
-                "trainer/accumulate_grad_batches": self.trainer.accumulate_grad_batches,
-                "trainer/num_devices": self.trainer.num_devices,
-                "trainer/accelerator": str(self.trainer.accelerator),
-            }
-        )
-
-        system_info: dict[str, object] = {
-            "system/cuda_available": torch.cuda.is_available(),
-            "system/cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
-            "system/torch_version": torch.__version__,
-        }
-        if torch.cuda.is_available():
-            system_info["system/cuda_version"] = torch.version.cuda
-            for i in range(torch.cuda.device_count()):
-                system_info[f"system/gpu_{i}_name"] = torch.cuda.get_device_name(i)
-                mem = torch.cuda.get_device_properties(i).total_memory / 1e9
-                system_info[f"system/gpu_{i}_memory_gb"] = round(mem, 2)
-        logger.log_hyperparams(system_info)
-
-        logger.log_hyperparams(
-            {
-                "experiment/job_name": config.job_name,
-                "experiment/run_name": run_name,
-                "experiment/wandb_project": config.wandb_project,
-                "experiment/checkpoint_dir": config.checkpoint_dir,
-            }
-        )
+        pass
 
     @staticmethod
     def subcommands() -> dict[str, set[str]]:
