@@ -25,9 +25,9 @@ model:
   learning_rate: 1e-4
 
   # EDM parameters (defaults shown)
-  sigma_min: 0.01
-  sigma_max: 100.0
-  sigma_data: 0.5
+  sigma_min: 0.002
+  sigma_max: 10.0
+  sigma_data: 0.2
   p_mean: -1.2
   p_std: 1.2
   rho: 7.0
