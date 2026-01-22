@@ -283,7 +283,7 @@ class DiffusionLightningModule(LightningModule):
             print(f"[Rank {self.global_rank}] Skipping step {self.global_step}: loss={loss_val:.2f}")
             return torch.nan_to_num(output.x0_main.sum() + output.x0_aux.sum()) * 0.0
 
-        self.log("train/loss", total_loss, prog_bar=True, sync_dist=True)
+        self.log("train/loss", total_loss, prog_bar=True, sync_dist=False)
         self.log_dict(
             {
                 "train/main_l2": loss_main,
