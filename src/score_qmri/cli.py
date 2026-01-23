@@ -1,15 +1,17 @@
 """CLI application for MRI diffusion model training and generation."""
 
+import argparse
 import os
 import sys
 import warnings
 from pathlib import Path
+from typing import Any
 
 import jsonargparse
 import torch
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, ModelSummary
-from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
+from lightning.pytorch.cli import LightningArgumentParser, LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
 
 from score_qmri.datasets.lightning import MRIDataModule
@@ -283,6 +285,28 @@ class DiffusionLightningCLI(LightningCLI):
             "fit": {"model", "train_dataloaders", "datamodule"},
             "generate": {"model"},
         }
+
+    def _prepare_subcommand_kwargs(self, subcommand: str) -> dict[str, Any]:
+        """Exclude datamodule from generate subcommand kwargs."""
+        fn_kwargs = super()._prepare_subcommand_kwargs(subcommand)
+        if subcommand == "generate":
+            fn_kwargs.pop("datamodule", None)
+        return fn_kwargs
+
+    def _prepare_subcommand_parser(
+        self, klass: type, subcommand: str, **kwargs: Any
+    ) -> LightningArgumentParser:
+        """For generate: hide trainer/data/optimizer/lr_scheduler from help."""
+        parser = super()._prepare_subcommand_parser(klass, subcommand, **kwargs)
+        if subcommand == "generate":
+            # Hide irrelevant arguments from --help by destination prefix
+            hide_prefixes = ("trainer", "data", "optimizer", "lr_scheduler")
+            for action in parser._actions:
+                if action.dest and any(
+                    action.dest == p or action.dest.startswith(p + ".") for p in hide_prefixes
+                ):
+                    action.help = argparse.SUPPRESS
+        return parser
 
 
 def main() -> None:
