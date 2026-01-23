@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind, is_complex_kind
-from score_qmri.training.lightning_module import DiffusionLightningModule
+from score_qmri.training.diffusion_module import DiffusionLightningModule
 
 
 @pytest.fixture

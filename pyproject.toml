@@ -27,6 +27,7 @@ examples = ["mrpro>=0.8.0"]
 
 [project.scripts]
 score-qmri = "score_qmri.cli:main"
+jepa-qmri = "score_qmri.jepa_cli:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
