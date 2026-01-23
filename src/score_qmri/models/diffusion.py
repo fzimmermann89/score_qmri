@@ -73,11 +73,11 @@ class EDMConfig:
         Exponent for Karras (poly-rho) sigma schedule in sampling.
     """
 
-    sigma_min: float = 0.002
-    sigma_max: float = 10.0
+    sigma_min: float = 0.001
+    sigma_max: float = 20.0
     sigma_data: float = 0.2
-    p_mean: float = -1.2
-    p_std: float = 1.2
+    p_mean: float = -2.0
+    p_std: float = 1.5
     rho: float = 7.0
 
 
