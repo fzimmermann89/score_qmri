@@ -18,7 +18,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum, auto
-from pathlib import Path
 from typing import cast, overload
 
 import torch
@@ -527,13 +526,43 @@ class DiffusionModel(torch.nn.Module):
                 result[idx, 1] = 0.0
         return result
 
-    def load_checkpoint(self, checkpoint_path: Path | str) -> None:
-        """Load weights from checkpoint, preferring EMA shadow weights if available."""
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    def load_state_dict(
+        self,
+        state_dict: dict[str, Tensor],  # type: ignore[override]
+        strict: bool = True,
+        assign: bool = False,
+    ) -> torch.nn.modules.module._IncompatibleKeys:
+        """Load state dict with support for Lightning/EMA checkpoint formats.
 
-        if "ema" in checkpoint:
-            self.load_state_dict(checkpoint["ema"]["shadow"])
-        else:
-            state_dict = checkpoint["state_dict"]
-            model_state = {k.removeprefix("model."): v for k, v in state_dict.items() if k.startswith("model.")}
-            self.load_state_dict(model_state)
+        Handles:
+        - EMA shadow weights (prefers these if available)
+        - Lightning checkpoint format (strips 'model.' prefix)
+        - Plain state dicts
+
+        Parameters
+        ----------
+        state_dict
+            State dict to load. Can be a full checkpoint dict containing
+            'ema' or 'state_dict' keys, or a plain model state dict.
+        strict
+            Whether to require exact key matching.
+        assign
+            Whether to assign tensors instead of copying.
+
+        Returns
+        -------
+        _IncompatibleKeys
+            Named tuple with missing and unexpected keys.
+        """
+        # Handle EMA checkpoint format
+        if "ema" in state_dict and "shadow" in state_dict["ema"]:
+            state_dict = state_dict["ema"]["shadow"]
+        # Handle Lightning checkpoint format
+        elif "state_dict" in state_dict:
+            state_dict = state_dict["state_dict"]
+
+        # Strip "model." prefix if present
+        if any(k.startswith("model.") for k in state_dict):
+            state_dict = {k.removeprefix("model."): v for k, v in state_dict.items() if k.startswith("model.")}
+
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
