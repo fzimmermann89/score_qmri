@@ -150,6 +150,10 @@ class AugmentationPipeline:
             if torch.rand(()) < self.config.contrast_prob:
                 img_bhw = self._apply_gamma(img_bhw)
 
+        # Intensity scaling (applies to both real and complex)
+        if torch.rand(()) < self.config.intensity_scale_prob:
+            img_bhw = self._apply_intensity_scale(img_bhw)
+
         mask_bhw = mask_bchw[:, 0] > 0.9
 
         if squeeze:
@@ -208,3 +212,25 @@ class AugmentationPipeline:
             1.0 + self.config.contrast_strength,
         )
         return img_norm.pow(gamma) * (img_max - img_min) + img_min
+
+    def _apply_intensity_scale(self, image: Tensor) -> Tensor:
+        """Random intensity scaling.
+
+        Multiplies image by a random factor sampled log-uniformly from the
+        configured range (default 0.25 to 4.0).
+
+        Parameters
+        ----------
+        image
+            Image tensor of shape (B, H, W). Can be real or complex.
+
+        Returns
+        -------
+        Tensor
+            Intensity-scaled image with same shape and dtype.
+        """
+        lo, hi = self.config.intensity_scale_range
+        # Log-uniform sampling for symmetric scaling (0.25 and 4.0 equally likely)
+        log_scale = torch.empty(()).uniform_(math.log(lo), math.log(hi))
+        scale = log_scale.exp()
+        return image * scale

@@ -18,6 +18,8 @@ class AugmentationConfig:
     shear_range: tuple[float, float] = (-0.1, 0.1)
     contrast_strength: float = 0.2
     poly_coeff_range: tuple[float, float] = (-0.3, 0.3)
+    intensity_scale_prob: float = 0.0  # Disabled by default
+    intensity_scale_range: tuple[float, float] = (0.25, 4.0)
 
 
 # Preset configurations for different dataset types
@@ -30,6 +32,7 @@ MAGNITUDE_CONFIG = AugmentationConfig(
     rotation_range=(-10.0, 10.0),
     shear_range=(-0.1, 0.1),
     contrast_strength=0.3,
+    intensity_scale_prob=0.0,  # Disabled by default
 )
 
 MAPPING_CONFIG = AugmentationConfig(
@@ -41,6 +44,7 @@ MAPPING_CONFIG = AugmentationConfig(
     rotation_range=(-10.0, 10.0),
     shear_range=(-0.1, 0.1),
     contrast_strength=0.1,
+    intensity_scale_prob=0.0,  # Disabled by default
 )
 
 COMPLEX_CONFIG = AugmentationConfig(
@@ -52,4 +56,5 @@ COMPLEX_CONFIG = AugmentationConfig(
     rotation_range=(-10.0, 10.0),
     shear_range=(-0.1, 0.1),
     contrast_strength=0.3,
+    intensity_scale_prob=0.0,  # Disabled by default
 )
