@@ -15,10 +15,11 @@ across a wide range of sigma values.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import IntEnum, auto
-from typing import cast, overload
+from pathlib import Path
+from typing import Any, cast, overload
 
 import torch
 from torch import Tensor
@@ -528,7 +529,7 @@ class DiffusionModel(torch.nn.Module):
 
     def load_state_dict(
         self,
-        state_dict: dict[str, Tensor],  # type: ignore[override]
+        state_dict: Mapping[str, Any],
         strict: bool = True,
         assign: bool = False,
     ) -> torch.nn.modules.module._IncompatibleKeys:
@@ -555,14 +556,36 @@ class DiffusionModel(torch.nn.Module):
             Named tuple with missing and unexpected keys.
         """
         # Handle EMA checkpoint format
-        if "ema" in state_dict and "shadow" in state_dict["ema"]:
-            state_dict = state_dict["ema"]["shadow"]
+        sd: Mapping[str, Any] = state_dict
+        if "ema" in sd and "shadow" in sd["ema"]:
+            sd = sd["ema"]["shadow"]
         # Handle Lightning checkpoint format
-        elif "state_dict" in state_dict:
-            state_dict = state_dict["state_dict"]
+        elif "state_dict" in sd:
+            sd = sd["state_dict"]
 
         # Strip "model." prefix if present
-        if any(k.startswith("model.") for k in state_dict):
-            state_dict = {k.removeprefix("model."): v for k, v in state_dict.items() if k.startswith("model.")}
+        if any(k.startswith("model.") for k in sd):
+            sd = {k.removeprefix("model."): v for k, v in sd.items() if k.startswith("model.")}
 
-        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+        return cast(
+            torch.nn.modules.module._IncompatibleKeys,
+            super().load_state_dict(sd, strict=strict, assign=assign),
+        )
+
+    def load_checkpoint(self, path: str | Path) -> torch.nn.modules.module._IncompatibleKeys:
+        """Load checkpoint from file path.
+
+        Convenience wrapper around load_state_dict that handles file loading.
+
+        Parameters
+        ----------
+        path
+            Path to checkpoint file (.pt or .ckpt).
+
+        Returns
+        -------
+        _IncompatibleKeys
+            Named tuple with missing and unexpected keys.
+        """
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+        return self.load_state_dict(checkpoint)
