@@ -293,18 +293,14 @@ class DiffusionLightningCLI(LightningCLI):
             fn_kwargs.pop("datamodule", None)
         return fn_kwargs
 
-    def _prepare_subcommand_parser(
-        self, klass: type, subcommand: str, **kwargs: Any
-    ) -> LightningArgumentParser:
+    def _prepare_subcommand_parser(self, klass: type, subcommand: str, **kwargs: Any) -> LightningArgumentParser:
         """For generate: hide trainer/data/optimizer/lr_scheduler from help."""
         parser = super()._prepare_subcommand_parser(klass, subcommand, **kwargs)
         if subcommand == "generate":
             # Hide irrelevant arguments from --help by destination prefix
             hide_prefixes = ("trainer", "data", "optimizer", "lr_scheduler")
             for action in parser._actions:
-                if action.dest and any(
-                    action.dest == p or action.dest.startswith(p + ".") for p in hide_prefixes
-                ):
+                if action.dest and any(action.dest == p or action.dest.startswith(p + ".") for p in hide_prefixes):
                     action.help = argparse.SUPPRESS
         return parser
 

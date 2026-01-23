@@ -39,7 +39,6 @@ def training_yaml_config(sample_h5_file_magnitude: str) -> Generator[str, None, 
   aux_weight: 0.1
   ssim_weight: 0.5
   l1_weight: 0.5
-  validation_size: 32
   validation_steps: 10
   validation_interval: 100
 
@@ -134,7 +133,6 @@ def small_model_kwargs():
         "aux_weight": 0.1,
         "ssim_weight": 0.5,
         "l1_weight": 0.5,
-        "validation_size": 32,
         "validation_steps": 10,
         "validation_interval": 100,
     }

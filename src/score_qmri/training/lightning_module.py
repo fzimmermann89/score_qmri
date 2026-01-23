@@ -14,6 +14,7 @@ from lightning.pytorch.utilities.types import OptimizerLRSchedulerConfig
 from torch import Tensor
 
 from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind, is_complex_kind
+from score_qmri.datasets.lightning import MRIDataModule
 from score_qmri.models.diffusion import (
     DiffusionModel,
     EDMConfig,
@@ -21,17 +22,9 @@ from score_qmri.models.diffusion import (
     _apply_kind_constraints,
     _create_noise,
 )
-from score_qmri.sampling.edm_sampler import EDMSampler, SamplingStats, create_fixed_noise
+from score_qmri.sampling.edm_sampler import EDMSampler, create_fixed_noise
 from score_qmri.training.ema import EMA
 from score_qmri.training.losses import create_channel_mask, l1_loss, noise_loss, ssim_loss
-
-VALIDATION_KINDS: tuple[DatasetKind, ...] = (
-    DatasetKind.T1W_MAGNITUDE,
-    DatasetKind.T1MAP,
-    DatasetKind.COMPLEX_T1W_COIL_COMBINED,
-    DatasetKind.T2MAP,
-    DatasetKind.M0_MAGNITUDE,
-)
 
 LOSS_ANOMALY_THRESHOLD = 100.0
 
@@ -55,7 +48,6 @@ class DiffusionHparams:
     penumbra_weight: float
     background_weight: float
 
-    validation_size: int
     validation_steps: int
     validation_interval: int
     log_batch_interval: int
@@ -81,6 +73,8 @@ class DiffusionLightningModule(LightningModule):
     """Lightning module for VE/EDM diffusion training with two x0 heads."""
 
     hparams: DiffusionHparams  # type: ignore[assignment]
+    _fixed_noise: dict[int, Tensor]
+    ema: EMA[DiffusionModel]
 
     def __init__(
         self,
@@ -96,7 +90,6 @@ class DiffusionLightningModule(LightningModule):
         l1_weight: float = 0.5,
         penumbra_weight: float = 0.0,
         background_weight: float = 0.5,
-        validation_size: int = 128,
         validation_steps: int = 50,
         validation_interval: int = 1000,
         log_batch_interval: int = 200,
@@ -137,12 +130,11 @@ class DiffusionLightningModule(LightningModule):
             normalization=normalization,
         )
 
-        self.sampler: EDMSampler = EDMSampler(self.model, num_steps=validation_steps, rho=rho)
-        self._fixed_noise: dict[int, Tensor] | None = None
-        self.ema: EMA[DiffusionModel] | None = None
+        self._fixed_noise = {}
+        self.ema = EMA[DiffusionModel](self.model, decay=self.hparams.ema_decay)
 
     def on_fit_start(self) -> None:
-        self.ema = EMA[DiffusionModel](self.model, decay=self.hparams.ema_decay)
+        self.ema.shadow.to(self.device)
 
         if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
             return
@@ -289,8 +281,6 @@ class DiffusionLightningModule(LightningModule):
                 "train/main_l2": loss_main,
                 "train/aux_l1": loss_l1.mean(),
                 "train/aux_ssim": 1.0 - loss_ssim.mean(),
-                "train/sigma_mean": sigma_f.mean(),
-                "train/sigma_p95": torch.quantile(sigma_f, 0.95),
             },
             prog_bar=True,
             rank_zero_only=True,
@@ -351,8 +341,7 @@ class DiffusionLightningModule(LightningModule):
         batch: Any,
         batch_idx: int,
     ) -> None:
-        if self.ema is not None:
-            self.ema.update(self.model)
+        self.ema.update(self.model)
 
         if self.global_step > 0 and self.global_step % self.hparams.validation_interval == 0:
             self._log_samples()
@@ -364,27 +353,29 @@ class DiffusionLightningModule(LightningModule):
         import matplotlib.pyplot as plt
         import wandb
 
-        size = self.hparams.validation_size
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if not isinstance(datamodule, MRIDataModule):
+            return
+
+        size = datamodule.sample_size
         num_samples = 4
 
-        if self._fixed_noise is None:
-            self._fixed_noise = create_fixed_noise((size, size), num_samples=num_samples)
+        if not self._fixed_noise:
+            self._fixed_noise.update(create_fixed_noise(size, num_samples=num_samples))
 
-        sample_model: DiffusionModel = self.ema.shadow if self.ema is not None else self.model
+        sample_model: DiffusionModel = self.ema.shadow
         sample_model.eval()
         sampler = EDMSampler(sample_model, num_steps=self.hparams.validation_steps, rho=self.hparams.rho)
 
         with torch.no_grad():
-            for kind_enum in VALIDATION_KINDS:
+            for kind_enum in DatasetKind:
                 k = int(kind_enum)
                 kind_tensor = torch.full((num_samples,), k, device=self.device, dtype=torch.long)
-                collect = kind_enum == DatasetKind.T1W_MAGNITUDE
 
                 samples = sampler.sample(
-                    (num_samples, 2, size, size),
+                    (num_samples, 2, size[0], size[1]),
                     kind_tensor,
                     self._fixed_noise[k],
-                    collect_stats=collect,
                 )
                 samples_denorm: Tensor = sample_model.denormalize(samples, kind_tensor)
 
@@ -401,48 +392,6 @@ class DiffusionLightningModule(LightningModule):
 
                 self.logger.experiment.log({f"samples/{kind_enum.name}": wandb.Image(fig), "global_step": self.global_step})
                 plt.close(fig)
-
-                if collect and sampler.last_stats is not None:
-                    self._log_sampling_stats(kind_enum.name, sampler.last_stats)
-
-        if self.ema is None:
-            sample_model.train()
-
-    def _log_sampling_stats(self, kind_name: str, stats: SamplingStats) -> None:
-        if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
-            return
-
-        import matplotlib.pyplot as plt
-        import wandb
-
-        n = len(stats.intermediates)
-        if n == 0:
-            return
-
-        fig, axes = plt.subplots(2, n, figsize=(2.5 * n, 5), squeeze=False)
-
-        for j, (inter, step, sigma_val) in enumerate(zip(stats.intermediates, stats.steps, stats.sigma, strict=True)):
-            img = (inter[0, 0] ** 2 + inter[0, 1] ** 2).sqrt().numpy() if inter.shape[1] == 2 else inter[0, 0].numpy()
-            axes[0, j].imshow(img, cmap="gray")
-            axes[0, j].axis("off")
-            axes[0, j].set_title(f"step {step}\nσ={sigma_val:.3f}", fontsize=7)
-
-        ax_stats = axes[1, 0]
-        for ax in axes[1, 1:]:
-            ax.axis("off")
-
-        ax_stats.plot(stats.steps, stats.x0_std, "b-", label="x0 std", linewidth=1.5)
-        ax_stats.plot(stats.steps, stats.x_std, "g--", label="x std", linewidth=1.5)
-        ax_stats.set_xlabel("step")
-        ax_stats.set_ylabel("std")
-        ax_stats.legend(fontsize=6)
-        ax_stats.set_title("Sampling statistics", fontsize=8)
-
-        fig.suptitle(f"Sampling progression: {kind_name} @ step {self.global_step}", fontsize=10)
-        fig.tight_layout()
-
-        self.logger.experiment.log({"samples/progression": wandb.Image(fig), "global_step": self.global_step})
-        plt.close(fig)
 
     def configure_optimizers(self) -> OptimizerLRSchedulerConfig:
         optimizer = torch.optim.AdamW(
@@ -464,9 +413,8 @@ class DiffusionLightningModule(LightningModule):
         }
 
     def on_save_checkpoint(self, checkpoint: dict[str, Any]) -> None:
-        if self.ema is not None:
-            checkpoint["ema"] = self.ema.state_dict()
+        checkpoint["ema"] = self.ema.state_dict()
 
     def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
-        if "ema" in checkpoint and self.ema is not None:
+        if "ema" in checkpoint:
             self.ema.load_state_dict(checkpoint["ema"])

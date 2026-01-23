@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Literal
 
 import torch
@@ -51,23 +50,6 @@ def karras_sigmas(
     return sigmas
 
 
-@dataclass
-class SamplingStats:
-    """Optional per-step statistics for debugging."""
-
-    steps: list[int] = field(default_factory=list)
-    sigma: list[float] = field(default_factory=list)
-    x_min: list[float] = field(default_factory=list)
-    x_max: list[float] = field(default_factory=list)
-    x_mean: list[float] = field(default_factory=list)
-    x_std: list[float] = field(default_factory=list)
-    x0_min: list[float] = field(default_factory=list)
-    x0_max: list[float] = field(default_factory=list)
-    x0_mean: list[float] = field(default_factory=list)
-    x0_std: list[float] = field(default_factory=list)
-    intermediates: list[Tensor] = field(default_factory=list)
-
-
 class EDMSampler:
     """Deterministic EDM/Karras sampler (Euler or Heun)."""
 
@@ -89,14 +71,12 @@ class EDMSampler:
         self.rho = float(rho)
         self.solver: Solver = solver
         self.clamp_denoised = bool(clamp_denoised)
-        self.last_stats: SamplingStats | None = None
 
     def sample(
         self,
         shape: tuple[int, ...],
         kind: Tensor | None = None,
         initial_noise: Tensor | None = None,
-        collect_stats: bool = False,
     ) -> Tensor:
         """Sample using EDM/Karras schedule.
 
@@ -109,9 +89,6 @@ class EDMSampler:
         initial_noise
             Unit Gaussian noise of shape (B, 2, H, W) (or (B, H, W) for real).
             If None, sampled from N(0, 1).
-        collect_stats
-            If True, collect per-step statistics.
-
         Returns
         -------
         Tensor
@@ -141,18 +118,23 @@ class EDMSampler:
             device=device,
         )
 
-        stats = SamplingStats() if collect_stats else None
-
         with torch.no_grad():
             for i in range(self.num_steps):
                 sigma = sigmas[i]
                 sigma_next = sigmas[i + 1]
-                x = self._step(x, kind, real_mask=real_mask, sigma=sigma, sigma_next=sigma_next, step_idx=i, stats=stats)
+                use_euler = self.solver == "euler" or i == self.num_steps - 1
+                x = self._step(
+                    x,
+                    kind,
+                    real_mask=real_mask,
+                    sigma=sigma,
+                    sigma_next=sigma_next,
+                    use_euler=use_euler,
+                )
 
         sigma_final = sigmas[-1]
         x0 = self.model.denoise(x, sigma_final, kind)
         x0 = self.model.clamp_x0(x0, kind) if self.clamp_denoised else x0
-        self.last_stats = stats
         return x0
 
     def _step(
@@ -163,30 +145,10 @@ class EDMSampler:
         *,
         sigma: Tensor,
         sigma_next: Tensor,
-        step_idx: int,
-        stats: SamplingStats | None,
+        use_euler: bool,
     ) -> Tensor:
         x0 = self.model.denoise(x, sigma, kind)
         x0 = self.model.clamp_x0(x0, kind) if self.clamp_denoised else x0
-
-        if stats is not None:
-            should_log = step_idx < 5 or step_idx % 25 == 0 or step_idx == self.num_steps - 1
-            if should_log:
-                # Log magnitude for readability. For real kinds imag is enforced to zero.
-                x_img = x.square().sum(dim=1).sqrt()
-                x0_img = x0.square().sum(dim=1).sqrt()
-
-                stats.steps.append(step_idx)
-                stats.sigma.append(float(sigma.item()))
-                stats.x_min.append(x_img.min().item())
-                stats.x_max.append(x_img.max().item())
-                stats.x_mean.append(x_img.mean().item())
-                stats.x_std.append(x_img.std().item())
-                stats.x0_min.append(x0_img.min().item())
-                stats.x0_max.append(x0_img.max().item())
-                stats.x0_mean.append(x0_img.mean().item())
-                stats.x0_std.append(x0_img.std().item())
-                stats.intermediates.append(x0.detach().cpu())
 
         sigma_in = sigma.to(dtype=x.dtype).clamp(min=1e-8).reshape(1, 1, 1, 1)
         d1 = (x - x0) / sigma_in
@@ -194,7 +156,7 @@ class EDMSampler:
         x_euler = x + dt * d1
         _enforce_real_imag_zero_(x_euler, real_mask)
 
-        if self.solver == "euler" or step_idx == self.num_steps - 1:
+        if use_euler:
             return x_euler
 
         x0_next = self.model.denoise(x_euler, sigma_next, kind)

@@ -62,23 +62,3 @@ def test_create_fixed_noise_reproducible():
     n2 = create_fixed_noise((32, 32), seed=42)
     for k in range(NUM_DATASET_KINDS):
         assert torch.allclose(n1[k], n2[k])
-
-
-def test_edm_collect_stats():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
-    sampler = EDMSampler(model, num_steps=25)
-
-    shape = (1, 2, 32, 32)
-    kind = torch.tensor([int(DatasetKind.T1MAP)])
-    samples = sampler.sample(shape, kind, collect_stats=True)
-    assert samples.shape == shape
-    assert sampler.last_stats is not None
-
-    stats = sampler.last_stats
-    assert len(stats.steps) > 0
-    assert len(stats.intermediates) == len(stats.steps)
-    assert len(stats.x0_std) == len(stats.steps)
-    assert len(stats.sigma) == len(stats.steps)
-
-    for inter in stats.intermediates:
-        assert inter.shape == shape

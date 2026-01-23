@@ -14,7 +14,6 @@ def module():
         num_res_blocks=2,
         channel_mult=(1, 2),
         cond_dim=64,
-        validation_size=32,
     )
 
 
