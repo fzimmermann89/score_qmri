@@ -95,9 +95,10 @@ class AugmentationPipeline:
             resample="bilinear",
             p=1.0,
         )
+        scale_mean = sum(config.scale_range) / 2.0
         self._scale = K.RandomAffine(
             degrees=0.0,
-            scale=config.scale_range,
+            scale=(scale_mean, scale_mean),
             p=1.0,
         )
         self._hflip = K.RandomHorizontalFlip(p=config.flip_prob)
@@ -177,11 +178,15 @@ class AugmentationPipeline:
             img = torch.roll(img, shifts=shifts, dims=(-2, -1))
             mask = torch.roll(mask, shifts=shifts, dims=(-2, -1))
 
-        img = self._hflip(img)
-        mask = self._hflip(mask, params=self._hflip._params)
-
         stacked = torch.cat([img, mask], dim=1)
-        stacked = self._affine(stacked) if torch.rand(()) < self.config.geometric_prob else self._scale(stacked)
+        stacked = self._hflip(stacked)
+
+        if torch.rand(()) < self.config.geometric_prob:
+            stacked = self._affine(stacked)
+        else:
+            scale_mean = sum(self.config.scale_range) / 2.0
+            if not math.isclose(scale_mean, 1.0, abs_tol=0.05):
+                stacked = self._scale(stacked)
 
         img, mask = stacked[:, :-1], stacked[:, -1:]
         return img, mask
