@@ -151,13 +151,17 @@ class DiffusionLightningCLI(LightningCLI):
         parser.add_argument("--wandb_project", type=str, default="mri-diffusion", help="WandB project name.")
         parser.add_argument("--wandb_entity", type=str | None, default=None, help="WandB entity name.")
         parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Base path for checkpoints.")
+        parser.add_argument("--memory_budget", type=float, default=0.99, help="activation checkpointing budget")
         parser.set_defaults({"data": {"class_path": "score_qmri.datasets.lightning.MRIDataModule"}})
+
 
     def before_instantiate_classes(self) -> None:
         if self.subcommand != "fit":
             return
-
+         
         config = getattr(self.config, self.subcommand)
+
+        torch._functorch.config.activation_memory_budget = config.memory_budget
 
         logger = WandbLogger(
             id=config.job_name,
