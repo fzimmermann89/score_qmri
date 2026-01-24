@@ -86,6 +86,8 @@ data:
         scaling_factor: 2.5
         augmentation_config:
           scale_range: [0.75, 0.95]
+          intensity_scale_range: [0.25, 4.0]
+          intensity_scale_prob: 0.5
         schedule:
           type: phase_out
           steps: 200000
@@ -95,6 +97,9 @@ data:
         mode: flat
         kind: M0_COMPLEX
         scaling_factor: 1.6
+        augmentation_config:
+          intensity_scale_range: [0.25, 4.0]
+          intensity_scale_prob: 0.5
 
       - type: magnitude
         h5_path: ./datasets/ds000221_mprage.h5
@@ -288,6 +293,8 @@ data:
         scaling_factor: 0.7
         augmentation_config:
           scale_range: [0.75, 0.9]
+          intensity_scale_range: [0.25, 4.0]
+          intensity_scale_prob: 0.5
 
       - type: mapping
         h5_path: ./datasets/ibc_relaxo_t2starmap.h5
@@ -301,6 +308,8 @@ data:
         scaling_factor: 0.8
         augmentation_config:
           scale_range: [0.75, 0.9]
+          intensity_scale_range: [0.25, 4.0]
+          intensity_scale_prob: 0.5
 
       - type: mapping
         h5_path: ./datasets/quiero_m0map.h5

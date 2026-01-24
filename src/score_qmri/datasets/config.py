@@ -31,7 +31,8 @@ MAGNITUDE_CONFIG = AugmentationConfig(
     rotation_range=(-10.0, 10.0),
     shear_range=(-0.1, 0.1),
     contrast_strength=0.3,
-    intensity_scale_prob=0.0,  # Disabled by default
+    intensity_scale_prob=0.1,
+    intensity_scale_range=(0.7, 1.4),
 )
 
 MAPPING_CONFIG = AugmentationConfig(
@@ -43,7 +44,8 @@ MAPPING_CONFIG = AugmentationConfig(
     rotation_range=(-10.0, 10.0),
     shear_range=(-0.1, 0.1),
     contrast_strength=0.1,
-    intensity_scale_prob=0.0,  # Disabled by default
+    intensity_scale_prob=0.3,
+    intensity_scale_range=(0.8, 1.2),
 )
 
 COMPLEX_CONFIG = AugmentationConfig(
@@ -55,5 +57,6 @@ COMPLEX_CONFIG = AugmentationConfig(
     rotation_range=(-10.0, 10.0),
     shear_range=(-0.1, 0.1),
     contrast_strength=0.3,
-    intensity_scale_prob=0.0,  # Disabled by default
+    intensity_scale_prob=0.1,
+    intensity_scale_range=(0.5, 2.0),
 )
