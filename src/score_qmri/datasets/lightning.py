@@ -10,13 +10,14 @@ from lightning import LightningDataModule
 from torch.utils.data import ConcatDataset, DataLoader
 
 from .batch_sampler import ScheduledBatchSampler
+from .brainweb import VALUES_3T_RANDOMIZED, BrainwebQuantitativeSampler, BrainwebTissue
 from .complex import ComplexImageDataset
 from .config import AugmentationConfig
 from .kind import DatasetKind
 from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
 
-MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset
+MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset | BrainwebQuantitativeSampler
 
 
 @dataclass(kw_only=True)
@@ -131,7 +132,35 @@ class MappingDatasetConfig(BaseDatasetConfig):
         )
 
 
-DatasetConfig = ComplexDatasetConfig | MagnitudeDatasetConfig | MappingDatasetConfig
+@dataclass(kw_only=True)
+class BrainwebDatasetConfig(BaseDatasetConfig):
+    """Configuration for Brainweb quantitative datasets."""
+
+    type: Literal["brainweb"] = "brainweb"
+    kind: DatasetKind = DatasetKind.T1MAP
+    scaling_factor: float = 1.0
+    penumbra_width: int = -1
+    step: int = 1
+    skip_slices: tuple[int, int] = (80, 80)
+    seed: int | Literal["index", "random"] = "random"
+    parameters: dict[str, BrainwebTissue] | None = None
+
+    def create(self) -> BrainwebQuantitativeSampler:
+        params = self.parameters if self.parameters is not None else VALUES_3T_RANDOMIZED
+        return BrainwebQuantitativeSampler(
+            h5_path=self.h5_path,
+            kind=self.kind,
+            parameters=params,
+            augmentation_config=self.augmentation_config,
+            scaling_factor=self.scaling_factor,
+            step=self.step,
+            skip_slices=self.skip_slices,
+            seed=self.seed,
+            penumbra_width=self.penumbra_width,
+        )
+
+
+DatasetConfig = ComplexDatasetConfig | MagnitudeDatasetConfig | MappingDatasetConfig | BrainwebDatasetConfig
 
 
 @dataclass
