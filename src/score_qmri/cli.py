@@ -154,11 +154,10 @@ class DiffusionLightningCLI(LightningCLI):
         parser.add_argument("--memory_budget", type=float, default=0.99, help="activation checkpointing budget")
         parser.set_defaults({"data": {"class_path": "score_qmri.datasets.lightning.MRIDataModule"}})
 
-
     def before_instantiate_classes(self) -> None:
         if self.subcommand != "fit":
             return
-         
+
         config = getattr(self.config, self.subcommand)
 
         torch._functorch.config.activation_memory_budget = config.memory_budget

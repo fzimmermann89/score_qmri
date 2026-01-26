@@ -3,6 +3,7 @@
 from .augmentation import AugmentationPipeline, PhaseAugmentation
 from .base import BaseMRIDataset
 from .batch_sampler import ScheduledBatchSampler
+from .brainweb import VALUES_3T_RANDOMIZED, BrainwebQuantitativeSampler, BrainwebTissue
 from .complex import ComplexImageDataset
 from .config import (
     COMPLEX_CONFIG,
@@ -13,6 +14,7 @@ from .config import (
 from .flat_h5 import FlatH5Dataset
 from .kind import NUM_DATASET_KINDS, DatasetKind
 from .lightning import (
+    BrainwebDatasetConfig,
     ComplexDatasetConfig,
     ConstantSchedule,
     DatasetConfig,
@@ -37,6 +39,9 @@ __all__ = [
     "NUM_DATASET_KINDS",
     "MagnitudeImageDataset",
     "MappingDataset",
+    "BrainwebQuantitativeSampler",
+    "BrainwebTissue",
+    "VALUES_3T_RANDOMIZED",
     "ScheduledBatchSampler",
     "MRIDataModule",
     "MAGNITUDE_CONFIG",
@@ -45,6 +50,7 @@ __all__ = [
     "ComplexDatasetConfig",
     "MagnitudeDatasetConfig",
     "MappingDatasetConfig",
+    "BrainwebDatasetConfig",
     "DatasetConfig",
     "ConstantSchedule",
     "PhaseInSchedule",
