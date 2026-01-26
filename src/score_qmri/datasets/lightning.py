@@ -261,7 +261,7 @@ class MRIDataModule(LightningDataModule):
     def __init__(
         self,
         dataset_configs: list[DatasetConfig] | None = None,
-        batch_size: int = 8,
+        batch_size: int = 32,
         sample_size: tuple[int, int] = (256, 256),
         num_workers: int = 8,
         base_seed: int = 42,
@@ -379,7 +379,7 @@ class MRIDataModule(LightningDataModule):
             num_workers=self.num_workers,
             persistent_workers=self.num_workers > 0,
             pin_memory=torch.cuda.is_available(),
-            prefetch_factor=4 if self.num_workers > 0 else None,
+            prefetch_factor=8 if self.num_workers > 0 else None,
             multiprocessing_context="spawn" if self.num_workers > 0 else None,
             timeout=120 if self.num_workers > 0 else 0,
         )

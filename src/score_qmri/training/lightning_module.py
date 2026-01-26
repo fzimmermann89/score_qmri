@@ -19,7 +19,6 @@ from score_qmri.models.diffusion import (
     DiffusionModel,
     EDMConfig,
     NormalizationConfig,
-    _apply_kind_constraints,
     _create_noise,
 )
 from score_qmri.sampling.edm_sampler import EDMSampler, create_fixed_noise
@@ -85,16 +84,16 @@ class DiffusionLightningModule(LightningModule):
         learning_rate: float = 5e-5,
         weight_decay: float = 0.01,
         main_weight: float = 1.0,
-        aux_weight: float = 0.1,
-        ssim_weight: float = 0.5,
-        l1_weight: float = 0.5,
-        penumbra_weight: float = 0.0,
+        aux_weight: float = 0.5,
+        ssim_weight: float = 0.7,
+        l1_weight: float = 0.3,
+        penumbra_weight: float = 0.001,
         background_weight: float = 0.5,
         validation_steps: int = 50,
         validation_interval: int = 1000,
         log_batch_interval: int = 200,
         warmup_steps: int = 2000,
-        ema_decay: float = 0.9999,
+        ema_decay: float = 0.9995,
         cond_dropout_rate: float = 0.1,
         attention_levels: tuple[int, ...] = (),
         head_dim: int = 64,
@@ -207,8 +206,6 @@ class DiffusionLightningModule(LightningModule):
         kind = batch["kind"]
 
         signal_mask = ~background_mask
-
-        x0_raw = _apply_kind_constraints(x0_raw, kind)
 
         x0_norm = self.model.normalize(x0_raw, kind)
         x0_norm = torch.where(signal_mask.unsqueeze(1), x0_norm, torch.zeros_like(x0_norm))
