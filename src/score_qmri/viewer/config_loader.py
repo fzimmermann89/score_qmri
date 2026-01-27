@@ -83,8 +83,7 @@ def load_config(config_path: str | Path) -> dict:
 
     if not dataset_configs:
         raise FileNotFoundError(
-            f"No valid datasets found in {config_path}. "
-            f"Missing files: {skipped_paths[:5]}{'...' if len(skipped_paths) > 5 else ''}"
+            f"No valid datasets found in {config_path}. Missing files: {skipped_paths[:5]}{'...' if len(skipped_paths) > 5 else ''}"
         )
 
     logger.info(f"Loaded {len(dataset_configs)} datasets from {config_path}")

@@ -16,8 +16,8 @@ interface SampleGridProps {
   error: string | null
 }
 
-const ROWS = 4
-const COLS = 8
+const ROWS = 3
+const COLS = 7
 
 export function SampleGrid({
   sampleData,

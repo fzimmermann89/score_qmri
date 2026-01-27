@@ -14,9 +14,39 @@ export async function fetchKinds(): Promise<KindsResponse> {
   return res.json()
 }
 
-export async function reloadConfig(): Promise<{ status: string; mock_mode: boolean; num_datasets: number }> {
+export async function reloadConfig(): Promise<{
+  status: string
+  mock_mode: boolean
+  num_datasets: number
+  changed_datasets: number[]
+  message: string
+}> {
   const res = await fetch(`${API_BASE}/reload`, { method: 'POST' })
   if (!res.ok) throw new Error(`Failed to reload config: ${res.statusText}`)
+  return res.json()
+}
+
+export async function fetchStatus(): Promise<{
+  ready: boolean
+  warming: boolean
+  mock_mode: boolean
+  num_datasets: number
+  config_path: string
+}> {
+  const res = await fetch(`${API_BASE}/status`)
+  if (!res.ok) throw new Error(`Failed to fetch status: ${res.statusText}`)
+  return res.json()
+}
+
+export async function warmDataset(datasetIdx: number): Promise<{ status: string; message: string }> {
+  const res = await fetch(`${API_BASE}/warm/dataset/${datasetIdx}`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Failed to warm dataset: ${res.statusText}`)
+  return res.json()
+}
+
+export async function warmKind(kind: string): Promise<{ status: string; message: string }> {
+  const res = await fetch(`${API_BASE}/warm/kind/${kind}`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Failed to warm kind: ${res.statusText}`)
   return res.json()
 }
 

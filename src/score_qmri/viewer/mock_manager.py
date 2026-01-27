@@ -6,7 +6,6 @@ import random
 from typing import Any
 
 import numpy as np
-import torch
 
 from score_qmri.datasets.kind import DatasetKind
 
