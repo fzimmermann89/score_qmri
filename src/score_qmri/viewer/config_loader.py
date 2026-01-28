@@ -11,6 +11,8 @@ import yaml
 from score_qmri.datasets.config import AugmentationConfig
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.datasets.lightning import (
+    BrainwebDatasetConfig,
+    BrainwebQualitativeDatasetConfig,
     ComplexDatasetConfig,
     ConstantSchedule,
     DatasetConfig,
@@ -30,7 +32,7 @@ def load_config(config_path: str | Path) -> dict:
     """Load config.yaml and parse dataset configs.
 
     Uses the same dataclass types as training to ensure parity.
-    Filters out missing H5 files and brainweb datasets.
+    Filters out missing H5 files.
 
     Parameters
     ----------
@@ -63,11 +65,6 @@ def load_config(config_path: str | Path) -> dict:
     skipped_paths: list[str] = []
 
     for entry in init_args.get("dataset_configs", []):
-        # Skip brainweb datasets
-        if entry.get("type") == "brainweb":
-            logger.info(f"Skipping brainweb dataset: {entry.get('h5_path')}")
-            continue
-
         h5_path = Path(entry.get("h5_path", "")).resolve()
         if not h5_path.exists():
             skipped_paths.append(str(h5_path))
@@ -111,7 +108,7 @@ def _parse_dataset_config(entry: dict) -> DatasetConfig:
     Uses the SAME types as MRIDataModule to ensure parity.
     """
     config_type = entry.get("type")
-    if config_type not in {"complex", "magnitude", "mapping"}:
+    if config_type not in {"complex", "magnitude", "mapping", "brainweb", "brainweb_qualitative"}:
         raise ValueError(f"Unsupported dataset type: {config_type}")
 
     # Parse common fields
@@ -141,7 +138,7 @@ def _parse_dataset_config(entry: dict) -> DatasetConfig:
             schedule=schedule,
             penumbra_width=entry.get("penumbra_width", 30),
         )
-    else:  # mapping
+    elif config_type == "mapping":
         return MappingDatasetConfig(
             h5_path=str(entry["h5_path"]),
             kind=kind,
@@ -149,6 +146,34 @@ def _parse_dataset_config(entry: dict) -> DatasetConfig:
             augmentation_config=aug_config,
             schedule=schedule,
             penumbra_width=entry.get("penumbra_width", -1),
+        )
+    elif config_type == "brainweb":
+        skip_slices_raw = entry.get("skip_slices", [80, 80])
+        skip_slices = (int(skip_slices_raw[0]), int(skip_slices_raw[1]))
+        return BrainwebDatasetConfig(
+            h5_path=str(entry["h5_path"]),
+            kind=kind,
+            scaling_factor=entry.get("scaling_factor", 1.0),
+            augmentation_config=aug_config,
+            schedule=schedule,
+            penumbra_width=entry.get("penumbra_width", -1),
+            step=entry.get("step", 1),
+            skip_slices=skip_slices,
+            subject_id=entry.get("subject_id"),
+        )
+    else:  # brainweb_qualitative
+        skip_slices_raw = entry.get("skip_slices", [80, 80])
+        skip_slices = (int(skip_slices_raw[0]), int(skip_slices_raw[1]))
+        return BrainwebQualitativeDatasetConfig(
+            h5_path=str(entry["h5_path"]),
+            kind=kind,
+            scaling_factor=entry.get("scaling_factor", 1.0),
+            augmentation_config=aug_config,
+            schedule=schedule,
+            penumbra_width=entry.get("penumbra_width", -1),
+            step=entry.get("step", 1),
+            skip_slices=skip_slices,
+            subject_id=entry.get("subject_id"),
         )
 
 
