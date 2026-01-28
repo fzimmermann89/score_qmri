@@ -39,7 +39,7 @@ class ScheduledBatchSampler(BatchSampler):
         dataset: ConcatDataset,
         dataset_lengths: list[int],
         dataset_kinds: Sequence[DatasetKind],
-        schedules: list[Callable[[int], float]],
+        schedules: Sequence[Callable[[int], float]],
         batch_size: int,
         kind_normalization: float = 0.5,
         base_seed: int = 42,
