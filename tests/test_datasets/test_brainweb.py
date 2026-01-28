@@ -213,3 +213,81 @@ def test_brainweb_multi_subject_format(tmp_path: Path) -> None:
     assert len(ds_all) == len(ds1) + len(ds2)
     assert torch.allclose(ds_all[0]["image"], sample1["image"])
     assert torch.allclose(ds_all[len(ds1)]["image"], sample2["image"])
+
+
+def test_brainweb_qualitative_complex(tmp_path: Path) -> None:
+    """Test complex T1W and T2W output with phase."""
+    classnames = ["skl", "gry", "wht", "csf", "mrw", "dura", "fat", "fat2", "mus", "m-s", "ves"]
+    classes = _make_classes((2, 4, 5, len(classnames)), class_index=1)
+    h5_path = tmp_path / "brainweb_complex.h5"
+    _write_brainweb_h5(h5_path, classes, classnames, subject=1)
+
+    # Use fixed phase for predictability
+    params = {}
+    for i, name in enumerate(classnames):
+        params[name] = BrainwebTissue(t1=1.0 + i * 0.5, t2=0.5 + i * 0.1, m0_abs=1.0, m0_phase=0.1 * i)
+
+    tr = 0.010
+    te = 0.003
+    flip = 20.0
+
+    # Test COMPLEX_T1W_COIL_COMBINED
+    t1_complex_ds = BrainwebQualitativeSampler(
+        str(h5_path),
+        kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED,
+        parameters=params,
+        subject_id=1,
+        skip_slices=(0, 0),
+        tr_range=(tr, tr),
+        te_range=(te, te),
+        flip_range=(flip, flip),
+        background_phase_scale=4,
+        background_phase_std=0.5,
+    )
+    t1_complex_sample = t1_complex_ds[0]
+    assert t1_complex_sample["image"].is_complex(), "Complex T1W should be complex"
+    assert t1_complex_sample["kind"].item() == DatasetKind.COMPLEX_T1W_COIL_COMBINED.value
+    # Magnitude should be positive
+    assert t1_complex_sample["image"].abs().mean() > 0
+
+    # Compare magnitude with corresponding magnitude dataset
+    t1_mag_ds = BrainwebQualitativeSampler(
+        str(h5_path),
+        kind=DatasetKind.T1W_MAGNITUDE,
+        parameters=params,
+        subject_id=1,
+        skip_slices=(0, 0),
+        tr_range=(tr, tr),
+        te_range=(te, te),
+        flip_range=(flip, flip),
+    )
+    t1_mag_sample = t1_mag_ds[0]
+    # Magnitudes should match (within tolerance due to different random background phase)
+    assert torch.allclose(
+        t1_complex_sample["image"].abs().mean(),
+        t1_mag_sample["image"].mean(),
+        rtol=0.01,
+    )
+
+    # Test COMPLEX_T2W_COIL_COMBINED
+    tr_t2w = 3.0
+    te_t2w = 0.090
+    t2_complex_ds = BrainwebQualitativeSampler(
+        str(h5_path),
+        kind=DatasetKind.COMPLEX_T2W_COIL_COMBINED,
+        parameters=params,
+        subject_id=1,
+        skip_slices=(0, 0),
+        tr_range=(tr_t2w, tr_t2w),
+        te_range=(te_t2w, te_t2w),
+        background_phase_scale=4,
+        background_phase_std=0.5,
+    )
+    t2_complex_sample = t2_complex_ds[0]
+    assert t2_complex_sample["image"].is_complex(), "Complex T2W should be complex"
+    assert t2_complex_sample["kind"].item() == DatasetKind.COMPLEX_T2W_COIL_COMBINED.value
+
+    # Verify phase is not constant (has variation from background + tissue)
+    phase = t2_complex_sample["image"].angle()
+    phase_in_signal = phase[t2_complex_sample["image"].abs() > 0.01]
+    assert phase_in_signal.std() > 0.01, "Phase should have variation"

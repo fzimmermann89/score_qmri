@@ -92,10 +92,7 @@ class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
         if self.augmentation is not None:
             image, signal_mask = self.augmentation(image, signal_mask)
 
-        if self.penumbra_width < 0:
-            pad_width = max(signal_mask.shape)
-        else:
-            pad_width = self.penumbra_width
+        pad_width = max(signal_mask.shape) if self.penumbra_width < 0 else self.penumbra_width
 
         if pad_width > 0:
             h, w = signal_mask.shape

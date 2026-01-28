@@ -3,7 +3,7 @@
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import torch
 from lightning import LightningDataModule
@@ -163,7 +163,7 @@ class BrainwebDatasetConfig(BaseDatasetConfig):
 
 @dataclass(kw_only=True)
 class BrainwebQualitativeDatasetConfig(BaseDatasetConfig):
-    """Configuration for Brainweb qualitative datasets."""
+    """Configuration for Brainweb qualitative datasets (magnitude or complex)."""
 
     type: Literal["brainweb_qualitative"] = "brainweb_qualitative"
     kind: DatasetKind = DatasetKind.T1W_MAGNITUDE
@@ -176,11 +176,22 @@ class BrainwebQualitativeDatasetConfig(BaseDatasetConfig):
     tr_range: tuple[float, float] | None = None
     te_range: tuple[float, float] | None = None
     flip_range: tuple[float, float] | None = None
+    background_phase_scale: int = 16
+    background_phase_std: float = 1.57
+
+    _VALID_KINDS: ClassVar[frozenset[DatasetKind]] = frozenset(
+        {
+            DatasetKind.T1W_MAGNITUDE,
+            DatasetKind.T2W_MAGNITUDE,
+            DatasetKind.COMPLEX_T1W_COIL_COMBINED,
+            DatasetKind.COMPLEX_T2W_COIL_COMBINED,
+        }
+    )
 
     def create(self) -> BrainwebQualitativeSampler:
         params = self.parameters if self.parameters is not None else VALUES_3T_RANDOMIZED
-        if self.kind not in (DatasetKind.T1W_MAGNITUDE, DatasetKind.T2W_MAGNITUDE):
-            raise ValueError(f"kind must be T1W_MAGNITUDE or T2W_MAGNITUDE, got {self.kind}")
+        if self.kind not in self._VALID_KINDS:
+            raise ValueError(f"kind must be one of {self._VALID_KINDS}, got {self.kind}")
         return BrainwebQualitativeSampler(
             h5_path=self.h5_path,
             kind=self.kind,
@@ -194,6 +205,8 @@ class BrainwebQualitativeDatasetConfig(BaseDatasetConfig):
             tr_range=self.tr_range,
             te_range=self.te_range,
             flip_range=self.flip_range,
+            background_phase_scale=self.background_phase_scale,
+            background_phase_std=self.background_phase_std,
         )
 
 

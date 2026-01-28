@@ -332,10 +332,7 @@ class BrainwebQuantitativeSampler(Dataset[dict[str, Any]]):
         if self.kind in (DatasetKind.T1MAP, DatasetKind.T2MAP):
             image = image.masked_fill(~signal_mask, 0.0)
 
-        if self.penumbra_width < 0:
-            pad_width = max(signal_mask.shape)
-        else:
-            pad_width = self.penumbra_width
+        pad_width = max(signal_mask.shape) if self.penumbra_width < 0 else self.penumbra_width
 
         if pad_width > 0:
             h, w = signal_mask.shape
@@ -369,8 +366,14 @@ class BrainwebQuantitativeSampler(Dataset[dict[str, Any]]):
                 self._h5_file.close()
 
 
+_QUALITATIVE_MAGNITUDE_KINDS = frozenset({DatasetKind.T1W_MAGNITUDE, DatasetKind.T2W_MAGNITUDE})
+_QUALITATIVE_COMPLEX_KINDS = frozenset({DatasetKind.COMPLEX_T1W_COIL_COMBINED, DatasetKind.COMPLEX_T2W_COIL_COMBINED})
+_QUALITATIVE_T1_KINDS = frozenset({DatasetKind.T1W_MAGNITUDE, DatasetKind.COMPLEX_T1W_COIL_COMBINED})
+_QUALITATIVE_ALL_KINDS = _QUALITATIVE_MAGNITUDE_KINDS | _QUALITATIVE_COMPLEX_KINDS
+
+
 class BrainwebQualitativeSampler(Dataset[dict[str, Any]]):
-    """Dataset for Brainweb qualitative magnitude images (T1W, T2W)."""
+    """Dataset for Brainweb qualitative images (T1W, T2W) in magnitude or complex format."""
 
     def __init__(
         self,
@@ -386,6 +389,8 @@ class BrainwebQualitativeSampler(Dataset[dict[str, Any]]):
         tr_range: tuple[float, float] | None = None,
         te_range: tuple[float, float] | None = None,
         flip_range: tuple[float, float] | None = None,
+        background_phase_scale: int = 16,
+        background_phase_std: float = 1.57,
     ) -> None:
         """
         Parameters
@@ -393,7 +398,8 @@ class BrainwebQualitativeSampler(Dataset[dict[str, Any]]):
         h5_path
             Path to Brainweb HDF5 file with subject groups (e.g., `subject_01/classes`).
         kind
-            Output kind: T1W_MAGNITUDE or T2W_MAGNITUDE.
+            Output kind: T1W_MAGNITUDE, T2W_MAGNITUDE, COMPLEX_T1W_COIL_COMBINED,
+            or COMPLEX_T2W_COIL_COMBINED.
         parameters
             Tissue parameter mapping for T1/T2/M0 sampling.
         augmentation_config
@@ -415,9 +421,13 @@ class BrainwebQualitativeSampler(Dataset[dict[str, Any]]):
             TE range in seconds for acquisition parameter sampling.
         flip_range
             Flip angle range in degrees (T1W only).
+        background_phase_scale
+            Low-res grid size for slowly varying background phase (complex output only).
+        background_phase_std
+            Standard deviation of background phase in radians (default ~π/2).
         """
-        if kind not in (DatasetKind.T1W_MAGNITUDE, DatasetKind.T2W_MAGNITUDE):
-            raise ValueError(f"kind must be T1W_MAGNITUDE or T2W_MAGNITUDE, got {kind}")
+        if kind not in _QUALITATIVE_ALL_KINDS:
+            raise ValueError(f"kind must be one of {_QUALITATIVE_ALL_KINDS}, got {kind}")
 
         self.h5_path = str(Path(h5_path).resolve())
         self.kind = kind
@@ -429,9 +439,13 @@ class BrainwebQualitativeSampler(Dataset[dict[str, Any]]):
         self.augmentation = AugmentationPipeline(augmentation_config) if augmentation_config else None
         self.subject_id = subject_id
 
-        self.tr_range = tr_range or (T1W_TR_RANGE if kind == DatasetKind.T1W_MAGNITUDE else T2W_TR_RANGE)
-        self.te_range = te_range or (T1W_TE_RANGE if kind == DatasetKind.T1W_MAGNITUDE else T2W_TE_RANGE)
+        is_t1 = kind in _QUALITATIVE_T1_KINDS
+        self.tr_range = tr_range or (T1W_TR_RANGE if is_t1 else T2W_TR_RANGE)
+        self.te_range = te_range or (T1W_TE_RANGE if is_t1 else T2W_TE_RANGE)
         self.flip_range = flip_range or T1W_FLIP_RANGE
+        self.background_phase_scale = background_phase_scale
+        self.background_phase_std = background_phase_std
+        self._is_complex = kind in _QUALITATIVE_COMPLEX_KINDS
 
         self._h5_file: h5py.File | None = None
         self._skip_start, self._skip_end = skip_slices
@@ -466,6 +480,26 @@ class BrainwebQualitativeSampler(Dataset[dict[str, Any]]):
     def _get_group(self, group_name: str, file: h5py.File | None = None) -> h5py.Group:
         f = self._get_h5_file() if file is None else file
         return _get_group(f, group_name, self.h5_path)
+
+    def _generate_background_phase(self, h: int, w: int) -> Tensor:
+        """Generate slowly varying background phase via low-res noise upscaling.
+
+        Parameters
+        ----------
+        h
+            Output height.
+        w
+            Output width.
+
+        Returns
+        -------
+        Tensor
+            Phase map of shape (h, w) with slowly varying values.
+        """
+        scale = self.background_phase_scale
+        low_res = torch.randn(1, 1, scale, scale) * self.background_phase_std
+        upsampled = torch.nn.functional.interpolate(low_res, size=(h, w), mode="bicubic", align_corners=False)
+        return upsampled[0, 0]
 
     def __len__(self) -> int:
         return self._total_slices
@@ -507,18 +541,30 @@ class BrainwebQualitativeSampler(Dataset[dict[str, Any]]):
         tr = torch.empty(1).uniform_(*self.tr_range)
         te = torch.empty(1).uniform_(*self.te_range)
 
-        if self.kind == DatasetKind.T1W_MAGNITUDE:
+        is_t1 = self.kind in _QUALITATIVE_T1_KINDS
+        if is_t1:
             flip = torch.deg2rad(torch.empty(1).uniform_(*self.flip_range))
             e1 = torch.exp(-tr / (t1_map + 1e-8))
             denom = 1.0 - torch.cos(flip) * e1
-            image = m0_map * torch.sin(flip) * (1.0 - e1) / (denom + 1e-8)
-            image = image * torch.exp(-te / (t2_map + 1e-8))
+            magnitude = m0_map * torch.sin(flip) * (1.0 - e1) / (denom + 1e-8)
+            magnitude = magnitude * torch.exp(-te / (t2_map + 1e-8))
         else:
-            image = m0_map * (1.0 - torch.exp(-tr / (t1_map + 1e-8)))
-            image = image * torch.exp(-te / (t2_map + 1e-8))
+            magnitude = m0_map * (1.0 - torch.exp(-tr / (t1_map + 1e-8)))
+            magnitude = magnitude * torch.exp(-te / (t2_map + 1e-8))
 
         if self.scaling_factor != 1.0:
-            image = image * self.scaling_factor
+            magnitude = magnitude * self.scaling_factor
+
+        # Convert to complex if needed
+        if self._is_complex:
+            m0_phase_values = m0_values.angle()  # (C, 1)
+            tissue_phase_map = (weights @ m0_phase_values)[..., 0]  # (Y, X)
+            h, w = magnitude.shape
+            background_phase = self._generate_background_phase(h, w)
+            total_phase = tissue_phase_map + background_phase
+            image: Tensor = torch.polar(magnitude, total_phase)  # complex64
+        else:
+            image = magnitude
 
         signal_mask = class_sum > 0.5
         mask_float = signal_mask.float().unsqueeze(0).unsqueeze(0)
