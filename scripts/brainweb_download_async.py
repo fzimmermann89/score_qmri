@@ -8,10 +8,10 @@
 # ///
 """Async Brainweb data downloader.
 
-Downloads tissue class data for a single Brainweb subject and saves as HDF5.
+Downloads tissue class data for Brainweb subjects and saves as multi-subject HDF5.
 
 Usage:
-    uv run scripts/brainweb_download_async.py --subject 1 --out data/brainweb
+    uv run scripts/brainweb_download_async.py --out data/brainweb/brainweb.h5
 """
 
 from __future__ import annotations
@@ -108,68 +108,87 @@ def normalize_classes(raw_data: dict[str, bytes]) -> np.ndarray:
     return np.stack(result, axis=-1)
 
 
-def write_h5(output_path: Path, data: np.ndarray, subject: int) -> None:
-    """Write processed data to HDF5 with LZF compression and axial-slice chunking."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
+def write_to_h5_group(h5_file: h5py.File, group_name: str, data: np.ndarray, subject: int) -> None:
+    """Write processed data to an HDF5 group with LZF compression and axial-slice chunking."""
     classnames = [c for c in ALL_CLASSES if c != "bck"]
     z, y, x, c = data.shape
     chunk_size = (1, y, x, c)  # Axial slices
 
-    with h5py.File(str(output_path), "w") as f:
-        f.create_dataset(
-            "classes",
-            data=data,
-            dtype=np.uint8,
-            chunks=chunk_size,
-            compression="lzf",
-        )
-        f.attrs["classnames"] = classnames
-        f.attrs["subject"] = subject
-        f.attrs["version"] = VERSION
+    group = h5_file.create_group(group_name)
+    group.create_dataset(
+        "classes",
+        data=data,
+        dtype=np.uint8,
+        chunks=chunk_size,
+        compression="lzf",
+    )
+    group.attrs["classnames"] = classnames
+    group.attrs["subject"] = subject
+    group.attrs["version"] = VERSION
 
 
-async def download_subject(
+async def download_subject_data(
+    session: aiohttp.ClientSession,
     subject: int,
-    output_dir: Path,
     workers: int,
     timeout: float,
-) -> None:
-    """Download all tissue classes for a subject and save as HDF5."""
+) -> np.ndarray:
+    """Download and normalize tissue class data for a subject."""
     subject_str = f"{subject:02d}"
+    semaphore = asyncio.Semaphore(workers)
+    tasks = [download_class(session, subject_str, c, semaphore, timeout) for c in ALL_CLASSES]
 
-    async with aiohttp.ClientSession() as session:
-        # Validate subject ID
-        available = await fetch_available_subjects(session, timeout)
-        if subject_str not in available:
-            raise ValueError(f"Subject {subject} (as {subject_str}) not available. Available: {available}")
-
-        # Download all classes concurrently
-        semaphore = asyncio.Semaphore(workers)
-        tasks = [download_class(session, subject_str, c, semaphore, timeout) for c in ALL_CLASSES]
-
-        print(f"Downloading {len(ALL_CLASSES)} tissue classes for subject {subject}...")
-        results = await asyncio.gather(*tasks)
+    print(f"Downloading {len(ALL_CLASSES)} tissue classes for subject {subject}...")
+    results = await asyncio.gather(*tasks)
 
     raw_data = dict(results)
     print("Normalizing data...")
-    normalized = normalize_classes(raw_data)
+    return normalize_classes(raw_data)
 
-    output_path = output_dir / f"s{subject:02d}.h5"
-    print(f"Writing {output_path}...")
-    write_h5(output_path, normalized, subject)
-    print("Done.")
+
+async def download_all_subjects(
+    output_path: Path,
+    workers: int,
+    timeout: float,
+) -> None:
+    """Download all available subjects to a single HDF5 file with groups."""
+    async with aiohttp.ClientSession() as session:
+        print("Fetching available subjects...")
+        available = await fetch_available_subjects(session, timeout)
+
+        subjects = sorted({int(s) for s in available})
+        print(f"Found {len(subjects)} subjects: {subjects}")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with h5py.File(str(output_path), "w") as f:
+            f.attrs["version"] = VERSION
+            f.attrs["num_subjects"] = len(subjects)
+
+        for idx, subject in enumerate(subjects, start=1):
+            try:
+                print(f"\n{'=' * 60}")
+                print(f"Processing subject {subject} ({idx}/{len(subjects)})")
+                print(f"{'=' * 60}")
+                normalized = await download_subject_data(session, subject, workers, timeout)
+
+                group_name = f"subject_{subject:02d}"
+                print(f"Writing {group_name} to {output_path}...")
+                with h5py.File(str(output_path), "a") as f:
+                    write_to_h5_group(f, group_name, normalized, subject)
+
+            except Exception as e:
+                print(f"Error downloading subject {subject}: {e}")
+                continue
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download Brainweb data for a single subject.")
-    parser.add_argument("--subject", type=int, required=True, help="Subject ID to download")
-    parser.add_argument("--out", type=str, default="data/brainweb", help="Output directory")
+    parser = argparse.ArgumentParser(description="Download Brainweb data.")
+    parser.add_argument("--out", type=str, default="data/brainweb/brainweb.h5", help="Output HDF5 file path")
     parser.add_argument("--workers", type=int, default=4, help="Number of concurrent downloads")
     parser.add_argument("--timeout", type=float, default=60.0, help="HTTP timeout in seconds")
     args = parser.parse_args()
 
-    asyncio.run(download_subject(args.subject, Path(args.out), args.workers, args.timeout))
+    asyncio.run(download_all_subjects(Path(args.out), args.workers, args.timeout))
 
 
 if __name__ == "__main__":

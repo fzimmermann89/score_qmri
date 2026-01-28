@@ -10,14 +10,14 @@ from lightning import LightningDataModule
 from torch.utils.data import ConcatDataset, DataLoader
 
 from .batch_sampler import ScheduledBatchSampler
-from .brainweb import VALUES_3T_RANDOMIZED, BrainwebQuantitativeSampler, BrainwebTissue
+from .brainweb import VALUES_3T_RANDOMIZED, BrainwebQualitativeSampler, BrainwebQuantitativeSampler, BrainwebTissue
 from .complex import ComplexImageDataset
 from .config import AugmentationConfig
 from .kind import DatasetKind
 from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
 
-MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset | BrainwebQuantitativeSampler
+MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset | BrainwebQuantitativeSampler | BrainwebQualitativeSampler
 
 
 @dataclass(kw_only=True)
@@ -142,8 +142,8 @@ class BrainwebDatasetConfig(BaseDatasetConfig):
     penumbra_width: int = -1
     step: int = 1
     skip_slices: tuple[int, int] = (80, 80)
-    seed: int | Literal["index", "random"] = "random"
     parameters: dict[str, BrainwebTissue] | None = None
+    subject_id: int | None = None
 
     def create(self) -> BrainwebQuantitativeSampler:
         params = self.parameters if self.parameters is not None else VALUES_3T_RANDOMIZED
@@ -155,12 +155,50 @@ class BrainwebDatasetConfig(BaseDatasetConfig):
             scaling_factor=self.scaling_factor,
             step=self.step,
             skip_slices=self.skip_slices,
-            seed=self.seed,
             penumbra_width=self.penumbra_width,
+            subject_id=self.subject_id,
         )
 
 
-DatasetConfig = ComplexDatasetConfig | MagnitudeDatasetConfig | MappingDatasetConfig | BrainwebDatasetConfig
+@dataclass(kw_only=True)
+class BrainwebQualitativeDatasetConfig(BaseDatasetConfig):
+    """Configuration for Brainweb qualitative datasets."""
+
+    type: Literal["brainweb_qualitative"] = "brainweb_qualitative"
+    kind: DatasetKind = DatasetKind.T1W_MAGNITUDE
+    scaling_factor: float = 1.0
+    penumbra_width: int = -1
+    step: int = 1
+    skip_slices: tuple[int, int] = (80, 80)
+    parameters: dict[str, BrainwebTissue] | None = None
+    subject_id: int | None = None
+    tr_range: tuple[float, float] | None = None
+    te_range: tuple[float, float] | None = None
+    flip_range: tuple[float, float] | None = None
+
+    def create(self) -> BrainwebQualitativeSampler:
+        params = self.parameters if self.parameters is not None else VALUES_3T_RANDOMIZED
+        if self.kind not in (DatasetKind.T1W_MAGNITUDE, DatasetKind.T2W_MAGNITUDE):
+            raise ValueError(f"kind must be T1W_MAGNITUDE or T2W_MAGNITUDE, got {self.kind}")
+        return BrainwebQualitativeSampler(
+            h5_path=self.h5_path,
+            kind=self.kind,
+            parameters=params,
+            augmentation_config=self.augmentation_config,
+            scaling_factor=self.scaling_factor,
+            step=self.step,
+            skip_slices=self.skip_slices,
+            penumbra_width=self.penumbra_width,
+            subject_id=self.subject_id,
+            tr_range=self.tr_range,
+            te_range=self.te_range,
+            flip_range=self.flip_range,
+        )
+
+
+DatasetConfig = (
+    ComplexDatasetConfig | MagnitudeDatasetConfig | MappingDatasetConfig | BrainwebDatasetConfig | BrainwebQualitativeDatasetConfig
+)
 
 
 @dataclass
@@ -226,8 +264,6 @@ class Collate:
 class MRIDataModule(LightningDataModule):
     """DataModule for MRI training datasets with scheduled sampling."""
 
-    hparams: MRIDataModuleHparams  # type: ignore[assignment]
-
     def __init__(
         self,
         dataset_configs: list[DatasetConfig] | None = None,
@@ -284,8 +320,9 @@ class MRIDataModule(LightningDataModule):
             summary[f"{prefix}/kind"] = cfg.kind.name
             summary[f"{prefix}/h5_path"] = cfg.h5_path
             summary[f"{prefix}/type"] = cfg.type
-            summary[f"{prefix}/schedule_type"] = cfg.schedule.type  # type: ignore[union-attr]
-            summary[f"{prefix}/schedule_weight"] = cfg.schedule.weight  # type: ignore[union-attr]
+            schedule: ScheduleType = cfg.schedule if cfg.schedule is not None else ConstantSchedule()
+            summary[f"{prefix}/schedule_type"] = schedule.type
+            summary[f"{prefix}/schedule_weight"] = schedule.weight
 
             if isinstance(cfg, ComplexDatasetConfig):
                 summary[f"{prefix}/mode"] = cfg.mode
@@ -327,11 +364,13 @@ class MRIDataModule(LightningDataModule):
         if self.trainer is not None and self.trainer.max_steps is not None and self.trainer.max_steps > 0:
             max_steps = self.trainer.max_steps
 
+        schedules: list[ScheduleType] = [cfg.schedule if cfg.schedule is not None else ConstantSchedule() for cfg in self.dataset_configs]
+
         batch_sampler = ScheduledBatchSampler(
             self.concat_ds,
             self.dataset_lengths,
             dataset_kinds=[cfg.kind for cfg in self.dataset_configs],
-            schedules=[cfg.schedule for cfg in self.dataset_configs],  # type: ignore[misc]
+            schedules=schedules,
             batch_size=self.batch_size,
             kind_normalization=self.kind_normalization,
             base_seed=self.base_seed,
