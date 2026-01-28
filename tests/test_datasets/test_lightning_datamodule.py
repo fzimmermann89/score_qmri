@@ -1,7 +1,10 @@
 """Tests for MRIDataModule."""
 
+import torch
+
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.datasets.lightning import (
+    Collate,
     ConstantSchedule,
     DatasetConfig,
     MagnitudeDatasetConfig,
@@ -91,3 +94,24 @@ def test_datamodule_get_config_summary():
     assert summary["data/dataset_kinds"] == ["T1W_MAGNITUDE"]
     assert summary["data/dataset_0/kind"] == "T1W_MAGNITUDE"
     assert summary["data/dataset_0/aug/geometric_prob"] == 0.5
+
+
+def test_collate_background_padding_constant_true():
+    """Background padding should be constant True after Collate."""
+    background_mask = torch.ones(10, 10, dtype=torch.bool)
+    background_mask[3:7, 3:7] = False
+
+    sample = {
+        "image": torch.zeros(10, 10),
+        "penumbra_mask": torch.zeros(10, 10, dtype=torch.bool),
+        "background_mask": background_mask,
+        "kind": torch.tensor(DatasetKind.T1W_MAGNITUDE.value, dtype=torch.long),
+        "h5_path": "dummy.h5",
+    }
+
+    collate = Collate(14, 14)
+    batch = collate([sample])
+    padded_background = batch["background_mask"][0]
+
+    assert padded_background[0, 0].item()
+    assert not padded_background[5:9, 5:9].any().item()

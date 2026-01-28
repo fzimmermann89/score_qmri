@@ -16,6 +16,7 @@ from .config import AugmentationConfig
 from .kind import DatasetKind
 from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
+from .utils import _pad_or_crop_centered
 
 MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset | BrainwebQuantitativeSampler | BrainwebQualitativeSampler
 
@@ -213,18 +214,6 @@ class MRIDataModuleHparams:
     kind_normalization: float
 
 
-def _pad_or_crop_centered(tensor: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
-    """Pad (positive) or crop (negative) to target size, centered."""
-    h, w = tensor.shape[-2:]
-    delta_h = target_h - h
-    delta_w = target_w - w
-    pad_top = delta_h // 2
-    pad_bot = delta_h - pad_top
-    pad_left = delta_w // 2
-    pad_right = delta_w - pad_left
-    return torch.nn.functional.pad(tensor, (pad_left, pad_right, pad_top, pad_bot))
-
-
 def _to_2ch(image: torch.Tensor) -> torch.Tensor:
     """Convert native (H, W) image to 2-channel (2, H, W) float tensor."""
     if image.is_complex():
@@ -243,8 +232,13 @@ class Collate:
         self.target_h = target_h
         self.target_w = target_w
 
-    def _pad_mask(self, mask: torch.Tensor) -> torch.Tensor:
-        return _pad_or_crop_centered(mask.float(), self.target_h, self.target_w).bool()
+    def _pad_mask(self, mask: torch.Tensor, replicate: bool = False) -> torch.Tensor:
+        return _pad_or_crop_centered(mask.float(), self.target_h, self.target_w, replicate=replicate).bool()
+
+    def _pad_background_mask(self, mask: torch.Tensor) -> torch.Tensor:
+        signal_mask = (~mask).float()
+        padded_signal = _pad_or_crop_centered(signal_mask, self.target_h, self.target_w)
+        return ~padded_signal.bool()
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
         images_2ch = []
@@ -254,8 +248,8 @@ class Collate:
 
         return {
             "image": torch.stack(images_2ch),
-            "penumbra_mask": torch.stack([self._pad_mask(s["penumbra_mask"]) for s in batch]),
-            "background_mask": torch.stack([self._pad_mask(s["background_mask"]) for s in batch]),
+            "penumbra_mask": torch.stack([self._pad_mask(s["penumbra_mask"], replicate=True) for s in batch]),
+            "background_mask": torch.stack([self._pad_background_mask(s["background_mask"]) for s in batch]),
             "kind": torch.stack([s["kind"] for s in batch]),
             "h5_path": [s["h5_path"] for s in batch],
         }

@@ -24,6 +24,7 @@ from .augmentation import AugmentationPipeline
 from .base import _compute_penumbra
 from .config import AugmentationConfig
 from .kind import DatasetKind
+from .utils import _pad_or_crop_centered
 
 # Tissue class names (excluding background)
 BRAINWEB_CLASSES = ("skl", "gry", "wht", "csf", "mrw", "dura", "fat", "fat2", "mus", "m-s", "ves")
@@ -330,6 +331,19 @@ class BrainwebQuantitativeSampler(Dataset[dict[str, Any]]):
 
         if self.kind in (DatasetKind.T1MAP, DatasetKind.T2MAP):
             image = image.masked_fill(~signal_mask, 0.0)
+
+        if self.penumbra_width < 0:
+            pad_width = max(signal_mask.shape)
+        else:
+            pad_width = self.penumbra_width
+
+        if pad_width > 0:
+            h, w = signal_mask.shape
+            signal_mask = _pad_or_crop_centered(
+                signal_mask.float(),
+                h + 2 * pad_width,
+                w + 2 * pad_width,
+            ).bool()
 
         # Compute background and penumbra masks
         background_mask = ~signal_mask

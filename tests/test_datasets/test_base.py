@@ -7,6 +7,7 @@ import torch
 
 from score_qmri.datasets.base import BaseMRIDataset
 from score_qmri.datasets.kind import DatasetKind
+from score_qmri.datasets.utils import _pad_or_crop_centered
 
 
 class DummyDataset(BaseMRIDataset):
@@ -73,8 +74,12 @@ def test_base_dataset_getitem_returns_correct_keys(sample_h5_file):
     sample = dataset[0]
 
     assert set(sample.keys()) == {"image", "penumbra_mask", "background_mask", "kind", "h5_path"}
-    assert sample["image"].shape == (64, 64)
-    assert sample["background_mask"].shape == (64, 64)
+    image = sample["image"]
+    background_mask = sample["background_mask"]
+    h, w = image.shape
+    pad_width = dataset.penumbra_width if dataset.penumbra_width >= 0 else max(h, w)
+    expected_shape = (h + 2 * pad_width, w + 2 * pad_width)
+    assert background_mask.shape == expected_shape
     assert sample["background_mask"].dtype == torch.bool
     assert sample["kind"].item() == DatasetKind.T1W_MAGNITUDE.value
 
@@ -85,8 +90,27 @@ def test_base_dataset_mask_is_nonzero_pixels(sample_h5_file):
     sample = dataset[0]
 
     image, background_mask = sample["image"], sample["background_mask"]
+    background_mask = _pad_or_crop_centered(background_mask.float(), *image.shape).bool()
     signal_mask = ~background_mask
     assert torch.all((image.abs() > 1e-6) == signal_mask)
+
+
+def test_penumbra_padding_extends_beyond_border(tmp_path):
+    """Penumbra should extend into padded region when signal touches border."""
+    h5_path = tmp_path / "border_signal.h5"
+    data = np.zeros((1, 4, 4), dtype=np.float32)
+    data[0, 0, 0] = 1.0
+
+    with h5py.File(h5_path, "w") as f:
+        f.create_dataset("subject_001", data=data)
+
+    dataset = DummyDataset(str(h5_path), kind=DatasetKind.T1W_MAGNITUDE, penumbra_width=2)
+    sample = dataset[0]
+    penumbra_mask = sample["penumbra_mask"]
+
+    assert penumbra_mask.shape == (8, 8)
+    assert penumbra_mask[0, 2].item()
+    assert not penumbra_mask[0, 0].item()
 
 
 def test_base_dataset_h5_caching(sample_h5_file):
