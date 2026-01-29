@@ -3,6 +3,7 @@
 Diffusion model framework for learning MRI priors (2-channel real/imag or mag/zeros) for qMRI reconstruction.
 
 ## Highlights
+
 - VE-SDE (EDM/Karras) diffusion with dual x₀ heads (main + aux)
 - FiLM conditioning on log(σ) + dataset kind
 - Pre-Norm UNet with optional SDPA attention (`attention_levels`)
@@ -11,12 +12,14 @@ Diffusion model framework for learning MRI priors (2-channel real/imag or mag/ze
 - EDM validation sampling with fixed noise
 
 ## Quick Start
+
 ```bash
 source .venv/bin/activate
 score-qmri-train fit --config config.yaml
 ```
 
 ## Key Config (config.yaml)
+
 ```yaml
 # Values shown are defaults in code unless explicitly set in config.yaml.
 model:
@@ -36,9 +39,9 @@ model:
     train_clip: 1.2
     sample_clip: 1.0
     kind_scales:
-      T1MAP: 0.0003
-      T2MAP: 0.005
-      T2STARMAP: 0.01
+      T1MAP: 0.25
+      T2MAP: 2
+      T2STARMAP: 8
 
 # Optional overrides (defaults in code)
 # model.base_channels: 64
@@ -56,8 +59,8 @@ trainer:
 
 ```
 
-
 ## Dev
+
 ```bash
 pytest
 ruff check .
@@ -67,6 +70,7 @@ pre-commit run --all-files
 ```
 
 ## References
+
 - Karras et al., NeurIPS 2022 (EDM)
 - Song et al., ICLR 2021 (Score-Based SDEs)
 - Chung et al., ICLR 2023 (DPS)

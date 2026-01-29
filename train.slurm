@@ -12,46 +12,52 @@
 #SBATCH --error=logs/%x-%j.err
 #SBATCH --array=1-2%1
 
-JOB_NAME="score-training"
+set -euo pipefail
 
-HOST="$(hostname -s)"
-#export TRITON_CACHE_DIR="/scratch2/fast/zimmer08/triton/${HOST}/${SLURM_JOB_ID}"
-export TRITON_CACHE_DIR=/dev/shm/${USER}/${JOB_NAME}-triton
-mkdir -p "${TRITON_CACHE_DIR}"
+JOB_NAME="score-training"
+SCRIPT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+
+echo "=== Job Setup ==="
+echo "Host: $(hostname -s)"
+echo "Script dir: ${SCRIPT_DIR}"
 
 mkdir -p logs
 
-SCRIPT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-if [[ -z "${PYTHON}" && -x "${SCRIPT_DIR}/.venv/bin/python" ]]; then
+# Triton cache in shared memory for speed
+export TRITON_CACHE_DIR="/dev/shm/${USER}/${JOB_NAME}-triton"
+mkdir -p "${TRITON_CACHE_DIR}"
+
+# Sync datasets from storage to local (skips unchanged files)
+echo "=== Dataset Sync ==="
+rsync -av --progress "${SCRIPT_DIR}/storage/" "${SCRIPT_DIR}/datasets/"
+
+# Python interpreter
+if [[ -z "${PYTHON:-}" && -x "${SCRIPT_DIR}/.venv/bin/python" ]]; then
     PYTHON="${SCRIPT_DIR}/.venv/bin/python"
 fi
-if [[ -z "${PYTHON}" ]]; then
-    echo "Error: PYTHON not set and ${SCRIPT_DIR}/.venv/bin/python not found"
+if [[ -z "${PYTHON:-}" ]]; then
+    echo "Error: PYTHON not set and .venv/bin/python not found"
     exit 1
 fi
+echo "Python: ${PYTHON}"
 
-# Proxy setup
-unset http_proxy
-unset https_proxy
-unset HTTP_PROXY
-unset HTTPS_PROXY
+# Proxy (proxychains for outbound connections)
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 export PROXYCHAINS_QUIET_MODE=1
 export PROXYCHAINS_CONF_FILE="/scratch/${USER}/proxychains/proxychains.conf"
 export LD_PRELOAD="/scratch/${USER}/proxychains/libproxychains.so.4"
 
-# PyTorch/CUDA config
+# PyTorch / NCCL
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export WANDB_X_REQUIRE_LEGACY_SERVICE=true  # Rust core does not work with proxy
-#export NCCL_IB_DISABLE=1                    # Disable InfiniBand (unstable)
-#export NCCL_P2P_DISABLE=1                   # Disable P2P (unstable)
+export WANDB_X_REQUIRE_LEGACY_SERVICE=true  # Rust core incompatible with proxy
 export NCCL_SOCKET_IFNAME=en
 
+# Run
 RUN_NAME="${JOB_NAME}-${SLURM_ARRAY_JOB_ID}"
-
-echo "Starting training for Job Name: ${RUN_NAME}"
-echo "Slurm Task ID: ${SLURM_ARRAY_TASK_ID}"
+echo "=== Starting Training ==="
+echo "Run: ${RUN_NAME}, Array Task: ${SLURM_ARRAY_TASK_ID}"
 
 srun --unbuffered "${PYTHON}" -u -m score_qmri.cli fit \
-    --trainer.num_nodes=$SLURM_JOB_NUM_NODES \
+    --trainer.num_nodes="${SLURM_JOB_NUM_NODES}" \
     --job_name "${RUN_NAME}" \
     --config config.yaml "$@"

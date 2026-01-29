@@ -32,7 +32,7 @@ from .unet import UNet
 DEFAULT_KIND_SCALES: dict[str, float] = {
     "T1MAP": 1 / 4,
     "T2MAP": 2,
-    "T2STARMAP": 5,
+    "T2STARMAP": 8,
 }
 
 
