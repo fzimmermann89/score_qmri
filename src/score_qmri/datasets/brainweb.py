@@ -372,7 +372,7 @@ _QUALITATIVE_T1_KINDS = frozenset({DatasetKind.T1W_MAGNITUDE, DatasetKind.COMPLE
 _QUALITATIVE_ALL_KINDS = _QUALITATIVE_MAGNITUDE_KINDS | _QUALITATIVE_COMPLEX_KINDS
 
 
-class BrainwebQualitativeSampler(Dataset[dict[str, Any]]):
+class BrainwebQualitativeDataset(Dataset[dict[str, Any]]):
     """Dataset for Brainweb qualitative images (T1W, T2W) in magnitude or complex format."""
 
     def __init__(

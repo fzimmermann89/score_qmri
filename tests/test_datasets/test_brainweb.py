@@ -6,7 +6,7 @@ import h5py
 import numpy as np
 import torch
 
-from score_qmri.datasets.brainweb import BrainwebQualitativeSampler, BrainwebQuantitativeSampler, BrainwebTissue
+from score_qmri.datasets.brainweb import BrainwebQualitativeDataset, BrainwebQuantitativeSampler, BrainwebTissue
 from score_qmri.datasets.kind import DatasetKind
 
 
@@ -123,7 +123,7 @@ def test_brainweb_qualitative_t1w_t2w(tmp_path: Path) -> None:
     expected_t1w = m0 * np.sin(np.deg2rad(flip)) * (1.0 - e1) / (1.0 - np.cos(np.deg2rad(flip)) * e1)
     expected_t1w *= np.exp(-te / t2)
 
-    t1_ds = BrainwebQualitativeSampler(
+    t1_ds = BrainwebQualitativeDataset(
         str(h5_path),
         kind=DatasetKind.T1W_MAGNITUDE,
         parameters=params,
@@ -142,7 +142,7 @@ def test_brainweb_qualitative_t1w_t2w(tmp_path: Path) -> None:
     te_t2w = 0.090
     expected_t2w = m0 * (1.0 - np.exp(-tr_t2w / t1)) * np.exp(-te_t2w / t2)
 
-    t2_ds = BrainwebQualitativeSampler(
+    t2_ds = BrainwebQualitativeDataset(
         str(h5_path),
         kind=DatasetKind.T2W_MAGNITUDE,
         parameters=params,
@@ -232,7 +232,7 @@ def test_brainweb_qualitative_complex(tmp_path: Path) -> None:
     flip = 20.0
 
     # Test COMPLEX_T1W_COIL_COMBINED
-    t1_complex_ds = BrainwebQualitativeSampler(
+    t1_complex_ds = BrainwebQualitativeDataset(
         str(h5_path),
         kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED,
         parameters=params,
@@ -251,7 +251,7 @@ def test_brainweb_qualitative_complex(tmp_path: Path) -> None:
     assert t1_complex_sample["image"].abs().mean() > 0
 
     # Compare magnitude with corresponding magnitude dataset
-    t1_mag_ds = BrainwebQualitativeSampler(
+    t1_mag_ds = BrainwebQualitativeDataset(
         str(h5_path),
         kind=DatasetKind.T1W_MAGNITUDE,
         parameters=params,
@@ -272,7 +272,7 @@ def test_brainweb_qualitative_complex(tmp_path: Path) -> None:
     # Test COMPLEX_T2W_COIL_COMBINED
     tr_t2w = 3.0
     te_t2w = 0.090
-    t2_complex_ds = BrainwebQualitativeSampler(
+    t2_complex_ds = BrainwebQualitativeDataset(
         str(h5_path),
         kind=DatasetKind.COMPLEX_T2W_COIL_COMBINED,
         parameters=params,
