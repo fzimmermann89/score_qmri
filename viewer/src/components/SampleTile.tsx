@@ -85,7 +85,7 @@ export function SampleTile({
             val = Math.sqrt(real * real + imag * imag)
             break
         }
-        
+
         const gray = Math.floor(Math.min(1, Math.max(0, val)) * 255)
         r = gray
         g = gray

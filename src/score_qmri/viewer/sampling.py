@@ -16,8 +16,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from score_qmri.datasets.kind import DatasetKind
-from score_qmri.models.diffusion import DEFAULT_KIND_SCALES
 from score_qmri.datasets.lightning import Collate, ConstantSchedule
+from score_qmri.models.diffusion import DEFAULT_KIND_SCALES
 
 if TYPE_CHECKING:
     from score_qmri.datasets.lightning import DatasetConfig
@@ -265,7 +265,6 @@ class SampleManager:
             labels=labels,
             kinds=kinds,
         )
-
 
     def _apply_kind_scales(self, images: torch.Tensor, kinds: list[str]) -> torch.Tensor:
         """Apply per-kind denormalization for mapping kinds only."""

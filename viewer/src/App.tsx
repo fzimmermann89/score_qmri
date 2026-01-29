@@ -135,11 +135,11 @@ function App() {
       sum += v
       sumSq += v * v
     }
-    
+
     const mean = sum / len
     const variance = (sumSq / len) - (mean * mean)
     const std = Math.sqrt(Math.max(0, variance))
-    
+
     // 99.5th percentile
     const p995Idx = Math.floor(len * 0.995)
     const p995 = sorted[p995Idx] ?? 0
