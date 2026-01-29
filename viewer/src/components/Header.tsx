@@ -1,8 +1,11 @@
-import type { Dataset, KindInfo, ViewerMode } from '../types'
+import type { Dataset, KindInfo, ViewerMode, ComplexRenderMode } from '../types'
 
 interface HeaderProps {
   mode: ViewerMode
   onModeChange: (mode: ViewerMode) => void
+  complexRenderMode: ComplexRenderMode
+  onComplexRenderModeChange: (mode: ComplexRenderMode) => void
+  stats: { std: number; p995: number } | null
   datasets: Dataset[]
   datasetsByKind: Record<string, Dataset[]>
   kinds: KindInfo[]
@@ -21,6 +24,9 @@ interface HeaderProps {
 export function Header({
   mode,
   onModeChange,
+  complexRenderMode,
+  onComplexRenderModeChange,
+  stats,
   datasetsByKind,
   kinds,
   selectedDataset,
@@ -120,6 +126,21 @@ export function Header({
         <span className="text-blue-400">Background</span>
       </label>
 
+      {/* Complex Render Mode */}
+      <div className="flex rounded overflow-hidden border border-gray-600" title="Complex Render Mode">
+        <select
+          value={complexRenderMode}
+          onChange={(e) => onComplexRenderModeChange(e.target.value as ComplexRenderMode)}
+          className="bg-gray-700 text-gray-300 text-sm px-2 py-1 outline-none hover:bg-gray-600 cursor-pointer"
+        >
+          <option value="color">Color</option>
+          <option value="magnitude">Magnitude</option>
+          <option value="phase">Phase</option>
+          <option value="real">Real</option>
+          <option value="imag">Imag</option>
+        </select>
+      </div>
+
       {/* Reload button */}
       <button
         onClick={onReload}
@@ -129,8 +150,15 @@ export function Header({
         Reload
       </button>
 
-      {/* Hint */}
-      <div className="text-gray-500 text-xs">Press Space for new samples</div>
+      {/* Stats & Hint */}
+      <div className="ml-auto flex flex-col items-end gap-0.5">
+        {stats && (
+          <div className="text-xs font-mono text-gray-300">
+            std: {stats.std.toFixed(3)} | p99.5: {stats.p995.toFixed(3)}
+          </div>
+        )}
+        <div className="text-gray-500 text-xs">Press Space for new samples</div>
+      </div>
     </header>
   )
 }

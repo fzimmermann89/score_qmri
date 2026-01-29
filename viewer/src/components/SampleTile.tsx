@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import type { ComplexRenderMode } from '../types'
 
 interface SampleTileProps {
   /** Float32 image data for this tile (2*H*W values) */
@@ -19,6 +20,8 @@ interface SampleTileProps {
   label?: string
   /** Dataset kind (to determine rendering mode) */
   kind?: string
+  /** Complex rendering mode */
+  complexRenderMode: ComplexRenderMode
 }
 
 export function SampleTile({
@@ -31,6 +34,7 @@ export function SampleTile({
   showBackground,
   label,
   kind,
+  complexRenderMode,
 }: SampleTileProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -52,24 +56,40 @@ export function SampleTile({
       let g = 0
       let b = 0
 
-      if (isComplex) {
+      const real = imageData[i]
+      const imag = imageData[height * width + i]
+
+      // For non-complex data, always use grayscale/magnitude rendering
+      const mode = isComplex ? complexRenderMode : 'magnitude'
+
+      if (mode === 'color') {
         // Complex: Real -> Red, Imag -> Green
-        const real = imageData[i]
-        const imag = imageData[height * width + i]
-        
         r = Math.floor(Math.min(1, Math.max(0, real)) * 255)
         g = Math.floor(Math.min(1, Math.max(0, imag)) * 255)
         b = 0
       } else {
-        // Magnitude/Scalar: Grayscale
-        const real = imageData[i]
-        const imag = imageData[height * width + i]
-        const mag = Math.sqrt(real * real + imag * imag)
-        const val = Math.floor(Math.min(1, Math.max(0, mag)) * 255)
+        let val = 0
+        switch (mode) {
+          case 'real':
+            val = real
+            break
+          case 'imag':
+            val = imag
+            break
+          case 'phase':
+            // Map [-PI, PI] to [0, 1]
+            val = (Math.atan2(imag, real) + Math.PI) / (2 * Math.PI)
+            break
+          case 'magnitude':
+          default:
+            val = Math.sqrt(real * real + imag * imag)
+            break
+        }
         
-        r = val
-        g = val
-        b = val
+        const gray = Math.floor(Math.min(1, Math.max(0, val)) * 255)
+        r = gray
+        g = gray
+        b = gray
       }
 
       // Apply overlays with transparency
@@ -96,7 +116,7 @@ export function SampleTile({
     }
 
     ctx.putImageData(imgData, 0, 0)
-  }, [imageData, height, width, penumbraMask, backgroundMask, showPenumbra, showBackground, kind])
+  }, [imageData, height, width, penumbraMask, backgroundMask, showPenumbra, showBackground, kind, complexRenderMode])
 
   return (
     <div className="relative">

@@ -1,5 +1,5 @@
 import { SampleTile } from './SampleTile'
-import type { SampleData } from '../types'
+import type { SampleData, ComplexRenderMode } from '../types'
 
 interface SampleGridProps {
   /** Sample data from API */
@@ -14,6 +14,10 @@ interface SampleGridProps {
   loading: boolean
   /** Error message if any */
   error: string | null
+  /** Complex rendering mode */
+  complexRenderMode: ComplexRenderMode
+  /** Default kind if not specified in sample data */
+  defaultKind?: string
 }
 
 const ROWS = 3
@@ -26,6 +30,8 @@ export function SampleGrid({
   showLabels,
   loading,
   error,
+  complexRenderMode,
+  defaultKind,
 }: SampleGridProps) {
   if (error) {
     return (
@@ -74,7 +80,7 @@ export function SampleGrid({
       penumbra,
       background,
       label: showLabels && sampleData.labels[i] ? sampleData.labels[i] : undefined,
-      kind: sampleData.kinds ? sampleData.kinds[i] : undefined,
+      kind: (sampleData.kinds && sampleData.kinds[i]) ? sampleData.kinds[i] : defaultKind,
     })
   }
 
@@ -98,6 +104,7 @@ export function SampleGrid({
           showBackground={showBackground}
           label={tile.label}
           kind={tile.kind}
+          complexRenderMode={complexRenderMode}
         />
       ))}
     </div>

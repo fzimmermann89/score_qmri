@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from score_qmri.datasets.kind import DatasetKind
+from score_qmri.models.diffusion import DEFAULT_KIND_SCALES
 from score_qmri.datasets.lightning import Collate, ConstantSchedule
 
 if TYPE_CHECKING:
@@ -250,6 +251,9 @@ class SampleManager:
         # Downsample images using area interpolation
         images_down = F.interpolate(images, size=OUTPUT_SIZE, mode="area")
 
+        # Apply per-kind denormalization for mapping kinds (viewer should show full scale)
+        images_down = _apply_kind_scales(images_down, kinds)
+
         # Downsample masks using nearest neighbor
         penumbra_down = F.interpolate(penumbra.unsqueeze(1).float(), size=OUTPUT_SIZE, mode="nearest").squeeze(1)
         background_down = F.interpolate(background.unsqueeze(1).float(), size=OUTPUT_SIZE, mode="nearest").squeeze(1)
@@ -261,6 +265,20 @@ class SampleManager:
             labels=labels,
             kinds=kinds,
         )
+
+
+def _apply_kind_scales(images: torch.Tensor, kinds: list[str]) -> torch.Tensor:
+    """Apply per-kind denormalization for mapping kinds only."""
+    if not kinds:
+        return images
+    scales = torch.ones(len(kinds), device=images.device, dtype=images.dtype)
+    for idx, kind_name in enumerate(kinds):
+        scale = DEFAULT_KIND_SCALES.get(kind_name)
+        if scale is not None:
+            scales[idx] = float(scale)
+    if torch.all(scales == 1):
+        return images
+    return images / scales.view(-1, 1, 1, 1)
 
     def _get_dataset(self, idx: int) -> Dataset[Any]:
         """Get or create dataset instance with training augmentations."""

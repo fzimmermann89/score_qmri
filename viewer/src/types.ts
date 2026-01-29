@@ -42,3 +42,6 @@ export interface KindsResponse {
 
 /** Viewer mode */
 export type ViewerMode = 'dataset' | 'kind'
+
+/** Complex render mode */
+export type ComplexRenderMode = 'color' | 'magnitude' | 'phase' | 'real' | 'imag'

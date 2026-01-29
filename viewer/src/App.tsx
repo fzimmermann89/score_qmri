@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Header } from './components/Header'
 import { SampleGrid } from './components/SampleGrid'
 import { Toast, showToast } from './components/Toast'
@@ -12,7 +12,7 @@ import {
   warmDataset,
   warmKind,
 } from './api'
-import type { Dataset, KindInfo, SampleData, ViewerMode } from './types'
+import type { Dataset, KindInfo, SampleData, ViewerMode, ComplexRenderMode } from './types'
 
 // Number of samples to fetch (3 rows x 7 cols)
 const N_SAMPLES = 21
@@ -20,6 +20,7 @@ const N_SAMPLES = 21
 function App() {
   // State
   const [mode, setMode] = useState<ViewerMode>('dataset')
+  const [complexRenderMode, setComplexRenderMode] = useState<ComplexRenderMode>('color')
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [datasetsByKind, setDatasetsByKind] = useState<Record<string, Dataset[]>>({})
   const [kinds, setKinds] = useState<KindInfo[]>([])
@@ -32,6 +33,105 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [mockMode, setMockMode] = useState(false)
   const [initializing, setInitializing] = useState(true)
+
+  // Stats
+  const stats = useMemo(() => {
+    if (!sampleData) return null
+
+    const { images, shape, kinds } = sampleData
+    const [n, , h, w] = shape
+    const pixelCount = n * h * w
+
+    const defaultKind =
+      mode === 'dataset' && selectedDataset !== null
+        ? datasets.find((d) => d.dataset_idx === selectedDataset)?.kind
+        : undefined
+
+    let values: Float32Array | null = null
+    const imageSize = 2 * h * w
+    const planeSize = h * w
+
+    const writeScalarValues = (isComplex: boolean, mode: ComplexRenderMode) => {
+      if (!values) {
+        values = new Float32Array(pixelCount)
+      }
+      let outIdx = 0
+      for (let i = 0; i < n; i++) {
+        const kindName = kinds?.[i] ?? defaultKind
+        const sampleIsComplex = kindName
+          ? kindName.includes('COMPLEX') || kindName.includes('complex')
+          : isComplex
+        const effectiveMode = sampleIsComplex ? mode : 'magnitude'
+
+        const start = i * imageSize
+        const realStart = start
+        const imagStart = start + planeSize
+
+        for (let j = 0; j < planeSize; j++) {
+          const r = images[realStart + j]
+          const im = images[imagStart + j]
+
+          let val = 0
+          switch (effectiveMode) {
+            case 'real':
+              val = r
+              break
+            case 'imag':
+              val = im
+              break
+            case 'magnitude':
+              val = Math.sqrt(r * r + im * im)
+              break
+            case 'phase':
+              val = (Math.atan2(im, r) + Math.PI) / (2 * Math.PI)
+              break
+            default:
+              val = Math.sqrt(r * r + im * im)
+              break
+          }
+          values[outIdx++] = val
+        }
+      }
+    }
+
+    if (complexRenderMode === 'color') {
+      const anyComplex = (kinds?.[0] ?? defaultKind ?? '').toLowerCase().includes('complex')
+      if (!anyComplex && defaultKind) {
+        writeScalarValues(false, 'magnitude')
+      } else {
+        values = images
+      }
+    } else {
+      writeScalarValues(true, complexRenderMode)
+    }
+
+    if (!values || values.length === 0) return null
+
+    // Compute stats
+    let sum = 0
+    let sumSq = 0
+    const len = values.length
+    
+    // Copy for sorting (to get percentile)
+    const sorted = new Float32Array(values)
+    sorted.sort()
+    
+    for (let i = 0; i < len; i++) {
+      const v = values[i]
+      sum += v
+      sumSq += v * v
+    }
+    
+    const mean = sum / len
+    const variance = (sumSq / len) - (mean * mean)
+    const std = Math.sqrt(Math.max(0, variance))
+    
+    // 99.5th percentile
+    const p995Idx = Math.floor(len * 0.995)
+    const p995 = sorted[p995Idx] ?? 0
+
+    return { std, p995 }
+  }, [sampleData, complexRenderMode, mode, selectedDataset, datasets])
 
   // Load initial data with startup status polling
   useEffect(() => {
@@ -206,6 +306,9 @@ function App() {
       <Header
         mode={mode}
         onModeChange={setMode}
+        complexRenderMode={complexRenderMode}
+        onComplexRenderModeChange={setComplexRenderMode}
+        stats={stats}
         datasets={datasets}
         datasetsByKind={datasetsByKind}
         kinds={kinds}
@@ -222,6 +325,8 @@ function App() {
       />
       <SampleGrid
         sampleData={sampleData}
+        complexRenderMode={complexRenderMode}
+        defaultKind={mode === 'dataset' && selectedDataset !== null ? datasets.find(d => d.dataset_idx === selectedDataset)?.kind : undefined}
         showPenumbra={showPenumbra}
         showBackground={showBackground}
         showLabels={mode === 'kind'}
