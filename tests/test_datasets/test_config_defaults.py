@@ -4,7 +4,7 @@ from score_qmri.datasets.config import COMPLEX_CONFIG, MAGNITUDE_CONFIG
 from score_qmri.datasets.lightning import ComplexDatasetConfig, MagnitudeDatasetConfig
 
 
-def _parse_config(klass: type, data: dict[str, object]):
+def _parse_config(klass: type, data: dict[str, object]):  # type: ignore[no-untyped-def]
     parser = jsonargparse.ArgumentParser()
     parser.add_class_arguments(klass, "dataset")
     cfg = parser.parse_object({"dataset": data})

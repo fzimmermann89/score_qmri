@@ -37,6 +37,17 @@ T2W_TR_RANGE = (3.0, 6.0)
 T2W_TE_RANGE = (0.080, 0.120)
 
 
+_BACKGROUND_PHASE_SCALE_RANGE = (2, 6)
+
+
+def _generate_background_phase(h: int, w: int, phase_std: float) -> Tensor:
+    """Generate slowly varying background phase via random low-res noise upscaling."""
+    scale = int(torch.randint(_BACKGROUND_PHASE_SCALE_RANGE[0], _BACKGROUND_PHASE_SCALE_RANGE[1] + 1, (1,)).item())
+    low_res = torch.randn(1, 1, scale, scale) * phase_std
+    upsampled = torch.nn.functional.interpolate(low_res, size=(h, w), mode="bicubic", align_corners=False)
+    return upsampled[0, 0]
+
+
 def _get_group(file: h5py.File, group_name: str, h5_path: str) -> h5py.Group:
     if group_name not in file:
         available = list(file.keys())
@@ -168,7 +179,7 @@ VALUES_3T_RANDOMIZED: Mapping[str, BrainwebTissue] = MappingProxyType(
 )
 
 
-class BrainwebQuantitativeSampler(Dataset[dict[str, Any]]):
+class BrainwebQuantitativeDataset(Dataset[dict[str, Any]]):
     """Dataset for Brainweb quantitative maps (T1, T2) and complex M0.
 
     Reads tissue class volumes from Brainweb HDF5 and synthesizes quantitative
@@ -186,8 +197,9 @@ class BrainwebQuantitativeSampler(Dataset[dict[str, Any]]):
         scaling_factor: float = 1.0,
         step: int = 1,
         skip_slices: tuple[int, int] = (80, 80),
-        penumbra_width: int = -1,
+        penumbra_width: int = 0,
         subject_id: int | None = None,
+        background_phase_std: float = 0.3,
     ) -> None:
         """
         Parameters
@@ -211,19 +223,22 @@ class BrainwebQuantitativeSampler(Dataset[dict[str, Any]]):
         subject_id
             Subject ID to load from multi-subject file (e.g., 1 for `subject_01`).
             If None, loads all subject groups.
+        background_phase_std
+            Standard deviation of background phase in radians (complex M0 only).
         """
         if kind not in (DatasetKind.T1MAP, DatasetKind.T2MAP, DatasetKind.M0_COMPLEX):
             raise ValueError(f"kind must be T1MAP, T2MAP, or M0_COMPLEX, got {kind}")
 
         self.h5_path = str(Path(h5_path).resolve())
         self.kind = kind
-        self.parameters = parameters
+        self.parameters = dict(parameters)
         self.scaling_factor = scaling_factor
         self.step = step
         self.skip_slices = skip_slices
         self.penumbra_width = penumbra_width
         self.augmentation = AugmentationPipeline(augmentation_config) if augmentation_config else None
         self.subject_id = subject_id
+        self.background_phase_std = background_phase_std
 
         self._h5_file: h5py.File | None = None
 
@@ -288,74 +303,54 @@ class BrainwebQuantitativeSampler(Dataset[dict[str, Any]]):
         classes_uint8 = np.array(dataset[slice_idx])  # (Y, X, C)
         classes = torch.from_numpy(classes_uint8).float() / 255.0  # Normalize to [0, 1]
 
-        # Sample tissue parameters and compute weighted maps
-        r1_values = torch.stack([self.parameters[c].sample_r1() for c in self._classnames])  # (C, 1)
-        r2_values = torch.stack([self.parameters[c].sample_r2() for c in self._classnames])  # (C, 1)
-        m0_values = torch.stack([self.parameters[c].sample_m0() for c in self._classnames])  # (C, 1)
-
-        # Weighted sum: classes @ values -> (Y, X, 1) -> squeeze to (Y, X)
         class_sum = classes.sum(dim=-1)
         weights = classes / (class_sum[..., None] + 1e-8)
+        mask = class_sum > 0.5
 
-        r1_map = (weights @ r1_values)[..., 0]  # (Y, X)
-        r2_map = (weights @ r2_values)[..., 0]  # (Y, X)
-        m0_map = (classes.to(m0_values.dtype) @ m0_values)[..., 0]  # (Y, X) complex
+        match self.kind:
+            case DatasetKind.T1MAP:
+                r1_values = torch.stack([self.parameters[c].sample_r1() for c in self._classnames])
+                image = 1.0 / ((weights @ r1_values)[..., 0] + 1e-8)
+            case DatasetKind.T2MAP:
+                r2_values = torch.stack([self.parameters[c].sample_r2() for c in self._classnames])
+                image = 1.0 / ((weights @ r2_values)[..., 0] + 1e-8)
+            case DatasetKind.M0_COMPLEX:
+                m0_values = torch.stack([self.parameters[c].sample_m0() for c in self._classnames])
+                magnitude = (weights @ m0_values.abs())[..., 0]
+                tissue_phase_map = (weights @ m0_values.angle())[..., 0]
+                h, w = magnitude.shape
+                background_phase = _generate_background_phase(h, w, self.background_phase_std) + torch.rand(1) * 2 * torch.pi
+                image = torch.polar(magnitude, tissue_phase_map + background_phase)
+            case _:
+                raise ValueError(f"Unsupported kind for Brainweb: {self.kind}")
 
-        # Convert R1/R2 to T1/T2 (seconds)
-        t1_map = 1.0 / (r1_map + 1e-8)
-        t2_map = 1.0 / (r2_map + 1e-8)
-
-        # Compute mask from class weights (sum > threshold)
-        signal_mask = class_sum > 0.5
-
-        # Clean mask with 2D conv (remove isolated holes)
-        mask_float = signal_mask.float().unsqueeze(0).unsqueeze(0)  # (1, 1, Y, X)
-        cleaned = torch.nn.functional.conv2d(mask_float, self._mask_kernel, padding=1)
-        signal_mask = (cleaned[0, 0] >= 1).bool()
-
-        # Select output based on kind
-        if self.kind == DatasetKind.T1MAP:
-            image: Tensor = t1_map
-        elif self.kind == DatasetKind.T2MAP:
-            image = t2_map
-        else:  # M0_COMPLEX
-            image = m0_map
-
-        # Apply scaling factor
         if self.scaling_factor != 1.0:
             image = image * self.scaling_factor
 
-        # Apply augmentations
         if self.augmentation is not None:
-            image, signal_mask = self.augmentation(image, signal_mask)
+            image, mask = self.augmentation(image, mask)
 
-        if self.kind in (DatasetKind.T1MAP, DatasetKind.T2MAP):
-            image = image.masked_fill(~signal_mask, 0.0)
+        image[~mask] = 0.0
+        mask = (torch.nn.functional.conv2d((~mask).float()[None, None], self._mask_kernel, padding=1)[0, 0]) < 0.5
 
-        pad_width = max(signal_mask.shape) if self.penumbra_width < 0 else self.penumbra_width
-
-        if pad_width > 0:
-            h, w = signal_mask.shape
-            signal_mask = _pad_or_crop_centered(
-                signal_mask.float(),
-                h + 2 * pad_width,
-                w + 2 * pad_width,
+        if (pad_width := max(mask.shape) if self.penumbra_width < 0 else self.penumbra_width) > 0:
+            mask = _pad_or_crop_centered(
+                mask,
+                mask.shape[0] + 2 * pad_width,
+                mask.shape[1] + 2 * pad_width,
             ).bool()
 
-        # Compute background and penumbra masks
-        background_mask = ~signal_mask
-
         if self.penumbra_width < 0:
-            penumbra_mask = background_mask
+            penumbra_mask = ~mask
         elif self.penumbra_width == 0:
-            penumbra_mask = torch.zeros_like(signal_mask)
+            penumbra_mask = torch.zeros_like(mask)
         else:
-            penumbra_mask = torch.from_numpy(_compute_penumbra(signal_mask.numpy(), self.penumbra_width))
+            penumbra_mask = torch.from_numpy(_compute_penumbra(mask.numpy(), self.penumbra_width))
 
         return {
             "image": image,
             "penumbra_mask": penumbra_mask,
-            "background_mask": background_mask,
+            "background_mask": ~mask,
             "kind": torch.tensor(self.kind.value, dtype=torch.long),
             "h5_path": self.h5_path,
         }
@@ -384,13 +379,12 @@ class BrainwebQualitativeDataset(Dataset[dict[str, Any]]):
         scaling_factor: float = 1.0,
         step: int = 1,
         skip_slices: tuple[int, int] = (80, 80),
-        penumbra_width: int = -1,
+        penumbra_width: int = 0,
         subject_id: int | None = None,
         tr_range: tuple[float, float] | None = None,
         te_range: tuple[float, float] | None = None,
         flip_range: tuple[float, float] | None = None,
-        background_phase_scale: int = 16,
-        background_phase_std: float = 1.57,
+        background_phase_std: float = 0.3,
     ) -> None:
         """
         Parameters
@@ -421,8 +415,6 @@ class BrainwebQualitativeDataset(Dataset[dict[str, Any]]):
             TE range in seconds for acquisition parameter sampling.
         flip_range
             Flip angle range in degrees (T1W only).
-        background_phase_scale
-            Low-res grid size for slowly varying background phase (complex output only).
         background_phase_std
             Standard deviation of background phase in radians (default ~π/2).
         """
@@ -431,7 +423,7 @@ class BrainwebQualitativeDataset(Dataset[dict[str, Any]]):
 
         self.h5_path = str(Path(h5_path).resolve())
         self.kind = kind
-        self.parameters = parameters
+        self.parameters = dict(parameters)
         self.scaling_factor = scaling_factor
         self.step = step
         self.skip_slices = skip_slices
@@ -443,7 +435,6 @@ class BrainwebQualitativeDataset(Dataset[dict[str, Any]]):
         self.tr_range = tr_range or (T1W_TR_RANGE if is_t1 else T2W_TR_RANGE)
         self.te_range = te_range or (T1W_TE_RANGE if is_t1 else T2W_TE_RANGE)
         self.flip_range = flip_range or T1W_FLIP_RANGE
-        self.background_phase_scale = background_phase_scale
         self.background_phase_std = background_phase_std
         self._is_complex = kind in _QUALITATIVE_COMPLEX_KINDS
 
@@ -481,26 +472,6 @@ class BrainwebQualitativeDataset(Dataset[dict[str, Any]]):
         f = self._get_h5_file() if file is None else file
         return _get_group(f, group_name, self.h5_path)
 
-    def _generate_background_phase(self, h: int, w: int) -> Tensor:
-        """Generate slowly varying background phase via low-res noise upscaling.
-
-        Parameters
-        ----------
-        h
-            Output height.
-        w
-            Output width.
-
-        Returns
-        -------
-        Tensor
-            Phase map of shape (h, w) with slowly varying values.
-        """
-        scale = self.background_phase_scale
-        low_res = torch.randn(1, 1, scale, scale) * self.background_phase_std
-        upsampled = torch.nn.functional.interpolate(low_res, size=(h, w), mode="bicubic", align_corners=False)
-        return upsampled[0, 0]
-
     def __len__(self) -> int:
         return self._total_slices
 
@@ -531,63 +502,66 @@ class BrainwebQualitativeDataset(Dataset[dict[str, Any]]):
         class_sum = classes.sum(dim=-1)
         weights = classes / (class_sum[..., None] + 1e-8)
 
-        r1_map = (weights @ r1_values)[..., 0]
-        r2_map = (weights @ r2_values)[..., 0]
+        t1_map = 1.0 / ((weights @ r1_values)[..., 0] + 1e-8)
+        t2_map = 1.0 / ((weights @ r2_values)[..., 0] + 1e-8)
         m0_map = (weights @ m0_values.abs())[..., 0]
-
-        t1_map = 1.0 / (r1_map + 1e-8)
-        t2_map = 1.0 / (r2_map + 1e-8)
 
         tr = torch.empty(1).uniform_(*self.tr_range)
         te = torch.empty(1).uniform_(*self.te_range)
 
-        is_t1 = self.kind in _QUALITATIVE_T1_KINDS
-        if is_t1:
-            flip = torch.deg2rad(torch.empty(1).uniform_(*self.flip_range))
-            e1 = torch.exp(-tr / (t1_map + 1e-8))
-            denom = 1.0 - torch.cos(flip) * e1
-            magnitude = m0_map * torch.sin(flip) * (1.0 - e1) / (denom + 1e-8)
-            magnitude = magnitude * torch.exp(-te / (t2_map + 1e-8))
-        else:
-            magnitude = m0_map * (1.0 - torch.exp(-tr / (t1_map + 1e-8)))
-            magnitude = magnitude * torch.exp(-te / (t2_map + 1e-8))
+        match self.kind:
+            case DatasetKind.T1W_MAGNITUDE | DatasetKind.COMPLEX_T1W_COIL_COMBINED:
+                flip = torch.deg2rad(torch.empty(1).uniform_(*self.flip_range))
+                e1 = torch.exp(-tr / (t1_map + 1e-8))
+                denom = 1.0 - torch.cos(flip) * e1
+                magnitude = m0_map * torch.sin(flip) * (1.0 - e1) / (denom + 1e-8)
+                magnitude = magnitude * torch.exp(-te / (t2_map + 1e-8))
+            case DatasetKind.T2W_MAGNITUDE | DatasetKind.COMPLEX_T2W_COIL_COMBINED:
+                magnitude = m0_map * (1.0 - torch.exp(-tr / (t1_map + 1e-8)))
+                magnitude = magnitude * torch.exp(-te / (t2_map + 1e-8))
+            case _:
+                raise ValueError(f"Unsupported kind for Brainweb qualitative: {self.kind}")
 
         if self.scaling_factor != 1.0:
             magnitude = magnitude * self.scaling_factor
 
-        # Convert to complex if needed
-        if self._is_complex:
-            m0_phase_values = m0_values.angle()  # (C, 1)
-            tissue_phase_map = (weights @ m0_phase_values)[..., 0]  # (Y, X)
-            h, w = magnitude.shape
-            background_phase = self._generate_background_phase(h, w)
-            total_phase = tissue_phase_map + background_phase
-            image: Tensor = torch.polar(magnitude, total_phase)  # complex64
-        else:
-            image = magnitude
+        match self.kind:
+            case DatasetKind.COMPLEX_T1W_COIL_COMBINED | DatasetKind.COMPLEX_T2W_COIL_COMBINED:
+                tissue_phase_map = (weights @ m0_values.angle())[..., 0]
+                h, w = magnitude.shape
+                total_phase = tissue_phase_map + _generate_background_phase(h, w, self.background_phase_std) + torch.rand(1) * 2 * torch.pi
+                image: Tensor = torch.polar(magnitude, total_phase)
+            case DatasetKind.T1W_MAGNITUDE | DatasetKind.T2W_MAGNITUDE:
+                image = magnitude
+            case _:
+                raise ValueError(f"Unsupported kind for Brainweb qualitative: {self.kind}")
 
-        signal_mask = class_sum > 0.5
-        mask_float = signal_mask.float().unsqueeze(0).unsqueeze(0)
-        cleaned = torch.nn.functional.conv2d(mask_float, self._mask_kernel, padding=1)
-        signal_mask = (cleaned[0, 0] >= 1).bool()
+        mask = class_sum > 0.5
 
         if self.augmentation is not None:
-            image, signal_mask = self.augmentation(image, signal_mask)
+            image, mask = self.augmentation(image, mask)
 
-        image = image.masked_fill(~signal_mask, 0.0)
+        image[~mask] = 0.0
+        mask = (torch.nn.functional.conv2d((~mask).float()[None, None], self._mask_kernel, padding=1)[0, 0]) < 0.5
 
-        background_mask = ~signal_mask
+        if (pad_width := max(mask.shape) if self.penumbra_width < 0 else self.penumbra_width) > 0:
+            mask = _pad_or_crop_centered(
+                mask,
+                mask.shape[0] + 2 * pad_width,
+                mask.shape[1] + 2 * pad_width,
+            ).bool()
+
         if self.penumbra_width < 0:
-            penumbra_mask = background_mask
+            penumbra_mask = ~mask
         elif self.penumbra_width == 0:
-            penumbra_mask = torch.zeros_like(signal_mask)
+            penumbra_mask = torch.zeros_like(mask)
         else:
-            penumbra_mask = torch.from_numpy(_compute_penumbra(signal_mask.numpy(), self.penumbra_width))
+            penumbra_mask = torch.from_numpy(_compute_penumbra(mask.numpy(), self.penumbra_width))
 
         return {
             "image": image,
             "penumbra_mask": penumbra_mask,
-            "background_mask": background_mask,
+            "background_mask": ~mask,
             "kind": torch.tensor(self.kind.value, dtype=torch.long),
             "h5_path": self.h5_path,
         }

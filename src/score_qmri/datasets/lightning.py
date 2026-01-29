@@ -10,7 +10,7 @@ from lightning import LightningDataModule
 from torch.utils.data import ConcatDataset, DataLoader
 
 from .batch_sampler import ScheduledBatchSampler
-from .brainweb import VALUES_3T_RANDOMIZED, BrainwebQualitativeDataset, BrainwebQuantitativeSampler, BrainwebTissue
+from .brainweb import VALUES_3T_RANDOMIZED, BrainwebQualitativeDataset, BrainwebQuantitativeDataset, BrainwebTissue
 from .complex import ComplexImageDataset
 from .config import (
     COMPLEX_CONFIG,
@@ -23,7 +23,7 @@ from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
 from .utils import _pad_or_crop_centered
 
-MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset | BrainwebQuantitativeSampler | BrainwebQualitativeDataset
+MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset | BrainwebQuantitativeDataset | BrainwebQualitativeDataset
 
 
 @dataclass(kw_only=True)
@@ -155,9 +155,9 @@ class BrainwebDatasetConfig(BaseDatasetConfig):
     parameters: dict[str, BrainwebTissue] | None = None
     subject_id: int | None = None
 
-    def create(self) -> BrainwebQuantitativeSampler:
+    def create(self) -> BrainwebQuantitativeDataset:
         params = self.parameters if self.parameters is not None else VALUES_3T_RANDOMIZED
-        return BrainwebQuantitativeSampler(
+        return BrainwebQuantitativeDataset(
             h5_path=self.h5_path,
             kind=self.kind,
             parameters=params,
@@ -174,7 +174,7 @@ class BrainwebDatasetConfig(BaseDatasetConfig):
 class BrainwebMagnitudeQualitativeDatasetConfig(BaseDatasetConfig):
     """Configuration for Brainweb magnitude qualitative datasets."""
 
-    type: str = "brainweb_qualitative_magnitude"
+    type: Literal["brainweb_qualitative_magnitude"] = "brainweb_qualitative_magnitude"
     kind: DatasetKind = DatasetKind.T1W_MAGNITUDE
     augmentation_config: AugmentationConfig | None = MAGNITUDE_CONFIG
     scaling_factor: float = 1.0
@@ -186,8 +186,7 @@ class BrainwebMagnitudeQualitativeDatasetConfig(BaseDatasetConfig):
     tr_range: tuple[float, float] | None = None
     te_range: tuple[float, float] | None = None
     flip_range: tuple[float, float] | None = None
-    background_phase_scale: int = 16
-    background_phase_std: float = 1.57
+    background_phase_std: float = 0.3
 
     _VALID_KINDS: ClassVar[frozenset[DatasetKind]] = frozenset(
         {
@@ -214,7 +213,6 @@ class BrainwebMagnitudeQualitativeDatasetConfig(BaseDatasetConfig):
             tr_range=self.tr_range,
             te_range=self.te_range,
             flip_range=self.flip_range,
-            background_phase_scale=self.background_phase_scale,
             background_phase_std=self.background_phase_std,
         )
 
@@ -223,7 +221,7 @@ class BrainwebMagnitudeQualitativeDatasetConfig(BaseDatasetConfig):
 class BrainwebComplexQualitativeDatasetConfig(BaseDatasetConfig):
     """Configuration for Brainweb complex qualitative datasets."""
 
-    type: str = "brainweb_qualitative_complex"
+    type: Literal["brainweb_qualitative_complex"] = "brainweb_qualitative_complex"
     kind: DatasetKind = DatasetKind.COMPLEX_T1W_COIL_COMBINED
     augmentation_config: AugmentationConfig | None = COMPLEX_CONFIG
     scaling_factor: float = 1.0
@@ -235,8 +233,7 @@ class BrainwebComplexQualitativeDatasetConfig(BaseDatasetConfig):
     tr_range: tuple[float, float] | None = None
     te_range: tuple[float, float] | None = None
     flip_range: tuple[float, float] | None = None
-    background_phase_scale: int = 16
-    background_phase_std: float = 1.57
+    background_phase_std: float = 0.3
 
     _VALID_KINDS: ClassVar[frozenset[DatasetKind]] = frozenset(
         {
@@ -263,7 +260,6 @@ class BrainwebComplexQualitativeDatasetConfig(BaseDatasetConfig):
             tr_range=self.tr_range,
             te_range=self.te_range,
             flip_range=self.flip_range,
-            background_phase_scale=self.background_phase_scale,
             background_phase_std=self.background_phase_std,
         )
 

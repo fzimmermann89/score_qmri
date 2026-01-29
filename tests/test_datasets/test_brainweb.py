@@ -1,4 +1,4 @@
-"""Tests for BrainwebQuantitativeSampler."""
+"""Tests for BrainwebQuantitativeDataset."""
 
 from pathlib import Path
 
@@ -6,7 +6,7 @@ import h5py
 import numpy as np
 import torch
 
-from score_qmri.datasets.brainweb import BrainwebQualitativeDataset, BrainwebQuantitativeSampler, BrainwebTissue
+from score_qmri.datasets.brainweb import BrainwebQualitativeDataset, BrainwebQuantitativeDataset, BrainwebTissue
 from score_qmri.datasets.kind import DatasetKind
 
 
@@ -52,7 +52,7 @@ def test_brainweb_t1_t2_maps(tmp_path: Path) -> None:
     _write_brainweb_h5(h5_path, classes, classnames)
     params = _fixed_parameters(classnames)
 
-    t1_ds = BrainwebQuantitativeSampler(
+    t1_ds = BrainwebQuantitativeDataset(
         str(h5_path),
         kind=DatasetKind.T1MAP,
         parameters=params,
@@ -66,7 +66,7 @@ def test_brainweb_t1_t2_maps(tmp_path: Path) -> None:
     assert torch.allclose(t1_sample["image"].mean(), torch.tensor(expected_t1))
     assert t1_sample["kind"].item() == DatasetKind.T1MAP.value
 
-    t2_ds = BrainwebQuantitativeSampler(
+    t2_ds = BrainwebQuantitativeDataset(
         str(h5_path),
         kind=DatasetKind.T2MAP,
         parameters=params,
@@ -91,7 +91,7 @@ def test_brainweb_m0_complex(tmp_path: Path) -> None:
     _write_brainweb_h5(h5_path, classes, classnames)
     params = _fixed_parameters(classnames)
 
-    dataset = BrainwebQuantitativeSampler(
+    dataset = BrainwebQuantitativeDataset(
         str(h5_path),
         kind=DatasetKind.M0_COMPLEX,
         parameters=params,
@@ -174,7 +174,7 @@ def test_brainweb_multi_subject_format(tmp_path: Path) -> None:
         classes2 = _make_classes((2, 4, 5, len(classnames)), class_index=2)
         _write_brainweb_h5_group(f, "subject_02", classes2, classnames, subject=2)
 
-    ds1 = BrainwebQuantitativeSampler(
+    ds1 = BrainwebQuantitativeDataset(
         str(h5_path),
         kind=DatasetKind.T1MAP,
         parameters=params,
@@ -187,7 +187,7 @@ def test_brainweb_multi_subject_format(tmp_path: Path) -> None:
     expected_t1_subject1 = _value(params[classnames[1]].t1) * 0.5
     assert torch.allclose(sample1["image"].mean(), torch.tensor(expected_t1_subject1))
 
-    ds2 = BrainwebQuantitativeSampler(
+    ds2 = BrainwebQuantitativeDataset(
         str(h5_path),
         kind=DatasetKind.T1MAP,
         parameters=params,
@@ -203,7 +203,7 @@ def test_brainweb_multi_subject_format(tmp_path: Path) -> None:
     # Verify they come from different subjects
     assert not torch.allclose(sample1["image"], sample2["image"])
 
-    ds_all = BrainwebQuantitativeSampler(
+    ds_all = BrainwebQuantitativeDataset(
         str(h5_path),
         kind=DatasetKind.T1MAP,
         parameters=params,
@@ -241,8 +241,7 @@ def test_brainweb_qualitative_complex(tmp_path: Path) -> None:
         tr_range=(tr, tr),
         te_range=(te, te),
         flip_range=(flip, flip),
-        background_phase_scale=4,
-        background_phase_std=0.5,
+        background_phase_std=0.3,
     )
     t1_complex_sample = t1_complex_ds[0]
     assert t1_complex_sample["image"].is_complex(), "Complex T1W should be complex"
@@ -280,8 +279,7 @@ def test_brainweb_qualitative_complex(tmp_path: Path) -> None:
         skip_slices=(0, 0),
         tr_range=(tr_t2w, tr_t2w),
         te_range=(te_t2w, te_t2w),
-        background_phase_scale=4,
-        background_phase_std=0.5,
+        background_phase_std=0.3,
     )
     t2_complex_sample = t2_complex_ds[0]
     assert t2_complex_sample["image"].is_complex(), "Complex T2W should be complex"

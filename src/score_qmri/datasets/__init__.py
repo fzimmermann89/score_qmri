@@ -3,7 +3,7 @@
 from .augmentation import AugmentationPipeline, PhaseAugmentation
 from .base import BaseMRIDataset
 from .batch_sampler import ScheduledBatchSampler
-from .brainweb import VALUES_3T_RANDOMIZED, BrainwebQualitativeDataset, BrainwebQuantitativeSampler, BrainwebTissue
+from .brainweb import VALUES_3T_RANDOMIZED, BrainwebQualitativeDataset, BrainwebQuantitativeDataset, BrainwebTissue
 from .complex import ComplexImageDataset
 from .config import (
     COMPLEX_CONFIG,
@@ -47,7 +47,7 @@ __all__ = [
     "NUM_DATASET_KINDS",
     "MagnitudeImageDataset",
     "MappingDataset",
-    "BrainwebQuantitativeSampler",
+    "BrainwebQuantitativeDataset",
     "BrainwebQualitativeDataset",
     "BrainwebTissue",
     "VALUES_3T_RANDOMIZED",

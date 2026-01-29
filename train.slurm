@@ -2,11 +2,11 @@
 #SBATCH --job-name=score
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
-#SBATCH --time=3-00:00:00
-#SBATCH --mem=128GB
-#SBATCH --gres=gpu:L40S:4
+#SBATCH --time=4-00:00:00
+#SBATCH --mem=256GB
+#SBATCH --gres=gpu:H100:4
 #SBATCH --partition=equipment_typeG
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --signal=SIGUSR1@90
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
@@ -42,8 +42,9 @@ export LD_PRELOAD="/scratch/${USER}/proxychains/libproxychains.so.4"
 # PyTorch/CUDA config
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export WANDB_X_REQUIRE_LEGACY_SERVICE=true  # Rust core does not work with proxy
-export NCCL_IB_DISABLE=1                    # Disable InfiniBand (unstable)
-export NCCL_P2P_DISABLE=1                   # Disable P2P (unstable)
+#export NCCL_IB_DISABLE=1                    # Disable InfiniBand (unstable)
+#export NCCL_P2P_DISABLE=1                   # Disable P2P (unstable)
+export NCCL_SOCKET_IFNAME=en
 
 RUN_NAME="${JOB_NAME}-${SLURM_ARRAY_JOB_ID}"
 
@@ -51,5 +52,6 @@ echo "Starting training for Job Name: ${RUN_NAME}"
 echo "Slurm Task ID: ${SLURM_ARRAY_TASK_ID}"
 
 srun --unbuffered "${PYTHON}" -u -m score_qmri.cli fit \
+    --trainer.num_nodes=$SLURM_JOB_NUM_NODES \
     --job_name "${RUN_NAME}" \
-    --config config.yaml
+    --config config.yaml "$@"
