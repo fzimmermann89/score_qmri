@@ -267,7 +267,7 @@ class SampleManager:
         )
 
     def _apply_kind_scales(self, images: torch.Tensor, kinds: list[str]) -> torch.Tensor:
-        """Apply per-kind denormalization for mapping kinds only."""
+        """Apply per-kind normalization for mapping kinds only."""
         if not kinds:
             return images
         scales = torch.ones(len(kinds), device=images.device, dtype=images.dtype)
@@ -277,7 +277,7 @@ class SampleManager:
                 scales[idx] = float(scale)
         if torch.all(scales == 1):
             return images
-        return images / scales.view(-1, 1, 1, 1)
+        return images * scales.view(-1, 1, 1, 1)
 
     def _get_dataset(self, idx: int) -> Dataset[Any]:
         """Get or create dataset instance with training augmentations."""
