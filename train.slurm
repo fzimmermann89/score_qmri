@@ -23,12 +23,15 @@ echo "Script dir: ${SCRIPT_DIR}"
 
 mkdir -p logs
 
+ulimit -n 16384
+
 # Triton cache in shared memory for speed
 export TRITON_CACHE_DIR="/dev/shm/${USER}/${JOB_NAME}-triton"
 mkdir -p "${TRITON_CACHE_DIR}"
 
 # Sync datasets from storage to local (skips unchanged files)
 echo "=== Dataset Sync ==="
+mkdir -p "$(readlink -m "${SCRIPT_DIR}/datasets")"
 rsync -av --progress "${SCRIPT_DIR}/storage/" "${SCRIPT_DIR}/datasets/"
 
 # Python interpreter
@@ -59,5 +62,6 @@ echo "Run: ${RUN_NAME}, Array Task: ${SLURM_ARRAY_TASK_ID}"
 
 srun --unbuffered "${PYTHON}" -u -m score_qmri.cli fit \
     --trainer.num_nodes="${SLURM_JOB_NUM_NODES}" \
+    --trainer.devices="${SLURM_NTASKS_PER_NODE}" \
     --job_name "${RUN_NAME}" \
     --config config.yaml "$@"
