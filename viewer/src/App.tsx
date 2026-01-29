@@ -38,7 +38,7 @@ function App() {
   const stats = useMemo(() => {
     if (!sampleData) return null
 
-    const { images, shape, kinds } = sampleData
+    const { images, shape, kinds, background } = sampleData
     const [n, , h, w] = shape
     const pixelCount = n * h * w
 
@@ -47,15 +47,13 @@ function App() {
         ? datasets.find((d) => d.dataset_idx === selectedDataset)?.kind
         : undefined
 
-    let values: Float32Array | null = null
+    const maxValues = complexRenderMode === 'color' ? pixelCount * 2 : pixelCount
+    const values = new Float32Array(maxValues)
+    let valueCount = 0
     const imageSize = 2 * h * w
     const planeSize = h * w
 
     const writeScalarValues = (isComplex: boolean, mode: ComplexRenderMode) => {
-      if (!values) {
-        values = new Float32Array(pixelCount)
-      }
-      let outIdx = 0
       for (let i = 0; i < n; i++) {
         const kindName = kinds?.[i] ?? defaultKind
         const sampleIsComplex = kindName
@@ -67,7 +65,11 @@ function App() {
         const realStart = start
         const imagStart = start + planeSize
 
+        const maskStart = i * planeSize
         for (let j = 0; j < planeSize; j++) {
+          if (background && background[maskStart + j]) {
+            continue
+          }
           const r = images[realStart + j]
           const im = images[imagStart + j]
 
@@ -89,7 +91,7 @@ function App() {
               val = Math.sqrt(r * r + im * im)
               break
           }
-          values[outIdx++] = val
+          values[valueCount++] = val
         }
       }
     }
@@ -99,25 +101,37 @@ function App() {
       if (!anyComplex && defaultKind) {
         writeScalarValues(false, 'magnitude')
       } else {
-        values = images
+        for (let i = 0; i < n; i++) {
+          const maskStart = i * planeSize
+          const start = i * imageSize
+          const realStart = start
+          const imagStart = start + planeSize
+          for (let j = 0; j < planeSize; j++) {
+            if (background && background[maskStart + j]) {
+              continue
+            }
+            values[valueCount++] = images[realStart + j]
+            values[valueCount++] = images[imagStart + j]
+          }
+        }
       }
     } else {
       writeScalarValues(true, complexRenderMode)
     }
 
-    if (!values || values.length === 0) return null
+    if (valueCount === 0) return null
 
     // Compute stats
     let sum = 0
     let sumSq = 0
-    const len = values.length
-    
+    const len = valueCount
+
     // Copy for sorting (to get percentile)
-    const sorted = new Float32Array(values)
+    const sorted = values.slice(0, valueCount)
     sorted.sort()
-    
+
     for (let i = 0; i < len; i++) {
-      const v = values[i]
+      const v = sorted[i]
       sum += v
       sumSq += v * v
     }
