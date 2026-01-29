@@ -17,6 +17,8 @@ interface SampleTileProps {
   showBackground: boolean
   /** Optional label to show */
   label?: string
+  /** Dataset kind (to determine rendering mode) */
+  kind?: string
 }
 
 export function SampleTile({
@@ -28,6 +30,7 @@ export function SampleTile({
   showPenumbra,
   showBackground,
   label,
+  kind,
 }: SampleTileProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -40,20 +43,34 @@ export function SampleTile({
 
     // Create ImageData
     const imgData = ctx.createImageData(width, height)
+    const isComplex = kind && (kind.includes('COMPLEX') || kind.includes('complex'))
 
-    // Compute magnitude from complex (2 channels) and render with fixed [0, 1] range
+    // Compute pixel values
     for (let i = 0; i < height * width; i++) {
-      const real = imageData[i]
-      const imag = imageData[height * width + i]
-      const mag = Math.sqrt(real * real + imag * imag)
-      const clamped = Math.min(1, Math.max(0, mag))
-      const val = Math.floor(clamped * 255)
       const idx = i * 4
+      let r = 0
+      let g = 0
+      let b = 0
 
-      // Base grayscale
-      let r = val
-      let g = val
-      let b = val
+      if (isComplex) {
+        // Complex: Real -> Red, Imag -> Green
+        const real = imageData[i]
+        const imag = imageData[height * width + i]
+        
+        r = Math.floor(Math.min(1, Math.max(0, real)) * 255)
+        g = Math.floor(Math.min(1, Math.max(0, imag)) * 255)
+        b = 0
+      } else {
+        // Magnitude/Scalar: Grayscale
+        const real = imageData[i]
+        const imag = imageData[height * width + i]
+        const mag = Math.sqrt(real * real + imag * imag)
+        const val = Math.floor(Math.min(1, Math.max(0, mag)) * 255)
+        
+        r = val
+        g = val
+        b = val
+      }
 
       // Apply overlays with transparency
       const overlayAlpha = 0.4
@@ -79,7 +96,7 @@ export function SampleTile({
     }
 
     ctx.putImageData(imgData, 0, 0)
-  }, [imageData, height, width, penumbraMask, backgroundMask, showPenumbra, showBackground])
+  }, [imageData, height, width, penumbraMask, backgroundMask, showPenumbra, showBackground, kind])
 
   return (
     <div className="relative">

@@ -74,6 +74,7 @@ export function SampleGrid({
       penumbra,
       background,
       label: showLabels && sampleData.labels[i] ? sampleData.labels[i] : undefined,
+      kind: sampleData.kinds ? sampleData.kinds[i] : undefined,
     })
   }
 
@@ -96,6 +97,7 @@ export function SampleGrid({
           showPenumbra={showPenumbra}
           showBackground={showBackground}
           label={tile.label}
+          kind={tile.kind}
         />
       ))}
     </div>
