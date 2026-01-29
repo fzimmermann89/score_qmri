@@ -8,11 +8,12 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from score_qmri.datasets.config import AugmentationConfig
+from score_qmri.datasets.config import COMPLEX_CONFIG, MAGNITUDE_CONFIG, MAPPING_CONFIG, AugmentationConfig
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.datasets.lightning import (
     BrainwebDatasetConfig,
-    BrainwebQualitativeDatasetConfig,
+    BrainwebComplexQualitativeDatasetConfig,
+    BrainwebMagnitudeQualitativeDatasetConfig,
     ComplexDatasetConfig,
     ConstantSchedule,
     DatasetConfig,
@@ -108,12 +109,19 @@ def _parse_dataset_config(entry: dict) -> DatasetConfig:
     Uses the SAME types as MRIDataModule to ensure parity.
     """
     config_type = entry.get("type")
-    if config_type not in {"complex", "magnitude", "mapping", "brainweb", "brainweb_qualitative"}:
+    if config_type not in {
+        "complex",
+        "magnitude",
+        "mapping",
+        "brainweb",
+        "brainweb_qualitative_magnitude",
+        "brainweb_qualitative_complex",
+    }:
         raise ValueError(f"Unsupported dataset type: {config_type}")
 
     # Parse common fields
     aug_raw = entry.get("augmentation_config")
-    aug_config = _parse_augmentation(aug_raw) if aug_raw else None
+    aug_explicit_none = "augmentation_config" in entry and aug_raw is None
     schedule = _parse_schedule(entry.get("schedule"))
 
     kind_str = entry.get("kind", "T1W_MAGNITUDE")
@@ -125,27 +133,31 @@ def _parse_dataset_config(entry: dict) -> DatasetConfig:
             kind=kind,
             mode=entry.get("mode", "flat"),
             scaling_factor=entry.get("scaling_factor", 1.0),
-            augmentation_config=aug_config,
             schedule=schedule,
             penumbra_width=entry.get("penumbra_width", 30),
+            augmentation_config=None if aug_explicit_none else _parse_augmentation(aug_raw, COMPLEX_CONFIG) if aug_raw else COMPLEX_CONFIG,
         )
     elif config_type == "magnitude":
         return MagnitudeDatasetConfig(
             h5_path=str(entry["h5_path"]),
             kind=kind,
             scaling_factor=entry.get("scaling_factor", 1.0),
-            augmentation_config=aug_config,
             schedule=schedule,
             penumbra_width=entry.get("penumbra_width", 30),
+            augmentation_config=None
+            if aug_explicit_none
+            else _parse_augmentation(aug_raw, MAGNITUDE_CONFIG)
+            if aug_raw
+            else MAGNITUDE_CONFIG,
         )
     elif config_type == "mapping":
         return MappingDatasetConfig(
             h5_path=str(entry["h5_path"]),
             kind=kind,
             scaling_factor=entry.get("scaling_factor", 1.0),
-            augmentation_config=aug_config,
             schedule=schedule,
             penumbra_width=entry.get("penumbra_width", -1),
+            augmentation_config=None if aug_explicit_none else _parse_augmentation(aug_raw, MAPPING_CONFIG) if aug_raw else MAPPING_CONFIG,
         )
     elif config_type == "brainweb":
         skip_slices_raw = entry.get("skip_slices", [80, 80])
@@ -154,32 +166,53 @@ def _parse_dataset_config(entry: dict) -> DatasetConfig:
             h5_path=str(entry["h5_path"]),
             kind=kind,
             scaling_factor=entry.get("scaling_factor", 1.0),
-            augmentation_config=aug_config,
             schedule=schedule,
             penumbra_width=entry.get("penumbra_width", -1),
             step=entry.get("step", 1),
             skip_slices=skip_slices,
             subject_id=entry.get("subject_id"),
+            augmentation_config=None if aug_explicit_none else _parse_augmentation(aug_raw, MAPPING_CONFIG) if aug_raw else MAPPING_CONFIG,
         )
-    else:  # brainweb_qualitative
+    elif config_type == "brainweb_qualitative_magnitude":
         skip_slices_raw = entry.get("skip_slices", [80, 80])
         skip_slices = (int(skip_slices_raw[0]), int(skip_slices_raw[1]))
-        return BrainwebQualitativeDatasetConfig(
+        return BrainwebMagnitudeQualitativeDatasetConfig(
             h5_path=str(entry["h5_path"]),
             kind=kind,
             scaling_factor=entry.get("scaling_factor", 1.0),
-            augmentation_config=aug_config,
             schedule=schedule,
             penumbra_width=entry.get("penumbra_width", -1),
             step=entry.get("step", 1),
             skip_slices=skip_slices,
             subject_id=entry.get("subject_id"),
+            background_phase_scale=entry.get("background_phase_scale", 16),
+            background_phase_std=entry.get("background_phase_std", 1.57),
+            augmentation_config=None
+            if aug_explicit_none
+            else _parse_augmentation(aug_raw, MAGNITUDE_CONFIG)
+            if aug_raw
+            else MAGNITUDE_CONFIG,
+        )
+    else:  # brainweb_qualitative_complex
+        skip_slices_raw = entry.get("skip_slices", [80, 80])
+        skip_slices = (int(skip_slices_raw[0]), int(skip_slices_raw[1]))
+        return BrainwebComplexQualitativeDatasetConfig(
+            h5_path=str(entry["h5_path"]),
+            kind=kind,
+            scaling_factor=entry.get("scaling_factor", 1.0),
+            schedule=schedule,
+            penumbra_width=entry.get("penumbra_width", -1),
+            step=entry.get("step", 1),
+            skip_slices=skip_slices,
+            subject_id=entry.get("subject_id"),
+            background_phase_scale=entry.get("background_phase_scale", 16),
+            background_phase_std=entry.get("background_phase_std", 1.57),
+            augmentation_config=None if aug_explicit_none else _parse_augmentation(aug_raw, COMPLEX_CONFIG) if aug_raw else COMPLEX_CONFIG,
         )
 
 
-def _parse_augmentation(raw: dict) -> AugmentationConfig:
+def _parse_augmentation(raw: dict, defaults: AugmentationConfig) -> AugmentationConfig:
     """Parse augmentation config dict into AugmentationConfig dataclass."""
-    defaults = AugmentationConfig()
 
     def _tuple_float(v: list | tuple | None, default: tuple[float, float]) -> tuple[float, float]:
         if v is None:
