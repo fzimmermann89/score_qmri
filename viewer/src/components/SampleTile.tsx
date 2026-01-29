@@ -41,25 +41,13 @@ export function SampleTile({
     // Create ImageData
     const imgData = ctx.createImageData(width, height)
 
-    // Compute magnitude from complex (2 channels) and find min/max
-    const magnitude = new Float32Array(height * width)
-    let minVal = Infinity
-    let maxVal = -Infinity
-
+    // Compute magnitude from complex (2 channels) and render with fixed [0, 1] range
     for (let i = 0; i < height * width; i++) {
       const real = imageData[i]
       const imag = imageData[height * width + i]
       const mag = Math.sqrt(real * real + imag * imag)
-      magnitude[i] = mag
-      if (mag < minVal) minVal = mag
-      if (mag > maxVal) maxVal = mag
-    }
-
-    // Normalize and render
-    const range = maxVal - minVal || 1
-
-    for (let i = 0; i < height * width; i++) {
-      const val = Math.floor(((magnitude[i] - minVal) / range) * 255)
+      const clamped = Math.min(1, Math.max(0, mag))
+      const val = Math.floor(clamped * 255)
       const idx = i * 4
 
       // Base grayscale
