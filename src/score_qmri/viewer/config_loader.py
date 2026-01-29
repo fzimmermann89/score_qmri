@@ -185,7 +185,6 @@ def _parse_dataset_config(entry: dict) -> DatasetConfig:
             step=entry.get("step", 1),
             skip_slices=skip_slices,
             subject_id=entry.get("subject_id"),
-            background_phase_scale=entry.get("background_phase_scale", 16),
             background_phase_std=entry.get("background_phase_std", 1.57),
             augmentation_config=None
             if aug_explicit_none
@@ -205,7 +204,6 @@ def _parse_dataset_config(entry: dict) -> DatasetConfig:
             step=entry.get("step", 1),
             skip_slices=skip_slices,
             subject_id=entry.get("subject_id"),
-            background_phase_scale=entry.get("background_phase_scale", 16),
             background_phase_std=entry.get("background_phase_std", 1.57),
             augmentation_config=None if aug_explicit_none else _parse_augmentation(aug_raw, COMPLEX_CONFIG) if aug_raw else COMPLEX_CONFIG,
         )
