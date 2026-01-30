@@ -8,7 +8,7 @@ class AugmentationConfig:
     """Configuration for data augmentation pipeline."""
 
     geometric_prob: float = 0.8
-    contrast_prob: float = 0.3
+    contrast_prob: float = 0.4
     phase_prob: float = 0.3
     flip_prob: float = 0.5
     roll_prob: float = 1.0
