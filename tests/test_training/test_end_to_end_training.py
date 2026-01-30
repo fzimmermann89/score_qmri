@@ -251,7 +251,7 @@ def test_cli_parses_default_config() -> None:
     original_argv = sys.argv.copy()
 
     try:
-        sys.argv = ["test", "--config", str(config_path)]
+        sys.argv = ["test", "--config", str(config_path), "--job_name", "test-run"]
 
         from unittest.mock import patch
 
