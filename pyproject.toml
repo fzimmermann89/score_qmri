@@ -27,6 +27,7 @@ examples = ["mrpro>=0.8.0"]
 
 [project.scripts]
 score-qmri = "score_qmri.cli:main"
+score-qmri-fid-stats = "score_qmri.metrics.fid_stats:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
