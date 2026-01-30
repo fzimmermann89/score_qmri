@@ -1,6 +1,5 @@
 memory_budget: 0.99
 model:
-  attention_levels: [-1, -2]
   learning_rate: 1.2e-4
 
 data:

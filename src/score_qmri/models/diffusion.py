@@ -212,12 +212,12 @@ class DiffusionModel(torch.nn.Module):
 
     def __init__(
         self,
-        base_channels: int = 64,
+        base_channels: int = 128,
         num_res_blocks: int = 2,
-        channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
+        channel_mult: tuple[int, ...] = (1, 2, 2, 4, 4, 4),
         cond_dim: int = 128,
         num_kinds: int = 14,
-        attention_levels: tuple[int, ...] = (),
+        attention_levels: tuple[int, ...] = (-1, -2, -3),
         head_dim: int = 64,
         edm: EDMConfig | None = None,
         normalization: NormalizationConfig | None = None,

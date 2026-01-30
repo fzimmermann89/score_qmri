@@ -5,7 +5,7 @@ Diffusion model framework for learning MRI priors (2-channel real/imag or mag/ze
 ## Highlights
 
 - VE-SDE (EDM/Karras) diffusion with dual x₀ heads (main + aux)
-- FiLM conditioning on log(σ) + dataset kind
+- AdaGN (scale/shift norm) conditioning on log(σ) + dataset kind
 - Pre-Norm UNet with optional SDPA attention (`attention_levels`)
 - Karras (poly-ρ) sigma schedule for sampling
 - Fixed per-kind normalization for mapping kinds (`kind_scales`)
@@ -23,9 +23,14 @@ score-qmri-train fit --config config.yaml
 ```yaml
 # Values shown are defaults in code unless explicitly set in config.yaml.
 model:
-  attention_levels: [3, 4]
-  head_dim: 64
   learning_rate: 1e-4
+
+  # UNet parameters (defaults shown)
+  # base_channels: 128
+  # channel_mult: [1, 1, 2, 2, 4, 4]
+  # num_res_blocks: 2
+  # attention_levels: [-1, -2, -3]
+  # head_dim: 64
 
   # EDM parameters (defaults shown)
   sigma_min: 0.002
@@ -44,7 +49,7 @@ model:
       T2STARMAP: 8
 
 # Optional overrides (defaults in code)
-# model.base_channels: 64
+# model.base_channels: 128
 # model.num_res_blocks: 2
 
 

@@ -122,6 +122,7 @@ def small_model_kwargs():
         "num_res_blocks": 2,
         "channel_mult": (1, 2),
         "cond_dim": 64,
+        "attention_levels": (),
         "sigma_min": 0.01,
         "sigma_max": 10.0,
         "sigma_data": 0.5,

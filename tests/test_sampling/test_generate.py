@@ -19,6 +19,7 @@ def small_model() -> DiffusionModel:
         num_res_blocks=1,
         channel_mult=(1, 2),
         cond_dim=32,
+        attention_levels=(),
     )
     model.eval()
     return model
@@ -134,6 +135,7 @@ class TestLoadCheckpoint:
             num_res_blocks=1,
             channel_mult=(1, 2),
             cond_dim=32,
+            attention_levels=(),
         )
 
         fresh_model.load_checkpoint(ckpt_path)
@@ -155,6 +157,7 @@ class TestLoadCheckpoint:
             num_res_blocks=1,
             channel_mult=(1, 2),
             cond_dim=32,
+            attention_levels=(),
         )
 
         fresh_model.load_checkpoint(ckpt_path)

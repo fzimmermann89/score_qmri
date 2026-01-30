@@ -16,7 +16,7 @@ def test_resblock_forward():
 
 def test_unet_forward():
     """Test UNet forward pass preserves spatial dims."""
-    unet = UNet(in_channels=2, base_channels=16, num_res_blocks=2, channel_mult=(1, 2), cond_dim=64)
+    unet = UNet(in_channels=2, base_channels=16, num_res_blocks=2, channel_mult=(1, 2), cond_dim=64, attention_levels=())
     x = torch.randn(2, 2, 64, 64)
     cond = torch.randn(2, 64)
     x0_pred, noise_pred = unet(x, cond)
@@ -26,7 +26,7 @@ def test_unet_forward():
 
 def test_unet_various_sizes():
     """Test UNet handles different input sizes."""
-    unet = UNet(in_channels=2, base_channels=16, num_res_blocks=2, channel_mult=(1, 2), cond_dim=64)
+    unet = UNet(in_channels=2, base_channels=16, num_res_blocks=2, channel_mult=(1, 2), cond_dim=64, attention_levels=())
     for size in [32, 64, 128]:
         x = torch.randn(1, 2, size, size)
         cond = torch.randn(1, 64)
@@ -37,7 +37,7 @@ def test_unet_various_sizes():
 
 def test_unet_gradient_flow():
     """Test gradients flow through entire network."""
-    unet = UNet(in_channels=2, base_channels=16, num_res_blocks=2, channel_mult=(1, 2), cond_dim=64)
+    unet = UNet(in_channels=2, base_channels=16, num_res_blocks=2, channel_mult=(1, 2), cond_dim=64, attention_levels=())
     x = torch.randn(2, 2, 32, 32, requires_grad=True)
     cond = torch.randn(2, 64)
 
@@ -66,7 +66,7 @@ def test_unet_heads_are_independent():
     Heads are zero-initialized for stability, so their initial outputs can be equal.
     This test verifies independence by perturbing only one head.
     """
-    unet = UNet(in_channels=2, base_channels=16, num_res_blocks=2, channel_mult=(1, 2), cond_dim=64)
+    unet = UNet(in_channels=2, base_channels=16, num_res_blocks=2, channel_mult=(1, 2), cond_dim=64, attention_levels=())
     x = torch.randn(1, 2, 32, 32)
     cond = torch.randn(1, 64)
 

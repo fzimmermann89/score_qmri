@@ -77,9 +77,9 @@ class DiffusionLightningModule(LightningModule):
 
     def __init__(
         self,
-        base_channels: int = 64,
+        base_channels: int = 128,
         num_res_blocks: int = 2,
-        channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
+        channel_mult: tuple[int, ...] = (1, 2, 2, 4, 4, 4),
         cond_dim: int = 128,
         learning_rate: float = 5e-5,
         weight_decay: float = 0.01,
@@ -95,7 +95,7 @@ class DiffusionLightningModule(LightningModule):
         warmup_steps: int = 2000,
         ema_decay: float = 0.9995,
         cond_dropout_rate: float = 0.1,
-        attention_levels: tuple[int, ...] = (),
+        attention_levels: tuple[int, ...] = (-1, -2, -3),
         head_dim: int = 64,
         sigma_min: float = 0.001,
         sigma_max: float = 20.0,

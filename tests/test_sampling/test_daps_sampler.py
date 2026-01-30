@@ -91,7 +91,7 @@ def test_masking_operator_has_required_methods():
 
 
 def test_daps_sampler_output_shape():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     config = DAPSConfig(num_steps=3, ode_steps=1, x0_estimator="one_step", mcmc_steps=2, beta_y=1.0)
     sampler = DAPSSampler(model, config)
 
@@ -106,7 +106,7 @@ def test_daps_sampler_output_shape():
 
 
 def test_daps_sampler_with_masking_operator():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     config = DAPSConfig(num_steps=2, ode_steps=1, x0_estimator="one_step", mcmc_steps=2, beta_y=1.0)
     sampler = DAPSSampler(model, config)
 
@@ -122,7 +122,7 @@ def test_daps_sampler_with_masking_operator():
 
 
 def test_daps_sampler_rejects_real_kinds():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     sampler = DAPSSampler(model)
 
     op = IdentityOperator()
@@ -133,7 +133,7 @@ def test_daps_sampler_rejects_real_kinds():
 
 
 def test_daps_sampler_with_initial_noise():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     config = DAPSConfig(num_steps=2, ode_steps=1, x0_estimator="one_step", mcmc_steps=2)
     sampler = DAPSSampler(model, config)
 
@@ -148,7 +148,7 @@ def test_daps_sampler_with_initial_noise():
 
 
 def test_daps_gradient_flows():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     config = DAPSConfig(num_steps=2, ode_steps=1, x0_estimator="one_step", mcmc_steps=2, beta_y=1.0)
     sampler = DAPSSampler(model, config)
 
@@ -173,7 +173,7 @@ def test_daps_step_size_decays():
 
 
 def test_daps_sampler_runs_mcmc_steps():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     config_1 = DAPSConfig(num_steps=2, ode_steps=1, x0_estimator="one_step", mcmc_steps=1, beta_y=1.0)
     config_5 = DAPSConfig(num_steps=2, ode_steps=1, x0_estimator="one_step", mcmc_steps=5, beta_y=1.0)
 

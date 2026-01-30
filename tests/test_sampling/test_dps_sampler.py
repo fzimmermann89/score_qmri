@@ -86,7 +86,7 @@ def test_masking_operator_has_required_methods():
 
 
 def test_dps_sampler_output_shape():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     config = DPSConfig(num_steps=5, guidance_scale=0.1)
     sampler = DPSSampler(model, config)
 
@@ -103,7 +103,7 @@ def test_dps_sampler_output_shape():
 
 
 def test_dps_sampler_with_masking_operator():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     config = DPSConfig(num_steps=3, guidance_scale=0.01)
     sampler = DPSSampler(model, config)
 
@@ -124,7 +124,7 @@ def test_dps_sampler_with_masking_operator():
 
 
 def test_dps_sampler_rejects_real_kinds():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     sampler = DPSSampler(model)
 
     op = cast(LinearOperatorProtocol, IdentityOperator())
@@ -137,7 +137,7 @@ def test_dps_sampler_rejects_real_kinds():
 
 
 def test_dps_sampler_with_initial_noise():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     config = DPSConfig(num_steps=3)
     sampler = DPSSampler(model, config)
 
@@ -152,7 +152,7 @@ def test_dps_sampler_with_initial_noise():
 
 
 def test_dps_sampler_deterministic_with_fixed_noise():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     model.eval()  # Important: freeze normalizer stats
     config = DPSConfig(num_steps=3)
     sampler = DPSSampler(model, config)
@@ -170,7 +170,7 @@ def test_dps_sampler_deterministic_with_fixed_noise():
 
 def test_dps_gradient_flows():
     """Test that gradients are computed during sampling."""
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     config = DPSConfig(num_steps=2, guidance_scale=1.0)
     sampler = DPSSampler(model, config)
 
