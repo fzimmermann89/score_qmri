@@ -295,7 +295,7 @@ class UNet(torch.nn.Module):
     def __init__(
         self,
         in_channels: int = 2,
-        base_channels: int = 128,
+        base_channels: int = 96,
         num_res_blocks: int = 2,
         channel_mult: tuple[int, ...] = (1, 2, 2, 4, 4, 4),
         cond_dim: int = 128,

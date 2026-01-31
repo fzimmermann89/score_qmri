@@ -26,6 +26,7 @@ model:
         T2MAP: 2
         T2STARMAP: 8
   learning_rate: 1.2e-4
+  base_channels: 128
 
 data:
   class_path: score_qmri.datasets.lightning.MRIDataModule
@@ -516,7 +517,7 @@ data:
         kind: COMPLEX_T2W_COIL_COMBINED
         augmentation_config:
           scale_range: [0.45, 0.6]
-    batch_size: 128
+    batch_size: 64
     sample_size: [256, 256]
     base_seed: 42
     kind_normalization: 0.5

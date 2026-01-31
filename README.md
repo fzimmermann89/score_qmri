@@ -26,8 +26,8 @@ model:
   learning_rate: 1e-4
 
   # UNet parameters (defaults shown)
-  # base_channels: 128
-  # channel_mult: [1, 1, 2, 2, 4, 4]
+  # base_channels: 96
+  # channel_mult: [1, 2, 2, 2, 4, 4]
   # num_res_blocks: 2
   # attention_levels: [-1, -2, -3]
   # head_dim: 64
@@ -49,7 +49,7 @@ model:
       T2STARMAP: 8
 
 # Optional overrides (defaults in code)
-# model.base_channels: 128
+# model.base_channels: 96
 # model.num_res_blocks: 2
 
 
