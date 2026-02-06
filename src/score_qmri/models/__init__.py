@@ -1,7 +1,7 @@
 """Model components for diffusion training."""
 
 from .conditioning import ConditioningMLP, SinusoidalEmbedding
-from .diffusion import DenoiseOutput, DenoiseOutputList, DiffusionModel, EDMConfig, NormalizationConfig
+from .diffusion import DenoiseOutput, DenoiseOutputList, DiffusionModel, NormalizationConfig
 from .unet import UNet
 
 __all__ = [
@@ -9,7 +9,6 @@ __all__ = [
     "DiffusionModel",
     "DenoiseOutput",
     "DenoiseOutputList",
-    "EDMConfig",
     "NormalizationConfig",
     "ConditioningMLP",
     "SinusoidalEmbedding",

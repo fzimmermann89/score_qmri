@@ -62,6 +62,15 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         artifact.add_file(str(config_path))
         wandb.run.log_artifact(artifact)
 
+    def on_save_checkpoint(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        checkpoint: dict[str, Any],
+    ) -> None:
+        if hasattr(self.config, "as_dict"):
+            checkpoint["cli_config"] = self.config.as_dict()
+
 
 class DiffusionTrainer(Trainer):
     """Trainer with generate subcommand for sample generation."""
@@ -152,15 +161,18 @@ class DiffusionLightningCLI(LightningCLI):
         parser.add_argument("--wandb_entity", type=str | None, default=None, help="WandB entity name.")
         parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Base path for checkpoints.")
         parser.add_argument("--memory_budget", type=float, default=1.0, help="activation checkpointing budget")
+        parser.link_arguments("model.diffusion.cond_dim", "model.unet.init_args.cond_dim", apply_on="parse")
         parser.set_defaults({"data": {"class_path": "score_qmri.datasets.lightning.MRIDataModule"}})
 
     def before_instantiate_classes(self) -> None:
+        config = self.config if self.subcommand is None else getattr(self.config, self.subcommand)
+
         if self.subcommand != "fit":
             return
 
-        config = getattr(self.config, self.subcommand)
-
-        torch._functorch.config.activation_memory_budget = config.memory_budget
+        functorch_mod = getattr(torch, "_functorch", None)
+        if functorch_mod is not None and hasattr(functorch_mod, "config"):
+            functorch_mod.config.activation_memory_budget = config.memory_budget
 
         job_name = config.job_name
         run_dir = Path(config.checkpoint_dir) / job_name

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,13 +13,14 @@ from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.utilities.types import OptimizerLRSchedulerConfig
 from torch import Tensor
 
-from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind, is_complex_kind
+from score_qmri.datasets.kind import DatasetKind, is_complex_kind
 from score_qmri.datasets.lightning import MRIDataModule
 from score_qmri.models.diffusion import (
+    DiffusionConfig,
     DiffusionModel,
-    EDMConfig,
-    NormalizationConfig,
     _create_noise,
+    _extract_model_config,
+    _instantiate_unet_from_spec,
 )
 from score_qmri.sampling.edm_sampler import EDMSampler, create_fixed_noise
 from score_qmri.training.ema import EMA
@@ -32,10 +33,7 @@ LOSS_ANOMALY_THRESHOLD = 100.0
 class DiffusionHparams:
     """Type-safe hyperparameter definitions for DiffusionLightningModule."""
 
-    base_channels: int
-    num_res_blocks: int
-    channel_mult: tuple[int, ...]
-    cond_dim: int
+    diffusion: dict[str, Any]
     learning_rate: float
     weight_decay: float
 
@@ -55,21 +53,9 @@ class DiffusionHparams:
 
     cond_dropout_rate: float
 
-    attention_levels: tuple[int, ...]
-    head_dim: int
-
-    sigma_min: float
-    sigma_max: float
-    sigma_data: float
-    p_mean: float
-    p_std: float
-    rho: float
-
-    normalization: NormalizationConfig
-
 
 class DiffusionLightningModule(LightningModule):
-    """Lightning module for VE/EDM diffusion training with two x0 heads."""
+    """Lightning module for VE/EDM diffusion training."""
 
     hparams: DiffusionHparams  # type: ignore[assignment]
     _fixed_noise: dict[int, Tensor]
@@ -77,10 +63,8 @@ class DiffusionLightningModule(LightningModule):
 
     def __init__(
         self,
-        base_channels: int = 128,
-        num_res_blocks: int = 2,
-        channel_mult: tuple[int, ...] = (1, 2, 2, 4, 4, 4),
-        cond_dim: int = 128,
+        unet: torch.nn.Module,
+        diffusion: DiffusionConfig | dict[str, Any] | None = None,
         learning_rate: float = 5e-5,
         weight_decay: float = 0.01,
         main_weight: float = 1.0,
@@ -95,42 +79,46 @@ class DiffusionLightningModule(LightningModule):
         warmup_steps: int = 2000,
         ema_decay: float = 0.9995,
         cond_dropout_rate: float = 0.1,
-        attention_levels: tuple[int, ...] = (-1, -2, -3),
-        head_dim: int = 64,
-        sigma_min: float = 0.001,
-        sigma_max: float = 20.0,
-        sigma_data: float = 0.2,
-        p_mean: float = -1.6,
-        p_std: float = 1.4,
-        rho: float = 7.0,
-        normalization: NormalizationConfig | None = None,
     ) -> None:
         super().__init__()
-        normalization = normalization or NormalizationConfig()
-        self.save_hyperparameters()
+        if diffusion is None:
+            diffusion = DiffusionConfig()
+        elif isinstance(diffusion, DiffusionConfig):
+            diffusion = DiffusionConfig.from_mapping(diffusion.__dict__)
+        elif isinstance(diffusion, Mapping):
+            diffusion = DiffusionConfig.from_mapping(diffusion)
+        else:
+            raise TypeError(f"Unsupported diffusion type: {type(diffusion)!r}")
+        if not isinstance(unet, torch.nn.Module):
+            raise TypeError(f"Unsupported unet type: {type(unet)!r}")
 
-        edm = EDMConfig(
-            sigma_min=sigma_min,
-            sigma_max=sigma_max,
-            sigma_data=sigma_data,
-            p_mean=p_mean,
-            p_std=p_std,
+        self.save_hyperparameters(
+            {
+                "diffusion": asdict(diffusion),
+                "learning_rate": learning_rate,
+                "weight_decay": weight_decay,
+                "main_weight": main_weight,
+                "aux_weight": aux_weight,
+                "ssim_weight": ssim_weight,
+                "l1_weight": l1_weight,
+                "penumbra_weight": penumbra_weight,
+                "background_weight": background_weight,
+                "validation_steps": validation_steps,
+                "validation_interval": validation_interval,
+                "log_batch_interval": log_batch_interval,
+                "warmup_steps": warmup_steps,
+                "ema_decay": ema_decay,
+                "cond_dropout_rate": cond_dropout_rate,
+            }
         )
 
         self.model = DiffusionModel(
-            base_channels=base_channels,
-            num_res_blocks=num_res_blocks,
-            channel_mult=channel_mult,
-            cond_dim=cond_dim,
-            num_kinds=NUM_DATASET_KINDS,
-            attention_levels=attention_levels,
-            head_dim=head_dim,
-            edm=edm,
-            normalization=normalization,
+            unet=unet,
+            diffusion=diffusion,
         )
 
-        self._fixed_noise = {}
-        self.ema = EMA[DiffusionModel](self.model, decay=self.hparams.ema_decay)
+        self._fixed_noise: dict[int, Tensor] = {}
+        self.ema: EMA[DiffusionModel] = EMA[DiffusionModel](self.model, decay=self.hparams.ema_decay)
 
     def on_fit_start(self) -> None:
         self.ema.shadow.to(self.device)
@@ -362,7 +350,7 @@ class DiffusionLightningModule(LightningModule):
 
         sample_model: DiffusionModel = self.ema.shadow
         sample_model.eval()
-        sampler = EDMSampler(sample_model, num_steps=self.hparams.validation_steps, rho=self.hparams.rho)
+        sampler = EDMSampler(sample_model, num_steps=self.hparams.validation_steps, rho=sample_model.rho)
 
         with torch.no_grad():
             for kind_enum in DatasetKind:
@@ -408,6 +396,56 @@ class DiffusionLightningModule(LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {"scheduler": scheduler, "interval": "step", "frequency": 1},
         }
+
+    @classmethod
+    def load_from_checkpoint(
+        cls,
+        checkpoint_path: Any,
+        map_location: Any = None,
+        hparams_file: Any = None,
+        strict: bool | None = None,
+        weights_only: bool | None = None,
+        **kwargs: Any,
+    ) -> DiffusionLightningModule:
+        """Load module from checkpoint with automatic UNet reconstruction.
+
+        If ``unet`` is not passed explicitly, the UNet is instantiated from
+        ``checkpoint['cli_config']``.
+        """
+        if "unet" not in kwargs:
+            checkpoint = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
+            cli_config = checkpoint.get("cli_config")
+            if not isinstance(cli_config, Mapping):
+                raise ValueError("Checkpoint is missing 'cli_config'; pass unet explicitly to load_from_checkpoint.")
+
+            model_cfg = _extract_model_config(cli_config)
+            unet_spec = model_cfg.get("unet")
+            if not isinstance(unet_spec, Mapping):
+                raise ValueError("Checkpoint cli_config is missing model.unet specification.")
+
+            diffusion_cfg = kwargs.get("diffusion", model_cfg.get("diffusion"))
+            if diffusion_cfg is not None and "diffusion" not in kwargs:
+                kwargs["diffusion"] = diffusion_cfg
+
+            cond_dim: int | None = None
+            if isinstance(diffusion_cfg, DiffusionConfig):
+                cond_dim = int(diffusion_cfg.cond_dim)
+            elif isinstance(diffusion_cfg, Mapping):
+                cond_dim_raw = diffusion_cfg.get("cond_dim")
+                if cond_dim_raw is not None:
+                    cond_dim = int(cond_dim_raw)
+
+            kwargs["unet"] = _instantiate_unet_from_spec(unet_spec, cond_dim=cond_dim)
+
+        loaded = super().load_from_checkpoint(
+            checkpoint_path,
+            map_location=map_location,
+            hparams_file=hparams_file,
+            strict=strict,
+            weights_only=weights_only,
+            **kwargs,
+        )
+        return loaded
 
     def on_save_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         checkpoint["ema"] = self.ema.state_dict()

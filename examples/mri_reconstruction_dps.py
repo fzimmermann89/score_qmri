@@ -19,7 +19,8 @@ import torch
 from torch import Tensor
 
 from score_qmri.datasets.kind import DatasetKind
-from score_qmri.models.diffusion import DiffusionModel
+from score_qmri.models.diffusion import DiffusionConfig, DiffusionModel
+from score_qmri.models.unet import UNet
 from score_qmri.sampling import DPSConfig, DPSSampler
 
 if TYPE_CHECKING:
@@ -36,16 +37,18 @@ GUIDANCE_SCALE = 0.5
 
 # %%
 # Load the diffusion model (VE/EDM framework)
-model = DiffusionModel(
-    base_channels=64,
-    channel_mult=(1, 2, 4, 8, 16),
-    attention_levels=(3, 4),
-)
-
 if CHECKPOINT_PATH.exists():
-    model.load_checkpoint(CHECKPOINT_PATH)
+    model = DiffusionModel.from_checkpoint(CHECKPOINT_PATH)
     print(f"Loaded checkpoint from {CHECKPOINT_PATH}")
 else:
+    diffusion = DiffusionConfig()
+    unet = UNet(
+        base_channels=64,
+        channel_mult=(1, 2, 4, 8, 16),
+        cond_dim=diffusion.cond_dim,
+        attention_levels=(3, 4),
+    )
+    model = DiffusionModel(unet=unet, diffusion=diffusion)
     print("No checkpoint found - using randomly initialized model (for demonstration)")
 
 model = model.to(DEVICE).eval()

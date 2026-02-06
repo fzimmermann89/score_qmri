@@ -3,18 +3,31 @@
 import torch
 
 from score_qmri.datasets.kind import DatasetKind, is_complex_kind
-from score_qmri.models.diffusion import DenoiseOutput, DenoiseOutputList, DiffusionModel
+from score_qmri.models.diffusion import DenoiseOutput, DenoiseOutputList, DiffusionConfig, DiffusionModel
+from score_qmri.models.unet import UNet
+
+
+def make_model(cond_dim: int = 128) -> DiffusionModel:
+    unet = UNet(
+        base_channels=16,
+        num_res_blocks=1,
+        channel_mult=(1, 2),
+        attention_levels=(),
+        cond_dim=cond_dim,
+    )
+    diffusion = DiffusionConfig(cond_dim=cond_dim)
+    return DiffusionModel(unet=unet, diffusion=diffusion)
 
 
 def test_diffusion_init_has_sigma_config():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = make_model()
     assert model.sigma_min > 0
     assert model.sigma_max > model.sigma_min
     assert model.sigma_data > 0
 
 
 def test_diffusion_forward_2ch():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = make_model()
     x = torch.randn(2, 2, 32, 32)
     sigma = torch.tensor([1.0, 0.5])
     kind = torch.tensor([int(DatasetKind.T1MAP), int(DatasetKind.T1W_MAGNITUDE)])
@@ -26,7 +39,7 @@ def test_diffusion_forward_2ch():
 
 
 def test_diffusion_forward_complex():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = make_model()
     x = torch.complex(torch.randn(2, 32, 32), torch.randn(2, 32, 32))
     sigma = torch.tensor([1.0, 0.5])
     kind = torch.tensor([int(DatasetKind.COMPLEX_T1W_COILWISE), int(DatasetKind.COMPLEX_T1W_COILWISE)])
@@ -39,7 +52,7 @@ def test_diffusion_forward_complex():
 
 
 def test_q_sample_shape_and_changes_values():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = make_model()
     x0 = torch.randn(2, 2, 32, 32)
     sigma = torch.tensor([0.5, 0.5])
     kind = torch.full((2,), int(DatasetKind.T1MAP), dtype=torch.long)
@@ -51,7 +64,7 @@ def test_q_sample_shape_and_changes_values():
 
 
 def test_score_and_eps_relationship():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = make_model()
     x = torch.randn(3, 2, 16, 16)
     sigma = torch.tensor([0.2, 1.0, 10.0])
     kind = torch.tensor([int(DatasetKind.T1MAP), int(DatasetKind.T1MAP), int(DatasetKind.T1MAP)])
@@ -64,7 +77,7 @@ def test_score_and_eps_relationship():
 
 
 def test_real_kind_imag_channel_stays_zero():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = make_model()
     x = torch.randn(2, 2, 32, 32)
     x[:, 1] = 0.0
     sigma = torch.tensor([1.0, 0.5])
@@ -76,7 +89,7 @@ def test_real_kind_imag_channel_stays_zero():
 
 
 def test_normalize_denormalize_roundtrip_mapping_kind():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = make_model()
     x = torch.randn(4, 2, 32, 32)
     x[:, 1] = 0.0
     kind = torch.full((4,), int(DatasetKind.T1MAP), dtype=torch.long)
@@ -87,7 +100,7 @@ def test_normalize_denormalize_roundtrip_mapping_kind():
 
 
 def test_list_input_forward():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = make_model()
 
     a = torch.randn(2, 32, 32)
     b = torch.randn(3, 32, 32)

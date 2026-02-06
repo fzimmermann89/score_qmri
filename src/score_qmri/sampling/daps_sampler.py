@@ -130,7 +130,11 @@ class DAPSSampler:
 
         # Generate Karras sigma schedule
         sigmas = karras_sigmas(
-            cfg.num_steps + 1, sigma_min=self.model.sigma_min, sigma_max=self.model.sigma_max, rho=self.model.edm.rho, device=device
+            cfg.num_steps + 1,
+            sigma_min=self.model.sigma_min,
+            sigma_max=self.model.sigma_max,
+            rho=self.model.rho,
+            device=device,
         )
 
         x0_last = x
@@ -173,7 +177,13 @@ class DAPSSampler:
         if t0 <= self.model.sigma_min:
             return self.model.denoise(x, sigma, kind)
 
-        ode_sigmas = karras_sigmas(cfg.ode_steps + 1, sigma_min=self.model.sigma_min, sigma_max=t0, rho=self.model.edm.rho, device=x.device)
+        ode_sigmas = karras_sigmas(
+            cfg.ode_steps + 1,
+            sigma_min=self.model.sigma_min,
+            sigma_max=t0,
+            rho=self.model.rho,
+            device=x.device,
+        )
 
         x_ode = x
         with torch.no_grad():
