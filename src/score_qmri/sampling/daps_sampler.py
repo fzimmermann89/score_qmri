@@ -64,16 +64,16 @@ class DAPSConfig:
         Momentum term for HMC.
     """
 
-    num_steps: int = 50
+    num_steps: int = 100
 
-    x0_estimator: X0Estimator = "pf_ode"
+    x0_estimator: X0Estimator = "one_step"
     ode_steps: int = 5
 
     mcmc_steps: int = 5
     mcmc_algo: MCMCAlgorithm = "langevin"
 
-    step_size: float = 1e-4
-    delta: float = 0.01
+    step_size: float = 1e-3
+    delta: float = 0.1
 
     beta_y: float = 1.0
 
@@ -107,7 +107,7 @@ class DAPSSampler:
         kind_idx = int(kind)
 
         if not is_complex_kind(kind_idx):
-            raise ValueError(f"DAPS only supports complex kinds, got {DatasetKind(kind_idx).name}")
+            raise NotImplementedError(f"DAPS only supports complex kinds, got {DatasetKind(kind_idx).name}")
 
         # Infer image shape from adjoint
         x_template = forward_op.H(measurement)[0]
@@ -314,7 +314,7 @@ class DAPSSampler:
         # We approximate prior p(x0|x_t) as N(x0_hat, sigma^2 I)
         # Scale step size by sigma^2 to normalize gradient magnitude across noise levels
         # (VE score scales as 1/sigma^2, so lr * sigma^2 keeps updates stable)
-        lr = self._get_step_size(ratio) * (sigma.item() ** 2)
+        lr = self._get_step_size(ratio)  # * (sigma.item() ** 2)
 
         # Initialize MCMC chain at x0_hat
         x0 = x0_hat.detach().clone().requires_grad_(cfg.mcmc_algo != "mh")
