@@ -4,9 +4,9 @@ model:
     class_path: score_qmri.models.unet.UNet
     init_args:
       in_channels: 2
-      base_channels: 128
+      base_channels: 96
       num_res_blocks: 2
-      channel_mult: [1, 2, 2, 4, 4, 4]
+      channel_mult: [1, 1, 2, 2, 4, 4]
       attention_levels: [-1, -2, -3]
       head_dim: 64
   diffusion:
@@ -25,8 +25,10 @@ model:
         T1MAP: 0.25
         T2MAP: 2
         T2STARMAP: 8
-  learning_rate: 1.2e-4
-  base_channels: 128
+  learning_rate: 0.8e-4
+  weight_decay: 0.02
+  cond_dropout_rate: 0.2
+  ema_decay: 0.999
 
 data:
   class_path: score_qmri.datasets.lightning.MRIDataModule
@@ -39,6 +41,11 @@ data:
         augmentation_config:
           scale_range: [0.65, 0.8]
         scaling_factor: 0.9
+        penumbra_width: 0
+        schedule:
+          type: constant
+          weight: 0.5
+
 
       - type: complex
         h5_path: ./datasets/fastmri_t1.h5
@@ -46,20 +53,28 @@ data:
         kind: COMPLEX_T1W_COIL_COMBINED
         augmentation_config:
           scale_range: [0.65, 0.8]
+        penumbra_width: 0
+
 
       - type: complex
         h5_path: ./datasets/fastmri_t2.h5
         mode: coilwise
         kind: COMPLEX_T2W_COILWISE
         augmentation_config:
-          scale_range: [0.65, 0.8]
+          scale_range: [0.6, 0.75]
+        penumbra_width: 0
+        schedule:
+          type: constant
+          weight: 0.5
+
 
       - type: complex
         h5_path: ./datasets/fastmri_t2.h5
         mode: combined
         kind: COMPLEX_T2W_COIL_COMBINED
         augmentation_config:
-          scale_range: [0.65, 0.8]
+          scale_range: [0.6, 0.75]
+        penumbra_width: 0
 
       - type: complex
         h5_path: ./datasets/fastmri_flair.h5
@@ -67,6 +82,11 @@ data:
         kind: COMPLEX_FLAIR_COILWISE
         augmentation_config:
           scale_range: [0.7, 0.9]
+        penumbra_width: 0
+        schedule:
+          type: constant
+          weight: 0.5
+
 
       - type: complex
         h5_path: ./datasets/fastmri_flair.h5
@@ -74,6 +94,8 @@ data:
         kind: COMPLEX_FLAIR_COIL_COMBINED
         augmentation_config:
           scale_range: [0.7, 0.9]
+        penumbra_width: 0
+
 
       - type: complex
         h5_path: ./datasets/cc.h5
@@ -81,6 +103,11 @@ data:
         kind: COMPLEX_T1W_COILWISE
         augmentation_config:
           scale_range: [0.95, 1.15]
+        penumbra_width: 0
+        schedule:
+          type: constant
+          weight: 0.5
+
 
       - type: complex
         h5_path: ./datasets/cc.h5
@@ -138,6 +165,11 @@ data:
         augmentation_config:
           intensity_scale_range: [0.5, 1.3]
           intensity_scale_prob: 0.5
+        penumbra_width: 0
+        schedule:
+          type: constant
+          weight: 10.0
+
 
       - type: magnitude
         h5_path: ./datasets/ds000221_mprage.h5
@@ -248,6 +280,9 @@ data:
         augmentation_config:
           scale_range: [1.0, 1.2]
         scaling_factor: 1.2
+        schedule:
+          type: constant
+          weight: 0.5
 
       - type: mapping
         h5_path: ./datasets/ds000221_t1map.h5
@@ -289,7 +324,7 @@ data:
         kind: T1MAP
         schedule:
           type: constant
-          weight: 5.0
+          weight: 8.0
         augmentation_config:
           scale_range: [0.9, 1.15]
 
@@ -332,7 +367,7 @@ data:
             scale_range: [0.9, 1.15]
         schedule:
           type: constant
-          weight: 5.0
+          weight: 8.0
 
       - type: mapping
         h5_path: ./datasets/quiero_t2map.h5
@@ -390,6 +425,9 @@ data:
           scale_range: [0.9, 1.15]
           intensity_scale_range: [0.5, 1.3]
           intensity_scale_prob: 0.5
+        schedule:
+          type: constant
+          weight: 5.0
 
       - type: mapping
         h5_path: ./datasets/ibc_relaxo_s0map.h5
@@ -405,6 +443,8 @@ data:
         kind: T1W_MAGNITUDE
         augmentation_config:
           scale_range: [0.8, 1.05]
+        penumbra_width: 0
+
 
 
       - type: magnitude
@@ -412,6 +452,8 @@ data:
         kind: T2W_MAGNITUDE
         augmentation_config:
           scale_range: [0.8, 1.05]
+        penumbra_width: 0
+
 
       - type: magnitude
         h5_path: ./datasets/ixi_pd.h5
@@ -453,18 +495,24 @@ data:
         kind: T1W_MAGNITUDE
         augmentation_config:
           scale_range: [0.8, 1.1]
+        penumbra_width: 0
+
 
       - type: magnitude
         h5_path: ./datasets/ulf_t2.h5
         kind: T2W_MAGNITUDE
         augmentation_config:
           scale_range: [0.8, 1.1]
+        penumbra_width: 0
+
 
       - type: magnitude
         h5_path: ./datasets/ulf_flair.h5
         kind: FLAIR_MAGNITUDE
         augmentation_config:
           scale_range: [0.8, 1.1]
+        penumbra_width: 0
+
 
       - type: magnitude
         h5_path: ./datasets/ldm_t1w.h5
@@ -477,12 +525,18 @@ data:
         kind: T1MAP
         augmentation_config:
           scale_range: [0.45, 0.6]
+        schedule:
+          type: constant
+          weight: 4
 
       - type: brainweb
         h5_path:  ./datasets/brainweb.h5
         kind: T2MAP
         augmentation_config:
           scale_range: [0.45, 0.6]
+        schedule:
+          type: constant
+          weight: 4
 
       - type: brainweb
         h5_path:  ./datasets/brainweb.h5
@@ -491,6 +545,11 @@ data:
           scale_range: [0.45, 0.6]
           intensity_scale_range: [0.5, 1.3]
           intensity_scale_prob: 0.5
+        penumbra_width: 0
+        schedule:
+          type: constant
+          weight: 4
+
 
       - type: brainweb_qualitative_magnitude
         h5_path:  ./datasets/brainweb.h5
@@ -498,12 +557,18 @@ data:
         scaling_factor: 10.
         augmentation_config:
           scale_range: [0.45, 0.6]
-
+        schedule:
+          type: constant
+          weight: 4
       - type: brainweb_qualitative_magnitude
         h5_path:  ./datasets/brainweb.h5
         kind: T2W_MAGNITUDE
         augmentation_config:
           scale_range: [0.45, 0.6]
+        penumbra_width: 0
+        schedule:
+          type: constant
+          weight: 4
 
       - type: brainweb_qualitative_complex
         h5_path:  ./datasets/brainweb.h5
@@ -511,16 +576,100 @@ data:
         scaling_factor: 10.
         augmentation_config:
           scale_range: [0.45, 0.6]
+        penumbra_width: 0
+
 
       - type: brainweb_qualitative_complex
         h5_path:  ./datasets/brainweb.h5
         kind: COMPLEX_T2W_COIL_COMBINED
         augmentation_config:
           scale_range: [0.45, 0.6]
-    batch_size: 64
+        penumbra_width: 0
+
+    # new
+      - type: mapping
+        h5_path: ./datasets/wand_m0_mag.h5
+        kind: M0_MAGNITUDE
+        augmentation_config:
+          scale_range: [0.7, 0.85]
+          intensity_scale_range: [0.5, 1.3]
+          intensity_scale_prob: 0.5
+      - type: complex
+        mode: flat
+        h5_path: ./datasets/wand_m0_complex.h5
+        kind: M0_COMPLEX
+        augmentation_config:
+          scale_range: [0.7, 0.85]
+          intensity_scale_range: [0.5, 1.3]
+          intensity_scale_prob: 0.5
+      - type: mapping
+        h5_path: ./datasets/wand_t1w.h5
+        kind: T1MAP
+        augmentation_config:
+          scale_range: [0.7, 0.85]
+      - type: magnitude
+        h5_path: ./datasets/wand_t1w.h5
+        kind: T1W_MAGNITUDE
+        augmentation_config:
+          scale_range: [0.7, 0.85]
+      - type: magnitude
+        h5_path: ./datasets/wand_t2w.h5
+        kind: T2W_MAGNITUDE
+        augmentation_config:
+          scale_range: [0.7, 0.85]
+      - type: magnitude
+        h5_path: ./datasets/wand_t1w_neu.h5
+        kind: T1W_MAGNITUDE
+        augmentation_config:
+          scale_range: [0.7, 0.85]
+
+      - type: mapping
+        h5_path: ./datasets/ds005851_m0_abs.h5
+        kind: M0_MAGNITUDE
+        augmentation_config:
+          scale_range: [0.85, 1.15]
+          intensity_scale_range: [0.5, 1.3]
+          intensity_scale_prob: 0.5
+      - type: mapping
+        h5_path: ./datasets/ds005851_t1map.h5
+        kind: T1MAP
+        augmentation_config:
+          scale_range: [0.85, 1.15]
+
+      - type: mapping
+        h5_path: ./datasets/ds005851_t2map.h5
+        kind: T2MAP
+        augmentation_config:
+          scale_range: [0.85, 1.15]
+        schedule:
+          type: constant
+          weight: 0.1
+      - type: magnitude
+        h5_path: ./datasets/rockland_t1w.h5
+        kind: T1W_MAGNITUDE
+        augmentation_config:
+          scale_range: [0.85, 1.1]
+        schedule:
+          type: constant
+          weight: 0.5
+      - type: magnitude
+        h5_path: ./datasets/rockland_t2w.h5
+        kind: T2W_MAGNITUDE
+        augmentation_config:
+          scale_range: [0.85, 1.1]
+      - type: magnitude
+        h5_path: ./datasets/rockland_flair.h5
+        kind: FLAIR_MAGNITUDE
+        augmentation_config:
+          scale_range: [0.85, 1.1]
+        schedule:
+          type: constant
+          weight: 0.5
+
+    batch_size: 128
     sample_size: [256, 256]
     base_seed: 42
-    kind_normalization: 0.5
+    kind_normalization: 0.7
 
 trainer:
   max_steps: 1000000
