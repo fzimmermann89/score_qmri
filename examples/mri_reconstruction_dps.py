@@ -13,6 +13,7 @@
 # %%
 
 from pathlib import Path
+from typing import cast
 
 import mrpro
 import torch
@@ -22,10 +23,10 @@ from mrpro.phantoms.fastmri import FastMRIKDataDataset
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import DPSConfig, DPSSampler
+from score_qmri.sampling import DPSConfig, DPSSampler, DPSStepInfo, GuidanceWeighting
 
 # %% Configuration
-CHECKPOINT_PATH = Path("checkpoints/latest.ckpt")
+CHECKPOINT_PATH = Path("checkpoints/last.converted.ckpt")
 FASTMRI_H5 = ["file_brain_AXT1_206_2060051.h5"]
 BATCH = 8
 SAMPLE = 4
@@ -51,7 +52,7 @@ op = fourier_op @ csm.as_operator()
 
 # %%
 # Load the diffusion model (VE/EDM framework)
-model = DiffusionModel.from_checkpoint(CHECKPOINT_PATH)
+model = cast(DiffusionModel, torch.compile(DiffusionModel.from_checkpoint(CHECKPOINT_PATH).cuda().eval()))
 
 # %% DPS config and sampler
 cfg = DPSConfig(
@@ -71,7 +72,7 @@ def log_progress(info: DPSStepInfo) -> None:
         print(f"step={info.step:04d} σ={info.sigma:.3e} ||r||={info.residual_norm:.3e} |x0|={info.x0_absmax:.3e}")
 
 
-sampler = DPSSampler(model.eval(), cfg, callback=log_progress)
+sampler = DPSSampler(model, cfg, callback=log_progress)
 
 # Direct (zero-filled) reconstruction for reference.
 (x_zf,) = op.H(k_us.data)
