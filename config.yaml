@@ -8,19 +8,8 @@ model:
       num_res_blocks: 2
       channel_mult: [1, 1, 2, 2, 4, 4]
       attention_levels: [-1, -2, -3]
-      head_dim: 64
   diffusion:
-    cond_dim: 128
-    num_kinds: 14
-    sigma_min: 0.001
-    sigma_max: 20.0
-    sigma_data: 0.2
-    p_mean: -1.6
-    p_std: 1.4
-    rho: 7.0
     normalization:
-      train_clip: 1.2
-      sample_clip: 1.0
       kind_scales:
         T1MAP: 0.25
         T2MAP: 2
@@ -668,7 +657,6 @@ data:
 
     batch_size: 128
     sample_size: [256, 256]
-    base_seed: 42
     kind_normalization: 0.7
 
 trainer:
