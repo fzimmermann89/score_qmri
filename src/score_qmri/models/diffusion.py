@@ -395,7 +395,11 @@ class DiffusionModel(torch.nn.Module):
         if x_2ch.is_contiguous(memory_format=torch.channels_last):
             x_in = x_in.contiguous(memory_format=torch.channels_last)
 
-        f_main, f_aux = self.unet(x_in, cond)
+        out = self.unet(x_in, cond=cond)
+        if isinstance(out, Tensor):
+            f_main, f_aux = out.chunk(2, dim=1)
+        else:
+            f_main, f_aux = out
 
         c_skip_b = c_skip.to(device=x_2ch.device, dtype=x_2ch.dtype).view(-1, 1, 1, 1)
         c_out_b = c_out.to(device=x_2ch.device, dtype=x_2ch.dtype).view(-1, 1, 1, 1)

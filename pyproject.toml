@@ -19,11 +19,11 @@ dependencies = [
     "einops>=0.7.0",
     "kornia>=0.7.0",
     "matplotlib>3.9",
+    "mrpro @ git+https://github.com/PTB-MR/mrpro.git@nn-stacked-v2",
 ]
 
 [project.optional-dependencies]
 dev = ["ruff>=0.1.0", "mypy>=1.5.0", "pytest>=7.0.0", "pytest-cov>=4.0.0", "pre-commit>=3.0.0"]
-examples = ["mrpro>=0.8.0"]
 
 [project.scripts]
 score-qmri = "score_qmri.cli:main"
