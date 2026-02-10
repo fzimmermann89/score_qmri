@@ -24,13 +24,13 @@ from .edm_sampler import karras_sigmas
 from .protocols import LinearOperatorProtocol
 
 
-def _to_complex(x_2ch: Tensor) -> Tensor:
-    """Convert (B, 2, H, W) real to (B, 1, 1, H, W) complex. Internal only."""
+def to_complex(x_2ch: Tensor) -> Tensor:
+    """Convert (B, 2, H, W) real to (B, 1, 1, H, W) complex."""
     return torch.view_as_complex(torch.moveaxis(x_2ch, 1, -1).contiguous()).unsqueeze(1).unsqueeze(1)
 
 
-def _to_2ch(x_complex: Tensor) -> Tensor:
-    """Convert (B, 1, 1, H, W) complex to (B, 2, H, W) real. Internal only."""
+def to_2ch(x_complex: Tensor) -> Tensor:
+    """Convert (B, 1, 1, H, W) complex to (B, 2, H, W) real."""
     z = x_complex.squeeze(1).squeeze(1)
     return torch.view_as_real(z).moveaxis(-1, 1).contiguous()
 
