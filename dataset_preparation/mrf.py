@@ -1,13 +1,5 @@
-"""Prepare Zenodo8183344 NIfTI and NIST MRF DICOM maps on the CPU.
-
-Zenodo pipeline: datacheck/v10.py. NIST T1/T2: IPython session215
-lines156/163; M0: datacheck/v11.py. NIST intentionally retains the first
-five original directory-order filenames before sorting, matching the source.
-Zenodo defaults to the canonical curated slice filter; --stage prepared
-retains original pre-HPC slices. NIST arrays are unchanged in either stage.
-Fresh downloads can enumerate differently; use --dicom-order-manifest for
-an explicitly recorded list if exact historical reproduction is required.
-"""
+"""MRF recipes from datacheck/v10.py (Zenodo), v11.py (NIST M0) and
+IPython215:156/163 (NIST T1/T2). NIST selects five files before sorting."""
 
 from __future__ import annotations
 
@@ -45,7 +37,7 @@ def zenodo_subject(root: Path, which: str, modalities: set[str]) -> Iterator[tup
 
 def nist_series(root: Path, modality: str, dicom_order: dict[str, list[str]] | None = None) -> torch.Tensor:
     """Read the original five DICOM candidates and sort by SliceLocation."""
-    import pydicom  # type: ignore[import-not-found]  # Optional preparation environment.
+    import pydicom
 
     if dicom_order is None:
         files = sorted(list(root.rglob("*.IMA"))[:5])

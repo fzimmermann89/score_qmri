@@ -40,10 +40,7 @@ def test_streaming_matches_original_including_underflow(tmp_path: Path) -> None:
     expected = source_normalize([x.copy() for x in values])
     actual = np.concatenate([slab for _, slab in brainweb.iter_raw_slabs(paths, shape, slab_size=3)])
     np.testing.assert_array_equal(actual, expected)
-    safe = np.concatenate([slab for _, slab in brainweb.iter_raw_slabs(paths, shape, "float-safe")])
-    assert np.any(safe[0, 0, 0] != actual[0, 0, 0])
     assert actual[0, 0, 0, -1] > 0
-    assert safe[0, 0, 0, -1] == 0
 
 
 def test_pack_copies_values_and_attributes_and_refuses_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,7 +98,7 @@ def test_cli_help_and_invalid_pack_options(tmp_path: Path, capsys: pytest.Captur
     with pytest.raises(SystemExit) as result:
         brainweb.main(["--help"])
     assert result.value.code == 0
-    assert "float-safe" in capsys.readouterr().out
+    assert "--input-root" in capsys.readouterr().out
     with pytest.raises(SystemExit) as result:
         brainweb.main(["pack", "--input-root", str(tmp_path), "--output", str(tmp_path / "out.h5"), "--download"])
     assert result.value.code == 2

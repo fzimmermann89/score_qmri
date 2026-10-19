@@ -1,37 +1,6 @@
-"""Reconstruct fastMRI, M4Raw and CC using recovered preparation mathematics.
-
-Original SHA256: fastmri.py 98fb3baa1b7de1af4034fcb538ca69c4a66a0c3e0213d03988e42aacc7df4390;
-m4raw.py f8989146047f15b53a22aac7848c6e231507165f1367515f0e18450369e37b65;
-v16.py 68ec28ef5213977850c0f25e7f39872375f8f253b4e0689254858a92a56d73ba.
-
-Pure FFT, ESPIRiT, phase fitting and masks were extracted from those originals.
-CPU is the default, one subject at a time; no downloads or GPU autodetection.
-Whole-subject FFT/calibration can still require substantial RAM and CPU time.
-CPU/CUDA SVD numerical differences mean byte equality is not guaranteed. Full
-Full collection reproduction has not been verified. One real fastMRI subject
-was numerically compared; CC prepared-to-curated copying was bit exact.
-M4Raw non-GRE uses the complete editor-history all-modality recipe hR8v.py
-SHA256 2c3be5e7f515e586eb9084d4d195b5a1a51f9aebc1999a72c1a6699f2d50bd0e
-(calibration0.05/0.5, mask0.2). GRE uses the later m4raw.py correction
-(calibration0.001/0.1, mask0.1). Both original recipes are preserved in the audit.
-CC raw reproduces v16's cc_6 recipe and writes cc_reconstructed.h5. The separate
-cc-fix recipe converts the older prepared CC axes and crops50:-20 into cc.h5;
-never apply that legacy correction to cc_reconstructed.h5. cc-prepared applies
-the verified historical slice filter to an existing correctly oriented prepared
-CC H5, producing cc.h5 exactly without reconstructing its 3D raw k-space.
-m4raw-prepared imports archived pre-curation m4raw_{t1w,t2w,flair,gre}.h5
-through that same filter. fastmri-prepared does the same for fastmri_{t1,t2,flair}.h5
-using combined images to select slices for both groups. These modes preserve
-every retained value rather than rerunning
-the unresolved raw reconstruction. It accepts --modalities and an input directory.
-fastMRI/M4Raw outputs apply the historical slice filter by default; --uncurated
-keeps every prepared slice. M4Raw repeat order is significant: default native
-filesystem order preserves the original recipe; --repeat-order sorted or a JSON
---repeat-manifest makes a chosen coil order explicit and portable.
-
-Pad/crop implements the constant last-dimension operation from installed mrpro
-0.260420+dirty4e90b588 (including its odd-padding alignment), avoiding the whole mrpro import.
-"""
+"""fastMRI, M4Raw and CC reconstruction from datacheck/fastmri.py, m4raw.py,
+v16.py and M4Raw editor history hR8v.py. Preserve FFT/calibration, masks and
+phase correction. M4Raw raw reconstruction still differs from the archived H5."""
 
 from __future__ import annotations
 
@@ -92,23 +61,7 @@ def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
 
 
 def remove_polynomial_phase(img: torch.Tensor, order: int = 1, threshold: float = 0.2, threshold_max: float = 0.6) -> torch.Tensor:
-    """
-    Removes polynomial phase ramps using magnitude-weighted gradient fitting.
-
-    Parameters
-    ----------
-    img : torch.Tensor
-        Complex input tensor of shape (B, H, W).
-    order : int
-        Polynomial order (1 for linear ramp).
-    threshold : float
-        Magnitude threshold to mask background artifacts.
-
-    Returns
-    -------
-    torch.Tensor
-        Phase-corrected complex tensor.
-    """
+    """Remove phase ramps from complex (B,H,W) images using magnitude-weighted gradients."""
     B, H, W = img.shape
     device, dtype = (img.device, img.real.dtype)
     mag = img.abs()
@@ -222,29 +175,7 @@ def pocs_partial_fourier(kspace: torch.Tensor, n_iter: int = 10) -> torch.Tensor
 def espirit_3d(
     kspace: Tensor, calib_width: int = 32, thresh: float = 0.05, kernel_width: int = 8, crop: float = 0.5, max_iter: int = 100
 ) -> Tensor:
-    """
-    ESPIRiT calibration for coil sensitivity estimation.
-
-    Parameters
-    ----------
-    kspace : Tensor
-        K-space data of shape (*batch, coils, kz, ky, kx), centered (DC at center).
-    calib_width : int
-        Width of calibration region.
-    thresh : float
-        Singular value threshold.
-    kernel_width : int
-        Calibration kernel width.
-    crop : float
-        Eigenvalue threshold for cropping.
-    max_iter : int
-        Power iteration count.
-
-    Returns
-    -------
-    Tensor
-        Coil sensitivity maps of shape (*batch, coils, kz, ky, kx), centered.
-    """
+    """Estimate coil sensitivities from centered (*batch,coils,kz,ky,kx) k-space."""
     *batch_shape, num_coils, nz, ny, nx = kspace.shape
     spatial_shape = (nz, ny, nx)
     spatial_dims = (-3, -2, -1)
@@ -415,35 +346,11 @@ def prepare(
         "m4raw": {"t1w", "t2w", "flair", "gre"},
         "cc-raw": {"raw"},
         "cc-fix": set(),
-        "cc-prepared": set(),
-        "m4raw-prepared": {"t1w", "t2w", "flair", "gre"},
-        "fastmri-prepared": {"t1", "t2", "flair"},
     }
     if family not in allowed or modalities and not set(modalities) <= allowed[family]:
         raise ValueError("Unknown family or modality selection.")
     if limit is not None and limit < 1:
         raise ValueError("Limit must be positive.")
-    if family in ("m4raw-prepared", "fastmri-prepared"):
-        from dataset_preparation.clean_h5 import clean_file
-
-        prefix = family.removesuffix("-prepared")
-        chosen = list(modalities) if modalities else sorted(allowed[family])
-        for modality in chosen:
-            source = input_root / f"{prefix}_{modality}.h5"
-            destination = output_dir / source.name
-            if not source.is_file():
-                raise FileNotFoundError(source)
-            if destination.exists() or destination.is_symlink():
-                raise FileExistsError(destination)
-        for modality in chosen:
-            filename = f"{prefix}_{modality}.h5"
-            clean_file(input_root / filename, output_dir / filename, list(subjects) if subjects else None, limit)
-        return
-    if family == "cc-prepared":
-        from dataset_preparation.clean_h5 import clean_file
-
-        clean_file(input_root, output_dir / "cc.h5", list(subjects) if subjects else None, limit)
-        return
     if family == "cc-fix":
         if not input_root.is_file():
             raise ValueError("cc-fix --input-root must be the original prepared CC H5 file.")
@@ -510,7 +417,7 @@ def prepare(
                 with h5py.File(path, "r") as source:
                     values.append(torch.tensor(np.array(source["kspace"]), device=device))
                     if family == "fastmri":
-                        import ismrmrd  # type: ignore[import-not-found]  # Optional preparation dependency.
+                        import ismrmrd
 
                         header = ismrmrd.xsd.CreateFromDocument(source["ismrmrd_header"][()])
                         size = header.encoding[0].reconSpace.matrixSize
@@ -540,7 +447,7 @@ def prepare(
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("family", choices=("fastmri", "m4raw", "cc-raw", "cc-fix", "cc-prepared", "m4raw-prepared", "fastmri-prepared"))
+    parser.add_argument("family", choices=("fastmri", "m4raw", "cc-raw", "cc-fix"))
     parser.add_argument("--input-root", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--modalities", nargs="+", help="fastmri: t1 t2 flair; m4raw: t1w t2w flair gre")

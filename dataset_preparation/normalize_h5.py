@@ -1,8 +1,4 @@
-"""Reproduce historical centered HDF5 padding/cropping without editing sources.
-
-The original preprocess_h5.py used these eleven file-specific shapes/skips and
-intentionally dropped attributes. Reads and writes one axial slice at a time.
-"""
+"""Shapes and subject exclusions from scripts/preprocess_h5.py; write a new file."""
 
 import argparse
 from dataclasses import dataclass
@@ -20,13 +16,12 @@ class NormalizeConfig:
     filename: str
     target_shape: tuple[int, int]
     skip_subjects: list[str] | None = None
-    has_groups: bool = False
 
 
 CONFIGS = [
-    NormalizeConfig("fastmri_t1.h5", (320, 320), has_groups=True),
-    NormalizeConfig("fastmri_t2.h5", (320, 320), has_groups=True),
-    NormalizeConfig("fastmri_flair.h5", (320, 320), has_groups=True),
+    NormalizeConfig("fastmri_t1.h5", (320, 320)),
+    NormalizeConfig("fastmri_t2.h5", (320, 320)),
+    NormalizeConfig("fastmri_flair.h5", (320, 320)),
     NormalizeConfig("ds004611_mprage.h5", (320, 320)),
     NormalizeConfig("ds004611_t1map.h5", (320, 320)),
     NormalizeConfig("ds004611_t1w.h5", (320, 320)),

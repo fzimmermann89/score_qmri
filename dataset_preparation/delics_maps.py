@@ -1,10 +1,5 @@
-"""Prepare Deli-CS T1/T2/complex-M0 from the original qmaps NPZ files.
-
-Source: datacheck/v15.py. The original used filesystem enumeration order.
-The bundled relative-path manifest records that order, verified against all
-360 original target planes and all three output maps. Override it only for a
-different input revision; alphabetical order does not reproduce this dataset.
-"""
+"""Deli-CS qmaps NPZ conversion from datacheck/v15.py. The bundled manifest
+preserves the historical plane order; sorting changes the training arrays."""
 
 from __future__ import annotations
 
@@ -44,12 +39,9 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
-    if args.order_manifest:
-        paths = [args.input_root / name for name in json.loads(args.order_manifest.read_text())]
-        if any(not path.resolve().is_relative_to(args.input_root.resolve()) for path in paths):
-            parser.error("Order manifest paths must stay within input-root")
-    else:
-        paths = sorted(p for p in args.input_root.rglob("qmap*.npz") if p.is_file())
+    paths = [args.input_root / name for name in json.loads(args.order_manifest.read_text())]
+    if any(not path.resolve().is_relative_to(args.input_root.resolve()) for path in paths):
+        parser.error("Order manifest paths must stay within input-root")
     if args.limit is not None:
         if args.limit <= 0:
             parser.error("limit must be positive")

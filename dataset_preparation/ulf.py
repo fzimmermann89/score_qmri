@@ -1,13 +1,5 @@
-"""Prepare ULF-labelled 3T reference images from the recovered HPC recipe.
-
-Original HPC IPython session49 cells60/61/62 wrote ulf_t1/ulf_flair/ulf_t2.h5.
-T1 cell SHA256: e3f7b2aa09def5257f646143e35d656b0b2548bc3ecffd3ef6f8c6aa9289b0cf.
-Inputs are subject/3T/*T1*.nii.gz, *T2*.nii.gz and *FLAIR*.nii.gz beneath
-ulfenc/train3, NOT the separate enhanced low-field predictions. Their historical
-'ulf' output label is retained for compatibility. This recipe reads local NIfTI
-files only; no download or reconstruction is launched. The complete original
-cells and cleaning helper are recorded in the preparation audit.
-"""
+"""ULF-labelled 3T reference anatomy, from HPC IPython49:60/61/62.
+Inputs are ulfenc/train3/subject/3T, not the enhanced low-field predictions."""
 
 from __future__ import annotations
 
@@ -24,7 +16,7 @@ def prepare_volume(volume: np.ndarray) -> np.ndarray:
     """Reproduce the original orientation, 16-pixel padding and mask selection."""
     import torch
 
-    from dataset_preparation.raw_mri import clean_mask_2d
+    from dataset_preparation.nifti import clean_mask_2d
 
     data = np.transpose(volume, (2, 1, 0))
     data = np.flip(data, axis=1)
@@ -46,7 +38,7 @@ def prepare(
     limit: int | None = None,
 ) -> None:
     """Prepare subjects from local 3T references into new exclusive H5 files."""
-    import nibabel as nib  # type: ignore[import-not-found]  # Optional preparation dependency.
+    import nibabel as nib
 
     if not modalities or not set(modalities) <= {"t1", "t2", "flair"} or len(set(modalities)) != len(modalities):
         raise ValueError("Select distinct modalities from t1, t2, flair.")

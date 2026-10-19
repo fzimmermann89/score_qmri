@@ -1,24 +1,10 @@
-"""Repack saved MONAI synthetic T1 samples or explicitly generate new samples.
-
-Original: datacheck/monai/run.py SHA256
- d625c5dbd7725985c646cf24db80d5ef0decfeacdecf37cf8d68a00030fa9d5b.
-Bundle: MONAI/brain_image_synthesis_latent_diffusion_model, revision
-55d88321e08930ba3a71d084ed94afaab0b29320 (local bundle required).
-
-Repacking reproduces existing logical arrays and conditioning attributes without
-sampling, downloading or loading model weights. Generation preserves the original
-conditioning, spatial preparation, mask and quantile recipe, with an explicit
-seed and device. The original had no seed; new generation cannot reproduce the
-historical samples. CPU is the default; GPU use requires --device cuda explicitly.
-The old CUDA compile wrapper is omitted. No inference runs at import or --help.
-The generator requires compatible MONAI AutoencoderKL/DiffusionModelUNet old-state
-loading support, plus the pinned bundle's scripts/sampler.py and local weights.
-"""
+"""Synthetic T1 preparation from datacheck/monai/run.py. Use the local MONAI
+brain_image_synthesis_latent_diffusion_model bundle at revision
+55d88321e08930ba3a71d084ed94afaab0b29320. The historical RNG seed is unknown."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -29,8 +15,6 @@ import numpy as np
 
 if TYPE_CHECKING:
     import torch
-
-BUNDLE_REVISION = "55d88321e08930ba3a71d084ed94afaab0b29320"
 
 
 def repack_samples(source: Path, output: Path, subjects: Sequence[str] | None = None, limit: int | None = None) -> None:
@@ -71,7 +55,7 @@ def prepare_generated_sample(volume: torch.Tensor) -> torch.Tensor:
     """Apply the original generated-volume orientation, slices, mask and scaling."""
     import torch
 
-    from dataset_preparation.raw_mri import clean_mask_2d
+    from dataset_preparation.nifti import clean_mask_2d
 
     x = volume.transpose(0, 2).flip(-2)[40:-40:4].cpu().float().detach()
     x = torch.nn.functional.pad(x[None], (16, 16, 16, 16))[0]
@@ -96,7 +80,7 @@ def generate_samples(bundle_root: Path, output: Path, limit: int = 1, seed: int 
             raise FileNotFoundError(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     import torch
-    from monai.bundle import ConfigParser  # type: ignore[import-not-found]  # Optional generation dependency.
+    from monai.bundle import ConfigParser
 
     torch.manual_seed(seed)
     selected_device = torch.device(device)
@@ -120,8 +104,6 @@ def generate_samples(bundle_root: Path, output: Path, limit: int = 1, seed: int 
         with torch.inference_mode(), h5py.File(output, "x") as target:
             target.attrs["n_samples"] = limit
             target.attrs["seed"] = seed
-            target.attrs["expected_bundle_revision"] = BUNDLE_REVISION
-            target.attrs["config_sha256"] = hashlib.sha256(config.read_bytes()).hexdigest()
             for idx in range(limit):
                 gender = torch.randint(0, 2, (1, 1, 1), device=selected_device).to(torch.float32)
                 other = torch.rand((1, 1, 3), device=selected_device, dtype=torch.float32)

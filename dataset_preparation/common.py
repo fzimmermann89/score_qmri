@@ -1,6 +1,6 @@
-"""Small, CPU-only I/O helpers shared by standalone preparation recipes."""
+"""Shared HDF5 creation and compression helpers."""
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -10,11 +10,7 @@ import numpy as np
 
 @contextmanager
 def exclusive_h5(path: str | Path) -> Iterator[h5py.File]:
-    """Create a new HDF5 file without replacing files or following symlinks.
-
-    A failed conversion leaves its new, incomplete output for inspection. It
-    never removes an output or attempts to resume one automatically.
-    """
+    """Refuse existing outputs, including dangling symlinks."""
     path = Path(path)
     if path.exists() or path.is_symlink():
         raise FileExistsError(f"Output already exists: {path}")
@@ -36,14 +32,3 @@ def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Data
     """Write an unchanged array using axial LZF compression and shuffle."""
     array = np.asarray(array)
     return handle.create_dataset(name, data=array, chunks=axial_chunks(array.shape), compression="lzf", shuffle=True)
-
-
-def selected_paths(paths: Iterable[str | Path], subjects: Iterable[str] | None = None, limit: int | None = None) -> list[Path]:
-    """Select deterministically by exact filename or stem, then apply a limit."""
-    if limit is not None and limit <= 0:
-        raise ValueError("limit must be positive")
-    selected = sorted({Path(path) for path in paths})
-    if subjects is not None:
-        wanted = set(subjects)
-        selected = [path for path in selected if path.stem in wanted or path.name in wanted]
-    return selected if limit is None else selected[:limit]

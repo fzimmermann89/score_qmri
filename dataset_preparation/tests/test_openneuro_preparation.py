@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import h5py
-import nibabel as nib  # type: ignore[import-not-found]  # Optional preparation environment.
+import nibabel as nib
 import numpy as np
 import pytest
 import torch

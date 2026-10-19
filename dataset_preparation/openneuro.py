@@ -1,9 +1,5 @@
-"""CPU preparation recipes recovered from datacheck/v3.py through v9.py.
-
-Input is an already downloaded OpenNeuro dataset root (including git-annex
-contents). Original masks, interpolation precision and ineffective out-of-place
-clamp calls are preserved. ds002785 and ds004889 FLAIR were recovered from IPython history.
-"""
+"""OpenNeuro recipes from datacheck/v3.py–v9.py and executed IPython history.
+Preserve masks, units, interpolation precision and dataset-specific crops."""
 
 from __future__ import annotations
 
@@ -13,7 +9,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import ExitStack
 from pathlib import Path
 
-import nibabel as nib  # type: ignore[import-not-found]  # Optional preparation environment.
+import nibabel as nib
 import numpy as np
 import scipy.ndimage as ndi
 import torch

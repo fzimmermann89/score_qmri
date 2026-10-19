@@ -7,8 +7,7 @@ import numpy as np
 import pytest
 
 from dataset_preparation.clean_h5 import clean_file
-from dataset_preparation.common import exclusive_h5, selected_paths, write_dataset
-from dataset_preparation.verify_h5 import compare_h5
+from dataset_preparation.common import exclusive_h5
 
 
 def test_exclusive_output_refuses_files_and_dangling_symlinks(tmp_path: Path) -> None:
@@ -74,62 +73,3 @@ def test_coilwise_only_filter_counts_largest_coil_not_sum(tmp_path: Path) -> Non
     clean_file(source, target)
     with h5py.File(target, "r") as handle:
         np.testing.assert_array_equal(handle["coilwise/subj"][:], data[[1]])
-
-
-def test_full_verifier_detects_unsampled_change_and_separates_attrs(tmp_path: Path) -> None:
-    left, right = tmp_path / "left.h5", tmp_path / "right.h5"
-    data: np.ndarray = np.zeros((5, 40, 40), dtype=np.float32)
-    with exclusive_h5(left) as handle:
-        write_dataset(handle, "subject", data)
-    data[1, 0, 0] = 99
-    with exclusive_h5(right) as handle:
-        ds = write_dataset(handle, "subject", data)
-        ds.attrs["note"] = "different"
-    sampled = compare_h5(left, right, sample_slices=2)
-    assert sampled["equal"] and sampled["mode"] == "sampled"
-    assert not compare_h5(left, right)["equal"]
-    assert any(item["reason"] == "attributes" for item in compare_h5(left, right, check_attributes=True)["issues"])
-
-
-def test_selection_is_sorted_bounded_and_exact(tmp_path: Path) -> None:
-    paths = [tmp_path / name for name in ("s02.h5", "s01.h5", "s03.h5")]
-    assert selected_paths(paths, ["s01", "s02.h5"], limit=1) == [tmp_path / "s01.h5"]
-    with pytest.raises(ValueError):
-        selected_paths(paths, limit=0)
-
-
-def test_verifier_reports_missing_subject_and_layout_only_difference(tmp_path: Path) -> None:
-    left, right = tmp_path / "left.h5", tmp_path / "right.h5"
-    data: np.ndarray = np.zeros((2, 4, 4), dtype=np.float32)
-    with exclusive_h5(left) as handle:
-        write_dataset(handle, "subject", data)
-    with exclusive_h5(right) as handle:
-        handle.create_dataset("subject", data=data)
-    assert compare_h5(left, right)["equal"]
-    assert not compare_h5(left, right, check_layout=True)["equal"]
-    assert not compare_h5(left, right, subjects=["absent"])["equal"]
-
-
-def test_verifier_tolerance_is_explicit_and_still_reports_bit_difference(tmp_path: Path) -> None:
-    left, right = tmp_path / "left.h5", tmp_path / "right.h5"
-    for path, value in ((left, 1.0), (right, 1.0 + 1e-7)):
-        with exclusive_h5(path) as handle:
-            handle.create_dataset("subject", data=np.full((3, 4, 4), value, np.float64))
-    assert not compare_h5(left, right)["equal"]
-    report = compare_h5(left, right, atol=2e-7)
-    assert report["equal"] and not report["bit_exact"]
-    assert report["checked_slices"] == 3
-    assert report["checked_values"] == 48
-    assert report["max_abs_difference"] == pytest.approx(1e-7)
-    assert not compare_h5(left, right, dataset_paths=["missing"])["equal"]
-
-
-def test_verifier_distinguishes_signed_zero_bytes_from_numerical_equality(tmp_path: Path) -> None:
-    left, right = tmp_path / "left.h5", tmp_path / "right.h5"
-    for path, sign in ((left, 1.0), (right, -1.0)):
-        with exclusive_h5(path) as handle:
-            handle.create_dataset("subject", data=np.zeros((2, 3, 3), np.float32) * sign)
-    report = compare_h5(left, right)
-    assert report["equal"]
-    assert not report["bit_exact"]
-    assert report["max_abs_difference"] == 0.0

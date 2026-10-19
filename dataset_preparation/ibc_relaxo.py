@@ -1,31 +1,20 @@
-"""CPU-only IBC Relaxometry reconstruction from existing BIDS sourcedata.
-
-T1/M0 use the executed January 7 history revision (B1 /1000).
-T2star/S0 use the executed December 16 revision (20-slice crop and 3D mask).
-T2/S0_T2 preserve v13.py's fits, masks, orientations and crops.
-The historical T2 writer was commented out; its paired output is reconstructed
-here and validated within floating-point rounding on one historical subject.
-No download is attempted; acquire the IBC Relaxometry sourcedata separately.
-"""
+"""IBC Relaxometry: executed January 7 T1/M0 (B1 /1000), December 16 T2*/S0
+(3D mask, 20-slice crop), and datacheck/v13.py T2/S0 fits."""
 
 import argparse
 import json
 from contextlib import ExitStack
-from importlib import import_module
 from pathlib import Path
 from typing import cast
 
-import nibabel as nib  # type: ignore[import-not-found]  # Optional standalone preparation dependency.
+import nibabel as nib
 import numpy as np
 import scipy.ndimage as ndi
 import torch
+from nilearn.image import resample_to_img
+from threadpoolctl import threadpool_limits
 
 from dataset_preparation.common import exclusive_h5, write_dataset
-
-# These optional preparation packages have no typing metadata. Load only their
-# public entry points; there is no preparation or resampling at import time.
-resample_to_img = import_module("nilearn.image").resample_to_img
-threadpool_limits = import_module("threadpoolctl").threadpool_limits
 
 
 def clean_mask_3d(mask: np.ndarray) -> torch.Tensor:
@@ -36,7 +25,6 @@ def clean_mask_3d(mask: np.ndarray) -> torch.Tensor:
     ms = []
     for s in m:
         s = ndi.binary_fill_holes(s)
-        # m = ndi.binary_dilation(m, structure=st, iterations=1)
 
         lab, n = ndi.label(s, structure=ndi.generate_binary_structure(2, 1))
         if n:
@@ -90,29 +78,7 @@ def fit_t1_linear(
     mask: np.ndarray | torch.Tensor,
     tr: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Linearized DESPOT1 T1 mapping with B1 correction.
-
-    Parameters
-    ----------
-    vfa_data
-        VFA signal array, shape (x, y, z, n_fa).
-    fa_deg
-        Nominal flip angles in degrees, shape (n_fa,).
-    b1_rel
-        Relative B1 map, shape (x, y, z).
-    mask
-        Brain mask, shape (x, y, z).
-    tr
-        Repetition time in seconds.
-
-    Returns
-    -------
-    t1_map
-        T1 values in seconds.
-    m0_map
-        Proton density proxy.
-    """
+    """Linear DESPOT1 fit: signal (X,Y,Z,FA), B1 ratio, TR in seconds; return T1 seconds and M0."""
     fa_rad = np.deg2rad(fa_deg)
     fa_eff = b1_rel[..., None] * fa_rad
 
@@ -159,7 +125,6 @@ def t1_map(sub: str, ses: str, base_path: Path) -> tuple[torch.Tensor, torch.Ten
 
     t1, m0 = fit_t1_linear(vfa, fa, b1, mask, tr)
 
-    # mask = mask & (m0 < 1e5) & (m0 > 1e2)
     m0 = m0.clamp(min=m0[mask].quantile(0.02), max=m0[mask].quantile(0.95))
     m0 = m0 / m0[mask].quantile(0.8)
     m0 = m0.clamp(min=-0.1, max=1.5)
@@ -215,25 +180,7 @@ def create_mask_t2star(mag: np.ndarray | torch.Tensor) -> torch.Tensor:
 
 
 def fit_t2star(mag: np.ndarray | torch.Tensor, te: np.ndarray, mask: np.ndarray | torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Log-linear T2* fitting.
-
-    Parameters
-    ----------
-    mag
-        Magnitude data, shape (x, y, z, n_echo).
-    te
-        Echo times in seconds, shape (n_echo,).
-    mask
-        Brain mask, shape (x, y, z).
-
-    Returns
-    -------
-    t2star
-        T2* map in seconds.
-    s0
-        S0 map.
-    """
+    """Log-linear T2* fit on (X,Y,Z,echo), with echo times in seconds; return T2* and normalized S0."""
     log_s = np.log(np.clip(mag, 1, None))
 
     t2star = np.zeros(mag.shape[:-1], dtype=np.float32)
@@ -254,7 +201,6 @@ def fit_t2star(mag: np.ndarray | torch.Tensor, te: np.ndarray, mask: np.ndarray 
     t2star[idx] = 1.0 / r2star
     s0[idx] = np.exp(intercept)
     s0_tensor = torch.tensor(s0)
-    # mask = mask * (t2star < 5) * (s0 > 50)
     mask_tensor = torch.stack([torch.tensor(ndi.binary_erosion(m)) for m in mask])
     s0_tensor = s0_tensor.clamp_max(s0_tensor[mask_tensor].quantile(0.95))
     s0_tensor = s0_tensor / s0_tensor[mask_tensor].quantile(0.8)
@@ -264,13 +210,11 @@ def fit_t2star(mag: np.ndarray | torch.Tensor, te: np.ndarray, mask: np.ndarray 
     s0_tensor = s0_tensor[20:-20]
     t2star_tensor = t2star_tensor[20:-20]
 
-    # t2star = np.clip(t2star, 0, 0.2)
-
     return t2star_tensor, s0_tensor
 
 
 def compute_t2star_map(base_path: Path, sub: str, ses: str) -> tuple[torch.Tensor, torch.Tensor]:
-    mag, te, ref_img = load_t2star_data(base_path, sub, ses)
+    mag, te, _ = load_t2star_data(base_path, sub, ses)
     mag_tensor = torch.tensor(mag).movedim(0, 2)
     mag_tensor = mag_tensor[80:-20]
 
@@ -280,29 +224,7 @@ def compute_t2star_map(base_path: Path, sub: str, ses: str) -> tuple[torch.Tenso
 
 
 def load_t2_data(base_path: Path, sub: str, ses: str, run: str = "02") -> tuple[np.ndarray, np.ndarray, nib.Nifti1Image]:
-    """
-    Load multi-echo spin-echo T2 data.
-
-    Parameters
-    ----------
-    base_path
-        Root path to sourcedata.
-    sub
-        Subject ID.
-    ses
-        Session ID.
-    run
-        Run ID.
-
-    Returns
-    -------
-    mag
-        Magnitude data, shape (x, y, z, n_echo).
-    te
-        Echo times in seconds, shape (n_echo,).
-    img
-        Reference NIfTI image.
-    """
+    """Load spin-echo magnitudes (X,Y,Z,echo) and echo times in seconds."""
     mag_path = base_path / f"sub-{sub}/ses-{ses}/anat/sub-{sub}_ses-{ses}_run-{run}_T2map.nii.gz"
     json_path = mag_path.with_suffix("").with_suffix(".json")
 
@@ -336,25 +258,7 @@ def create_mask_t2(mag: np.ndarray, threshold: float = 100) -> torch.Tensor:
 
 
 def fit_t2(mag: np.ndarray, te: np.ndarray, mask: np.ndarray | torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Log-linear T2 fitting for multi-echo spin-echo data.
-
-    Parameters
-    ----------
-    mag
-        Magnitude data, shape (x, y, z, n_echo).
-    te
-        Echo times in seconds, shape (n_echo,).
-    mask
-        Brain mask, shape (x, y, z).
-
-    Returns
-    -------
-    t2
-        T2 map in seconds.
-    s0
-        S0 map.
-    """
+    """Log-linear spin-echo fit; return T2 in seconds and normalized S0."""
     log_s = np.log(np.clip(mag, 1, None))
 
     t2 = np.zeros(mag.shape[:-1], dtype=np.float32)
@@ -393,7 +297,7 @@ def compute_t2_map(
     run: str = "02",
     crop: tuple[int, int] = (10, 10),
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    mag, te, ref_img = load_t2_data(base_path, sub, ses, run)
+    mag, te, _ = load_t2_data(base_path, sub, ses, run)
     mag_tensor = torch.tensor(mag).swapaxes(0, 2).flip(1)
     mag_tensor = mag_tensor[..., :10]
     te = te[:10]
@@ -414,11 +318,7 @@ def prepare(
     subjects: list[str] | None = None,
     limit: int | None = None,
 ) -> list[str]:
-    """Create two new HDF5 files for one contrast family, one subject at a time.
-
-    Subject selection accepts exact HDF5 subject/session/run keys. The default
-    is one CPU thread and one subject, enforced by the command-line interface.
-    """
+    """Write the paired parameter/S0 files for selected subject/session keys."""
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
     patterns = {"t1": "*fa03*_T1map.nii.gz", "t2star": "*mag_T2starmap.nii.gz", "t2": "*_T2map.nii.gz"}
@@ -483,7 +383,7 @@ def main() -> None:
     torch.set_num_threads(1)
     with threadpool_limits(limits=1):
         result = prepare(args.input, args.output, args.family, args.subjects, None if args.all else args.limit)
-    print(json.dumps(result, indent=2))
+    print(f"Prepared {len(result)} subjects")
 
 
 if __name__ == "__main__":

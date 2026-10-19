@@ -1,13 +1,6 @@
-"""Reproduce the historical HPC slice filter, reading one slice at a time.
-
-The original scripts/cleanup_h5.py drops all attributes. This command preserves
-that behavior deliberately so existing prepared arrays can be reproduced.
-It supports flat image volumes and grouped combined/coilwise images; Brainweb
-class volumes use a different schema and must be packed by their own recipe.
-"""
+"""Slice filter from scripts/cleanup_h5.py; stream to a new file, dropping attributes."""
 
 import argparse
-import json
 from pathlib import Path
 
 import h5py
@@ -32,11 +25,6 @@ def retained_indices(
         if count >= min_pixels:
             valid.append(index)
     return valid
-
-
-def valid_slice_indices(dataset: h5py.Dataset | np.ndarray) -> list[int]:
-    """Use the fixed historical thresholds (compatibility name)."""
-    return retained_indices(dataset)
 
 
 def _copy_selected(source: h5py.Dataset, target: h5py.Group, name: str, indices: list[int]) -> None:
@@ -75,7 +63,7 @@ def clean_file(
             for name in groups:
                 target.create_group(name)
             for name in names:
-                indices = valid_slice_indices(reference[name])
+                indices = retained_indices(reference[name])
                 report[name] = {"input_slices": reference[name].shape[0], "output_slices": len(indices)}
                 if not indices:
                     continue
@@ -95,7 +83,8 @@ def main() -> None:
     parser.add_argument("--subjects", nargs="+", help="Exact HDF5 subject keys")
     parser.add_argument("--limit", type=int, help="Only the first N selected subjects")
     args = parser.parse_args()
-    print(json.dumps(clean_file(args.input, args.output, args.subjects, args.limit), indent=2))
+    for name, counts in clean_file(args.input, args.output, args.subjects, args.limit).items():
+        print(f"{name}: {counts['input_slices']} -> {counts['output_slices']} slices")
 
 
 if __name__ == "__main__":

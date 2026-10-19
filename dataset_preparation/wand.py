@@ -1,9 +1,5 @@
-"""Prepare WAND MP2RAGE quantitative maps and magnitude images.
-
-Numerical functions are copied from the last definitions in datacheck/wand2.py.
-The CPU default and smaller matching batches only change resource usage.
-Original mask/normalization and the non-inplace T1 clamp are preserved.
-"""
+"""WAND MP2RAGE and magnitude preparation from datacheck/wand2.py.
+Preserve the last numerical definitions, masks and non-inplace T1 clamp."""
 
 from __future__ import annotations
 
@@ -13,7 +9,7 @@ from collections import defaultdict
 from contextlib import ExitStack
 from pathlib import Path
 
-import nibabel as nib  # type: ignore[import-not-found]  # Optional standalone preparation dependency.
+import nibabel as nib
 import numpy as np
 import torch
 
@@ -70,28 +66,7 @@ def fit_t1_m0(
     device: str | None = None,
     chunk_size: int = 256,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Fit T1 and complex M0 using LUT matching.
-
-    Parameters
-    ----------
-    PSIR, MP2RAGE : torch.Tensor
-        Computed contrasts.
-    S1, S2 : torch.Tensor
-        Complex signals from both inversions.
-    B1map : torch.Tensor
-        B1 as percentage of nominal (100 = perfect).
-    lut_path : str
-        Path to precomputed LUT.
-    device : str | None
-        Compute device.
-    chunk_size : int
-        Voxels per batch (tune for GPU memory).
-
-    Returns
-    -------
-    T1map, M0map, PSIR : torch.Tensor
-    """
+    """Match contrasts and B1 percent to the complete LUT; return T1 milliseconds, complex M0 and PSIR."""
     device = device or "cpu"
     LUT_INV1, LUT_INV2, LUT_PSIR, LUT_MP2RAGE = load_lut(lut_path)
     MWM = 0.71
@@ -127,32 +102,6 @@ def fit_t1_m0(
         m0_mag = (w1 * m0_mag1 + w2 * m0_mag2) / (w1 + w2).clamp(min=1e-12)
         M0[sl] = m0_mag * torch.exp(1j * s2[sl].angle())
     return (T1.reshape(shape).cpu(), M0.reshape(shape).cpu(), PSIR)
-
-
-def process_mp2rage(
-    inv1_mag_path: str,
-    inv1_phase_path: str,
-    inv2_mag_path: str,
-    inv2_phase_path: str,
-    b1_map: torch.Tensor | None = None,
-    lut_path: str = "LUT_UK7T.pkl",
-    device: str | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Process MP2RAGE to T1 and complex M0.
-
-    Returns
-    -------
-    T1map : torch.Tensor
-        T1 in ms.
-    M0map : torch.Tensor
-        Complex M0 (|M0| = PD × Rx sensitivity, angle = phase from INV2).
-    PSIR : torch.Tensor
-    """
-    S1, S2, _ = load_complex_mp2rage(inv1_mag_path, inv1_phase_path, inv2_mag_path, inv2_phase_path)
-    PSIR, MP2RAGE = compute_psir_mp2rage(S1, S2)
-    b1_map = b1_map if b1_map is not None else torch.full(PSIR.shape, 100.0)
-    return fit_t1_m0(PSIR, MP2RAGE, S1, S2, b1_map, lut_path, device)
 
 
 def mp2rage_volumes(folder: Path, lut: Path, chunk_size: int = 256) -> dict[str, np.ndarray]:

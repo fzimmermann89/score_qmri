@@ -1,10 +1,5 @@
-"""Generate the historical UK7T LUT without plotting or overwriting files.
-
-Based on Olivier Mougin's notebook and Ian Driver's 2021/2022 adaptation,
-recovered as datacheck/mprage_wand.py:create_LUT. Preserve original sequence
-constants and five-shot steady state. Full grid is an explicit CPU operation
-that historically takes about one hour; no generation runs on import.
-"""
+"""UK7T LUT from datacheck/mprage_wand.py:create_LUT, based on Olivier Mougin
+and Ian Driver’s 2021/2022 simulation. The full grid takes about one CPU hour."""
 
 import argparse
 from pathlib import Path
@@ -13,8 +8,6 @@ import numpy as np
 
 
 def create_lut(max_b1: int = 200, max_t1: int = 3000) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    maxB1 = max_b1
-    maxT1 = max_t1
     SSi = 3500
     TR = 6.3
     TFE = 224
@@ -36,7 +29,7 @@ def create_lut(max_b1: int = 200, max_t1: int = 3000) -> tuple[np.ndarray, np.nd
     TI3_10 = int(TI4_10 - np.ceil(TFE_bis * TR10))
     TI5_10 = int(TI4_10 + np.ceil(TFE_bis * TR10))
     if TI0_10 < 0:
-        OSError("Error, wrong timing: please readjust sequence timing!")
+        raise ValueError("Invalid sequence timing")
     RF = np.zeros_like(T, dtype=bool)
     for i in range(TI0_10, TI2_10, 1):
         if not np.mod(i - TI0_10, TR10):
@@ -48,12 +41,10 @@ def create_lut(max_b1: int = 200, max_t1: int = 3000) -> tuple[np.ndarray, np.nd
     FB = 180
     eff = 0.95
     cosFB = np.cos(np.deg2rad(eff * FB))
-    B1m = range(1, maxB1 + 1, 1)
-    T1m = range(1, maxT1 + 1, 1)
-    LUT_INV1 = np.zeros((maxB1 + 1, maxT1 + 1))
+    B1m = range(1, max_b1 + 1, 1)
+    T1m = range(1, max_t1 + 1, 1)
+    LUT_INV1 = np.zeros((max_b1 + 1, max_t1 + 1))
     LUT_INV2 = np.zeros_like(LUT_INV1)
-    LUT_MP2RAGE = np.zeros_like(LUT_INV1)
-    LUT_PSIR = np.zeros_like(LUT_INV1)
     for T1tmp in T1m:
         expmT1 = np.exp(-0.1 / T1tmp)
         expTRT1 = np.exp(-(TR - 0.1) / T1tmp)

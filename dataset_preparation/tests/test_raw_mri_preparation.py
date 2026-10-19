@@ -84,36 +84,3 @@ def test_cli_defaults_do_not_select_cuda(tmp_path: Path, monkeypatch: pytest.Mon
     raw_mri.main(["m4raw", "--input-root", str(tmp_path), "--output-dir", str(tmp_path / "new"), "--limit", "1"])
     assert calls[0][6] == "cpu"
     assert torch.get_num_threads() == 1
-
-
-def test_cc_prepared_family_uses_combined_slice_filter(tmp_path: Path) -> None:
-    source = tmp_path / "prepared.h5"
-    values: np.ndarray = np.ones((3, 40, 40), dtype=np.complex64)
-    values[0] = 0
-    coils: np.ndarray = np.stack([values, values * 2], axis=1)
-    with h5py.File(source, "x") as file:
-        file.create_group("combined").create_dataset("subject", data=values)
-        file.create_group("coilwise").create_dataset("subject", data=coils)
-    output = tmp_path / "output"
-    raw_mri.prepare("cc-prepared", source, output, limit=1)
-    with h5py.File(output / "cc.h5", "r") as file:
-        np.testing.assert_array_equal(file["combined/subject"][:], values[1:])
-        np.testing.assert_array_equal(file["coilwise/subject"][:], coils[1:])
-    with pytest.raises(FileExistsError):
-        raw_mri.prepare("cc-prepared", source, output, limit=1)
-
-
-@pytest.mark.parametrize("family,modality", [("m4raw", "gre"), ("fastmri", "t1")])
-def test_prepared_imports_retained_arrays(tmp_path: Path, family: str, modality: str) -> None:
-    source = tmp_path / "prepared"
-    source.mkdir()
-    values: np.ndarray = np.ones((3, 40, 40), dtype=np.complex64)
-    values[0] = 0
-    with h5py.File(source / f"{family}_{modality}.h5", "x") as file:
-        file.create_dataset("subject", data=values)
-    output = tmp_path / "output"
-    raw_mri.prepare(f"{family}-prepared", source, output, modalities=[modality], limit=1)
-    with h5py.File(output / f"{family}_{modality}.h5", "r") as file:
-        np.testing.assert_array_equal(file["subject"][:], values[1:])
-    with pytest.raises(FileExistsError):
-        raw_mri.prepare(f"{family}-prepared", source, output, modalities=[modality], limit=1)

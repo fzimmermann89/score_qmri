@@ -1,10 +1,5 @@
-"""Prepare IXI, Quiero, Rockland and ds005851 from existing NIfTI downloads.
-
-Extracted from datacheck/ixi.py, v12.py, rockland.py and ds5851.py.
-Preparation preserves the original numerical operations, including unusual
-rate conversions and ineffective non-inplace clamps. Run clean_h5 separately
-for the curated slice-filtering stage. See provenance.json for source hashes.
-"""
+"""IXI, Quiero, ds005851 and Rockland recipes from datacheck/ixi.py, v12.py,
+ds5851.py and the executed Rockland IPython session343 revision."""
 
 from __future__ import annotations
 
@@ -13,7 +8,7 @@ import math
 from contextlib import ExitStack
 from pathlib import Path
 
-import nibabel as nib  # type: ignore[import-not-found]  # Optional standalone preparation dependency.
+import nibabel as nib
 import numpy as np
 import scipy.ndimage as ndi
 import torch
