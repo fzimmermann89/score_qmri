@@ -449,6 +449,11 @@ class DiffusionLightningModule(LightningModule):
 
     def on_save_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         checkpoint["ema"] = self.ema.state_dict()
+        from score_qmri.utils.checkpoint import plain_config
+
+        for key in ("hyper_parameters", "datamodule_hyper_parameters"):
+            if key in checkpoint:
+                checkpoint[key] = plain_config(checkpoint[key])
 
     def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         if "ema" in checkpoint:

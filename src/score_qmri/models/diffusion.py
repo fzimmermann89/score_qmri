@@ -276,8 +276,10 @@ class DiffusionModel(torch.nn.Module):
         *,
         unet: torch.nn.Module,
         diffusion: DiffusionConfig | dict[str, Any] | None = None,
+        compile_model: bool = True,
     ) -> None:
         super().__init__()
+        self.checkpoint_info: dict[str, Any] = {}
 
         if diffusion is None:
             diffusion = DiffusionConfig()
@@ -307,7 +309,7 @@ class DiffusionModel(torch.nn.Module):
 
         self.cond_mlp = ConditioningMLP(cond_dim=diffusion.cond_dim, num_kinds=diffusion.num_kinds)
 
-        self.unet = cast(torch.nn.Module, torch.compile(unet, mode="reduce-overhead"))
+        self.unet = cast(torch.nn.Module, torch.compile(unet, mode="reduce-overhead")) if compile_model else unet
 
     @property
     def device(self) -> torch.device:
@@ -626,6 +628,11 @@ class DiffusionModel(torch.nn.Module):
         if any(k.startswith("model.") for k in sd):
             sd = {k.removeprefix("model."): v for k, v in sd.items() if k.startswith("model.")}
 
+        # Compiled training checkpoints and eager inference use different wrapper
+        # paths, but the underlying tensor names and shapes must match strictly.
+        target_keys = {key.replace("_orig_mod.", ""): key for key in super().state_dict()}
+        sd = {target_keys.get(key.replace("_orig_mod.", ""), key): value for key, value in sd.items()}
+
         return cast(
             torch.nn.modules.module._IncompatibleKeys,
             super().load_state_dict(sd, strict=strict, assign=assign),
@@ -658,6 +665,8 @@ class DiffusionModel(torch.nn.Module):
         map_location: torch.device | str | None = None,
         strict: bool = True,
         eval_mode: bool = True,
+        compile_model: bool = True,
+        weights: str = "auto",
     ) -> DiffusionModel:
         """Instantiate a diffusion model from a Lightning-style checkpoint.
 
@@ -674,42 +683,44 @@ class DiffusionModel(torch.nn.Module):
             Whether to require exact key matching when loading weights.
         eval_mode
             If True, puts the model in eval mode before returning.
+        compile_model
+            Compile the UNet. Disable for bounded CPU smoke tests or eager inference.
+        weights
+            Select "ema" (requires saved EMA weights), "raw", or legacy-compatible
+            "auto" (EMA when present, otherwise raw). Evaluations should select
+            explicitly and record their choice.
         """
         if map_location is None:
             map_location = "cuda" if torch.cuda.is_available() else "cpu"
         checkpoint = torch.load(path, map_location=map_location, weights_only=False)
-        hparams = checkpoint.get("hyper_parameters")
-        if not isinstance(hparams, Mapping):
-            raise ValueError(
-                "Checkpoint is missing 'hyper_parameters'. Use DiffusionModel(...).load_checkpoint(...) or provide a Lightning checkpoint."
-            )
+        from score_qmri.utils.checkpoint import model_spec
 
-        cli_config = checkpoint.get("cli_config")
-        model_cfg: Mapping[str, Any] | None = None
-        if isinstance(cli_config, Mapping):
-            model_cfg = _extract_model_config(cli_config)
-
-        diffusion = hparams.get("diffusion")
-        if diffusion is None:
-            raise ValueError("Checkpoint is missing 'hyper_parameters.diffusion'.")
-        if isinstance(diffusion, Mapping):
-            diffusion = DiffusionConfig.from_mapping(diffusion)
-        elif isinstance(diffusion, DiffusionConfig):
-            diffusion = DiffusionConfig.from_mapping(diffusion.__dict__)
-        else:
-            raise TypeError(f"Unsupported diffusion type: {type(diffusion)!r}")
+        unet_spec, diffusion_config = model_spec(checkpoint, require_unet=unet is None)
+        diffusion = DiffusionConfig.from_mapping(diffusion_config)
 
         if unet is None:
-            if model_cfg is None:
-                raise ValueError("Checkpoint is missing 'cli_config'; provide unet explicitly.")
-            unet_spec = model_cfg.get("unet")
-            if not isinstance(unet_spec, Mapping):
-                raise ValueError("Checkpoint cli_config is missing model.unet specification.")
             unet = _instantiate_unet_from_spec(unet_spec, cond_dim=diffusion.cond_dim)
 
-        model = cls(unet=unet, diffusion=diffusion)
+        model = cls(unet=unet, diffusion=diffusion, compile_model=compile_model)
 
-        model.load_state_dict(checkpoint, strict=strict)
+        if weights == "auto":
+            weights = "ema" if "ema" in checkpoint and "shadow" in checkpoint["ema"] else "raw"
+        if weights == "ema":
+            if "ema" not in checkpoint or "shadow" not in checkpoint["ema"]:
+                raise ValueError("Checkpoint has no EMA shadow; explicitly select weights='raw' if intended")
+            state = checkpoint["ema"]["shadow"]
+        elif weights == "raw":
+            state = checkpoint["state_dict"]
+        else:
+            raise ValueError("weights must be 'auto', 'ema' or 'raw'")
+        model.load_state_dict(state, strict=strict)
+        model.checkpoint_info = {
+            "path": str(path),
+            "global_step": checkpoint.get("global_step"),
+            "weights": weights,
+            "unet": unet_spec,
+            "diffusion": diffusion_config,
+        }
         if eval_mode:
             model.eval()
         return model
