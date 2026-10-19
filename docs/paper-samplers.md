@@ -142,6 +142,64 @@ prior remains a smoothed approximation to the clean prior.
 checkpoint provenance, source hashes and metrics for an explicitly supplied
 frozen Fourier case. It makes no held-out or posterior-calibration claim.
 
+## Ensembles, uncertainty and reconstruction errors
+
+`scripts/sample_posterior_ensemble.py` generates independent batched draws for
+one fixed measurement. The default DPS recipe uses 1000 ancestral steps and
+norm-guidance scale .1. The default DAPS recipe uses the dynamic score prior,
+32 outer stages, 5 PF steps, 100 Langevin steps, constant learning rate 1.5e-5,
+and prior score at sigma=.01. The measurement likelihood uses tau=.01 per real
+coordinate. These explicit engineering-screen settings can be overridden.
+
+```bash
+python scripts/sample_posterior_ensemble.py \
+    --checkpoint model.ckpt --cases cases.npz --case-index 0 \
+    --kind COMPLEX_T1W_COIL_COMBINED --sampler dps --output ensemble-dps
+python scripts/sample_posterior_ensemble.py \
+    --checkpoint model.ckpt --cases cases.npz --case-index 0 \
+    --kind COMPLEX_T1W_COIL_COMBINED --sampler daps --output ensemble-daps
+python scripts/analyze_posterior_ensembles.py \
+    --runs ensemble-dps ensemble-daps --output uncertainty-comparison
+```
+
+Each output directory must be new. The runner saves eight draws by default,
+four per batch. Within-batch random tensors have independent entries; separate
+batches use separate seeds. A batch seed is recorded with its draw indices.
+Changing batch size changes the random-number stream and therefore the draws.
+All draws start independently from the prescribed Gaussian initialization;
+this is an ensemble across complete sampler trajectories, not adjacent MCMC
+states from one trajectory. More draws reduce Monte Carlo estimation noise,
+but do not fix algorithm or learned-prior bias.
+
+The analysis makes two matched comparisons:
+
+- Magnitude: mean `E[|x|]`, absolute error relative to `|truth|`, and sample SD
+  of `|x|`. This mean is different from `|E[x]|`.
+- Complex: mean `E[x]`, error `|E[x]-truth|`, and complex spread
+  `sqrt(Var(real)+Var(imag))`. This exposes phase uncertainty that magnitude
+  maps alone can hide. The displayed mean image is `|E[x]|`.
+
+All variances use the n-1 sample denominator. SD describes variation across
+draws; it is not divided by sqrt(n), which would estimate uncertainty in the
+Monte Carlo mean. Error and SD maps share the same full-range color limits
+across compared samplers within a case/domain. No smoothing, spatial filtering
+or ROI masking is applied to the displayed maps. Additional focused PNG assets
+use a shared limit of 10% of the reference peak, with all saturation fractions
+reported; the full-range maps remain available. PNG/PDF figures and numeric
+maps are saved alongside raw draw hashes and a JSON summary.
+
+Spatial error–spread diagnostics use a fixed foreground rule, reference
+magnitude above 5% of its peak, to prevent background from dominating. They
+include RMS error versus RMS SD, rank correlation and eight equal-count bins
+ordered by uncertainty. Pixels are correlated and this is one fixed noisy
+measurement; these diagnostics are not coverage or posterior-calibration tests.
+Acquired and missing Fourier locations are also summarized separately, using
+complex error against the noiseless reference and complex ensemble spread. This
+can expose suppressed measurement-space uncertainty that image-space totals hide.
+The first four draws, 2/4/full prefix diagnostics and split-half mean differences
+help reveal Monte Carlo variation. Eight draws provide an exploratory uncertainty map, not a precise
+tail-probability estimate.
+
 References:
 
 - [DPS paper](https://arxiv.org/abs/2209.14687),
