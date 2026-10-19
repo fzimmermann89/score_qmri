@@ -1,0 +1,446 @@
+[
+  {
+    "file": "ixi_t1w.h5",
+    "subject": "IXI002-Guys-0828-T1",
+    "source": "/home/zimmer08/data/ixi/2_Guys/T1/NIfTI/IXI002-Guys-0828-T1.nii.gz",
+    "candidate_shape": [
+      195,
+      240,
+      179
+    ],
+    "reference_shape": [
+      195,
+      240,
+      179
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "ixi_t2w.h5",
+    "subject": "IXI002-Guys-0828-T2",
+    "source": "/home/zimmer08/data/ixi/2_Guys/T2/NIfTI/IXI002-Guys-0828-T2.nii.gz",
+    "candidate_shape": [
+      114,
+      256,
+      256
+    ],
+    "reference_shape": [
+      114,
+      256,
+      256
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "ixi_pd.h5",
+    "subject": "IXI002-Guys-0828-PD",
+    "source": "/home/zimmer08/data/ixi/2_Guys/PD/NIfTI/IXI002-Guys-0828-PD.nii.gz",
+    "candidate_shape": [
+      115,
+      256,
+      256
+    ],
+    "reference_shape": [
+      115,
+      256,
+      256
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "quiero_t1map.h5",
+    "subject": "AOUP_3_0_MRF3D001_retest",
+    "source": "/home/zimmer08/data/quiero/4Pub/AOUP_3_0/MRF3D001/MRF3D001_retest.nii",
+    "candidate_shape": [
+      200,
+      200,
+      200
+    ],
+    "reference_shape": [
+      161,
+      200,
+      200
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "quiero_t2map.h5",
+    "subject": "AOUP_3_0_MRF3D001_retest",
+    "source": "/home/zimmer08/data/quiero/4Pub/AOUP_3_0/MRF3D001/MRF3D001_retest.nii",
+    "candidate_shape": [
+      200,
+      200,
+      200
+    ],
+    "reference_shape": [
+      161,
+      200,
+      200
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "quiero_m0map.h5",
+    "subject": "AOUP_3_0_MRF3D001_retest",
+    "source": "/home/zimmer08/data/quiero/4Pub/AOUP_3_0/MRF3D001/MRF3D001_retest.nii",
+    "candidate_shape": [
+      200,
+      200,
+      200
+    ],
+    "reference_shape": [
+      161,
+      200,
+      200
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "ds005851_t1map.h5",
+    "subject": "sub-S001",
+    "source": "/home/zimmer08/data/ds005851/derivatives/SPM8_dartel/sub-S001/anat",
+    "candidate_shape": [
+      131,
+      217,
+      181
+    ],
+    "reference_shape": [
+      131,
+      217,
+      181
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "ds005851_t2map.h5",
+    "subject": "sub-S001",
+    "source": "/home/zimmer08/data/ds005851/derivatives/SPM8_dartel/sub-S001/anat",
+    "candidate_shape": [
+      131,
+      217,
+      181
+    ],
+    "reference_shape": [
+      131,
+      217,
+      181
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "ds005851_m0_abs.h5",
+    "subject": "sub-S001",
+    "source": "/home/zimmer08/data/ds005851/derivatives/SPM8_dartel/sub-S001/anat",
+    "candidate_shape": [
+      131,
+      217,
+      181
+    ],
+    "reference_shape": [
+      131,
+      217,
+      181
+    ],
+    "reference_dtype": "complex64",
+    "candidate_dtype": "complex64",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "radunsky_t1.h5",
+    "subject": "V006",
+    "source": "/home/zimmer08/data/radunsky/Session1/V006",
+    "candidate_shape": [
+      30,
+      217,
+      181
+    ],
+    "reference_shape": [
+      30,
+      217,
+      181
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "radunsky_m0mag.h5",
+    "subject": "V006",
+    "source": "/home/zimmer08/data/radunsky/Session1/V006",
+    "candidate_shape": [
+      30,
+      217,
+      181
+    ],
+    "reference_shape": [
+      30,
+      217,
+      181
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "radunsky_t2.h5",
+    "subject": "V006",
+    "source": "/home/zimmer08/data/radunsky/Session1/V006",
+    "candidate_shape": [
+      22,
+      192,
+      156
+    ],
+    "reference_shape": [
+      22,
+      192,
+      156
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "radunsky_t2star.h5",
+    "subject": "V006",
+    "source": "/home/zimmer08/data/radunsky/Session1/V006",
+    "candidate_shape": [
+      58,
+      192,
+      156
+    ],
+    "reference_shape": [
+      58,
+      192,
+      156
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "rockland_t1w.h5",
+    "source": "/home/zimmer08/data/rockland/sub-A00089407/ses-FLU1/anat/fresh_sub-A00089407_ses-FLU1_T1w_new_defaced.nii.gz",
+    "subject": "fresh_sub-A00089407_ses-FLU1_T1w_new_defaced.nii",
+    "shape": [
+      106,
+      250,
+      176
+    ],
+    "reference_shape": [
+      106,
+      250,
+      176
+    ],
+    "dtype": "float32",
+    "reference_dtype": "float32",
+    "bit_exact": true
+  },
+  {
+    "file": "rockland_t2w.h5",
+    "source": "/home/zimmer08/data/rockland/sub-A00089407/ses-FLU1/anat/fresh_sub-A00089407_ses-FLU1_T2w_new_defaced.nii.gz",
+    "subject": "fresh_sub-A00089407_ses-FLU1_T2w_new_defaced.nii",
+    "shape": [
+      101,
+      256,
+      176
+    ],
+    "reference_shape": [
+      101,
+      256,
+      176
+    ],
+    "dtype": "float32",
+    "reference_dtype": "float32",
+    "bit_exact": true
+  },
+  {
+    "file": "rockland_flair.h5",
+    "source": "/home/zimmer08/data/rockland/sub-A00089407/ses-FLU1/anat/fresh_sub-A00089407_ses-FLU1_FLAIR_new_defaced.nii.gz",
+    "subject": "fresh_sub-A00089407_ses-FLU1_FLAIR_new_defaced.nii",
+    "shape": [
+      94,
+      256,
+      192
+    ],
+    "reference_shape": [
+      94,
+      256,
+      192
+    ],
+    "dtype": "float32",
+    "reference_dtype": "float32",
+    "bit_exact": true
+  },
+  {
+    "file": "wand_t2w.h5",
+    "subject": "sub-00395_ses-03",
+    "source": "/home/zimmer08/data/WAND/sourcedata/sub-00395/ses-03/anat/sub-00395_ses-03_rec-nlgradcorr_T2w.nii.gz",
+    "candidate_shape": [
+      183,
+      256,
+      176
+    ],
+    "reference_shape": [
+      183,
+      256,
+      176
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  },
+  {
+    "file": "wand_t1w_neu.h5",
+    "subject": "sub-00395_ses-02",
+    "source": "/home/zimmer08/data/WAND/sourcedata/sub-00395/ses-02/anat/sub-00395_ses-02_T1w.nii.gz",
+    "candidate_shape": [
+      143,
+      256,
+      192
+    ],
+    "reference_shape": [
+      143,
+      256,
+      192
+    ],
+    "reference_dtype": "float32",
+    "candidate_dtype": "float32",
+    "direct": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    },
+    "cleanup": {
+      "equal": true,
+      "max_abs_difference": 0.0,
+      "fraction_equal": 1.0
+    }
+  }
+]

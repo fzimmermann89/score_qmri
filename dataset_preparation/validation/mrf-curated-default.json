@@ -1,0 +1,42 @@
+{
+  "t1map": {
+    "key": "V01_MR6_original",
+    "shape": [
+      48,
+      256,
+      256
+    ],
+    "dtype": "float32",
+    "exact": true
+  },
+  "t2map": {
+    "key": "V01_MR6_original",
+    "shape": [
+      48,
+      256,
+      256
+    ],
+    "dtype": "float32",
+    "exact": true
+  },
+  "t1w": {
+    "key": "V01_MR6_original",
+    "shape": [
+      52,
+      256,
+      256
+    ],
+    "dtype": "float32",
+    "exact": true
+  },
+  "t2w": {
+    "key": "V01_MR6_original",
+    "shape": [
+      52,
+      256,
+      256
+    ],
+    "dtype": "float32",
+    "exact": true
+  }
+}

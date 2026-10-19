@@ -1,0 +1,31 @@
+{
+  "t1_source": "IPython session278 2026-01-07:mask16 helpers19 writer22; B1 /1000; savedrelaxot1.py later diverged to /800",
+  "t2star_source": "IPython session224 2025-12-16:3Dmask6 helpers32 writer40; crop20 notlater40",
+  "t2_source": "v13.py functions; writerT2 commented but inferredpairedwriter verified to rounding onselectedrun01",
+  "records": [
+    {
+      "source": "session-278-line-16.py",
+      "sha256": "64e7468d6de7ea404ad8858663005937fcc3692de70d3022714f7651dbbf3672"
+    },
+    {
+      "source": "session-278-line-19.py",
+      "sha256": "349126f33b6a22609dacc82d56a7fc022897d946f5f3737f8cd4fe61cfa371dd"
+    },
+    {
+      "source": "session-278-line-22.py",
+      "sha256": "3c815c14dfaac3ed3cdfcdcc9d9b60eadc738a4e4f44b0f714bbf93d3f0b57f7"
+    },
+    {
+      "source": "session-224-line-6.py",
+      "sha256": "2394062e6452a8a3fd0f0588fba9c1376050af2a4160365aa9a0c301645f7366"
+    },
+    {
+      "source": "session-224-line-32.py",
+      "sha256": "bcd2a94887fc7d798b386da3ca4b8431cc9897a29070464143ceb84979fb53e6"
+    },
+    {
+      "source": "session-224-line-40.py",
+      "sha256": "9617a80374b9f388cd5fe0416d437ab7612012b30f4aed36cef9688b715f1b42"
+    }
+  ]
+}

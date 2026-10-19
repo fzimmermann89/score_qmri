@@ -1,0 +1,846 @@
+{
+  "ds000221_gre.h5": {
+    "canonical_first_key": "sub-010036",
+    "variants": [
+      {
+        "key": "sub-010036",
+        "reference_shape": [
+          160,
+          256,
+          208
+        ],
+        "reference_dtype": "complex64",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              160,
+              256,
+              208
+            ],
+            "dtype": "complex64",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              160,
+              256,
+              208
+            ],
+            "dtype": "complex64",
+            "exact": true,
+            "max_abs": 0.0
+          }
+        ],
+        "matching_stages": [
+          "direct",
+          "direct+cleanup"
+        ],
+        "raw_scan_override": null
+      }
+    ]
+  },
+  "ds000221_t1w.h5": {
+    "canonical_first_key": "sub-010001",
+    "variants": [
+      {
+        "key": "sub-010001",
+        "reference_shape": [
+          150,
+          240,
+          176
+        ],
+        "reference_dtype": "float32",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              150,
+              240,
+              176
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": 0.9375764727592468
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              150,
+              240,
+              176
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": 0.9375764727592468
+          }
+        ],
+        "matching_stages": [],
+        "raw_scan_override": null
+      }
+    ]
+  },
+  "ds000221_t1map.h5": {
+    "canonical_first_key": "sub-010001",
+    "variants": [
+      {
+        "key": "sub-010001",
+        "reference_shape": [
+          150,
+          240,
+          176
+        ],
+        "reference_dtype": "float32",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              150,
+              240,
+              176
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": 2.6659998893737793
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              150,
+              240,
+              176
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": 2.6659998893737793
+          }
+        ],
+        "matching_stages": [],
+        "raw_scan_override": null
+      }
+    ]
+  },
+  "ds000221_mprage.h5": {
+    "canonical_first_key": "sub-010001_1",
+    "variants": [
+      {
+        "key": "sub-010001_1",
+        "reference_shape": [
+          150,
+          240,
+          176
+        ],
+        "reference_dtype": "float32",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              150,
+              240,
+              176
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": 0.32758620381355286
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              150,
+              240,
+              176
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": 0.32758620381355286
+          }
+        ],
+        "matching_stages": [],
+        "raw_scan_override": null
+      },
+      {
+        "key": "sub-010001_2",
+        "reference_shape": [
+          150,
+          240,
+          176
+        ],
+        "reference_dtype": "float32",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              150,
+              240,
+              176
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": 0.42939814925193787
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              150,
+              240,
+              176
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": 0.42939814925193787
+          }
+        ],
+        "matching_stages": [],
+        "raw_scan_override": null
+      }
+    ]
+  },
+  "ds000221_t2w.h5": {
+    "canonical_first_key": "sub-010002",
+    "variants": [
+      {
+        "key": "sub-010002",
+        "reference_shape": [
+          140,
+          256,
+          176
+        ],
+        "reference_dtype": "float64",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              140,
+              256,
+              176
+            ],
+            "dtype": "float64",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              140,
+              256,
+              176
+            ],
+            "dtype": "float64",
+            "exact": true,
+            "max_abs": 0.0
+          }
+        ],
+        "matching_stages": [
+          "direct",
+          "direct+cleanup"
+        ],
+        "raw_scan_override": null
+      }
+    ]
+  },
+  "ds000221_flair.h5": {
+    "canonical_first_key": "sub-010001",
+    "variants": [
+      {
+        "key": "sub-010001",
+        "reference_shape": [
+          20,
+          256,
+          192
+        ],
+        "reference_dtype": "float64",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              20,
+              256,
+              192
+            ],
+            "dtype": "float64",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              20,
+              256,
+              192
+            ],
+            "dtype": "float64",
+            "exact": true,
+            "max_abs": 0.0
+          }
+        ],
+        "matching_stages": [
+          "direct",
+          "direct+cleanup"
+        ],
+        "raw_scan_override": "/home/zimmer08/data/ds000221/sub-010001/ses-02/anat/sub-010001_ses-02_acq-lowres_FLAIR.nii.gz"
+      }
+    ]
+  },
+  "ds002685_t1w.h5": {
+    "canonical_first_key": "sub-01_ses-00_T1w.nii",
+    "raw": "/home/zimmer08/data/ds002685/sub-01/ses-00/anat/sub-01_ses-00_T1w.nii.gz",
+    "key": "sub-01_ses-00_T1w.nii",
+    "reference_shape": [
+      120,
+      240,
+      160
+    ],
+    "reference_dtype": "float32",
+    "checks": [
+      {
+        "stage": "direct",
+        "shape": [
+          120,
+          240,
+          160
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      },
+      {
+        "stage": "direct+cleanup",
+        "shape": [
+          120,
+          240,
+          160
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      }
+    ],
+    "matching_stages": [
+      "direct",
+      "direct+cleanup"
+    ]
+  },
+  "ds002685_t2w.h5": {
+    "canonical_first_key": "sub-01_ses-00_acq-spc_T2w.nii",
+    "raw": "/home/zimmer08/data/ds002685/sub-01/ses-00/anat/sub-01_ses-00_acq-spc_T2w.nii.gz",
+    "key": "sub-01_ses-00_acq-spc_T2w.nii",
+    "reference_shape": [
+      120,
+      256,
+      176
+    ],
+    "reference_dtype": "float32",
+    "checks": [
+      {
+        "stage": "direct",
+        "shape": [
+          120,
+          256,
+          176
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      },
+      {
+        "stage": "direct+cleanup",
+        "shape": [
+          120,
+          256,
+          176
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      },
+      {
+        "stage": "normalize",
+        "shape": [
+          120,
+          256,
+          176
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      },
+      {
+        "stage": "normalize+cleanup",
+        "shape": [
+          120,
+          256,
+          176
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      }
+    ],
+    "matching_stages": [
+      "direct",
+      "direct+cleanup",
+      "normalize",
+      "normalize+cleanup"
+    ]
+  },
+  "ds002685_flair.h5": {
+    "canonical_first_key": "sub-01_ses-00_FLAIR.nii",
+    "raw": "/home/zimmer08/data/ds002685/sub-01/ses-00/anat/sub-01_ses-00_FLAIR.nii.gz",
+    "key": "sub-01_ses-00_FLAIR.nii",
+    "reference_shape": [
+      411,
+      256,
+      160
+    ],
+    "reference_dtype": "float32",
+    "checks": [
+      {
+        "stage": "direct",
+        "shape": [
+          411,
+          256,
+          160
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      },
+      {
+        "stage": "direct+cleanup",
+        "shape": [
+          411,
+          256,
+          160
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      },
+      {
+        "stage": "normalize",
+        "shape": [
+          411,
+          256,
+          192
+        ],
+        "dtype": "float32",
+        "exact": false,
+        "max_abs": null
+      },
+      {
+        "stage": "normalize+cleanup",
+        "shape": [
+          411,
+          256,
+          192
+        ],
+        "dtype": "float32",
+        "exact": false,
+        "max_abs": null
+      }
+    ],
+    "matching_stages": [
+      "direct",
+      "direct+cleanup"
+    ]
+  },
+  "ds002790_t1w.h5": {
+    "canonical_first_key": "MD5E-s15525109--97c431f85a9ce8f9300c25e2ea1bea3d.nii",
+    "raw": "/home/zimmer08/data/ds002790/.git/annex/objects/k1/g6/MD5E-s15525109--97c431f85a9ce8f9300c25e2ea1bea3d.nii.gz/MD5E-s15525109--97c431f85a9ce8f9300c25e2ea1bea3d.nii.gz",
+    "key": "MD5E-s15525109--97c431f85a9ce8f9300c25e2ea1bea3d.nii",
+    "reference_shape": [
+      120,
+      240,
+      240
+    ],
+    "reference_dtype": "float32",
+    "checks": [
+      {
+        "stage": "direct",
+        "shape": [
+          120,
+          240,
+          240
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      },
+      {
+        "stage": "direct+cleanup",
+        "shape": [
+          120,
+          240,
+          240
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      }
+    ],
+    "matching_stages": [
+      "direct",
+      "direct+cleanup"
+    ]
+  },
+  "ds004611_t1map.h5": {
+    "canonical_first_key": "sub-A03UGV_ses-1",
+    "raw_root": "/home/zimmer08/data/ds004611/sub-A03UGV/ses-1/anat",
+    "outputs": [
+      {
+        "key": "sub-A03UGV_ses-1",
+        "reference_shape": [
+          38,
+          320,
+          220
+        ],
+        "reference_dtype": "float32",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              38,
+              320,
+              220
+            ],
+            "dtype": "float32",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              38,
+              320,
+              220
+            ],
+            "dtype": "float32",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "normalize",
+            "shape": [
+              38,
+              320,
+              320
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": null
+          },
+          {
+            "stage": "normalize+cleanup",
+            "shape": [
+              38,
+              320,
+              320
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": null
+          }
+        ],
+        "matching_stages": [
+          "direct",
+          "direct+cleanup"
+        ]
+      }
+    ]
+  },
+  "ds004611_t2map.h5": {
+    "canonical_first_key": "sub-A1N0N1_ses-1",
+    "raw_root": "/home/zimmer08/data/ds004611/sub-A1N0N1/ses-1/anat",
+    "outputs": [
+      {
+        "key": "sub-A1N0N1_ses-1",
+        "reference_shape": [
+          38,
+          320,
+          300
+        ],
+        "reference_dtype": "float32",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              38,
+              320,
+              300
+            ],
+            "dtype": "float32",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              38,
+              320,
+              300
+            ],
+            "dtype": "float32",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "normalize",
+            "shape": [
+              38,
+              320,
+              320
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": null
+          },
+          {
+            "stage": "normalize+cleanup",
+            "shape": [
+              38,
+              320,
+              320
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": null
+          }
+        ],
+        "matching_stages": [
+          "direct",
+          "direct+cleanup"
+        ]
+      }
+    ]
+  },
+  "ds004611_t1w.h5": {
+    "canonical_first_key": "sub-A03UGV_ses-1",
+    "raw_root": "/home/zimmer08/data/ds004611/sub-A03UGV/ses-1/anat",
+    "outputs": [
+      {
+        "key": "sub-A03UGV_ses-1",
+        "reference_shape": [
+          38,
+          320,
+          220
+        ],
+        "reference_dtype": "float32",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              38,
+              320,
+              220
+            ],
+            "dtype": "float32",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              38,
+              320,
+              220
+            ],
+            "dtype": "float32",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "normalize",
+            "shape": [
+              38,
+              320,
+              320
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": null
+          },
+          {
+            "stage": "normalize+cleanup",
+            "shape": [
+              38,
+              320,
+              320
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": null
+          }
+        ],
+        "matching_stages": [
+          "direct",
+          "direct+cleanup"
+        ]
+      }
+    ]
+  },
+  "ds004611_mprage.h5": {
+    "canonical_first_key": "sub-A03UGV_ses-1_1",
+    "raw_root": "/home/zimmer08/data/ds004611/sub-A03UGV/ses-1/anat",
+    "outputs": [
+      {
+        "key": "sub-A03UGV_ses-1_1",
+        "reference_shape": [
+          38,
+          320,
+          220
+        ],
+        "reference_dtype": "float32",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              38,
+              320,
+              220
+            ],
+            "dtype": "float32",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              38,
+              320,
+              220
+            ],
+            "dtype": "float32",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "normalize",
+            "shape": [
+              38,
+              320,
+              320
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": null
+          },
+          {
+            "stage": "normalize+cleanup",
+            "shape": [
+              38,
+              320,
+              320
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": null
+          }
+        ],
+        "matching_stages": [
+          "direct",
+          "direct+cleanup"
+        ]
+      },
+      {
+        "key": "sub-A03UGV_ses-1_2",
+        "reference_shape": [
+          38,
+          320,
+          220
+        ],
+        "reference_dtype": "float32",
+        "checks": [
+          {
+            "stage": "direct",
+            "shape": [
+              38,
+              320,
+              220
+            ],
+            "dtype": "float32",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "direct+cleanup",
+            "shape": [
+              38,
+              320,
+              220
+            ],
+            "dtype": "float32",
+            "exact": true,
+            "max_abs": 0.0
+          },
+          {
+            "stage": "normalize",
+            "shape": [
+              38,
+              320,
+              320
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": null
+          },
+          {
+            "stage": "normalize+cleanup",
+            "shape": [
+              38,
+              320,
+              320
+            ],
+            "dtype": "float32",
+            "exact": false,
+            "max_abs": null
+          }
+        ],
+        "matching_stages": [
+          "direct",
+          "direct+cleanup"
+        ]
+      }
+    ]
+  },
+  "ds004889_t1w.h5": {
+    "canonical_first_key": "sub-1000_T1w.nii",
+    "raw": "/home/zimmer08/data/ds004889/sub-1000/anat/sub-1000_T1w.nii.gz",
+    "key": "sub-1000_T1w.nii",
+    "reference_shape": [
+      90,
+      256,
+      256
+    ],
+    "reference_dtype": "float32",
+    "checks": [
+      {
+        "stage": "direct",
+        "shape": [
+          90,
+          256,
+          256
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      },
+      {
+        "stage": "direct+cleanup",
+        "shape": [
+          90,
+          256,
+          256
+        ],
+        "dtype": "float32",
+        "exact": true,
+        "max_abs": 0.0
+      }
+    ],
+    "matching_stages": [
+      "direct",
+      "direct+cleanup"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+# Python 3.12 environment used for real-data reproduction checks.
+# Keep preparation dependencies independent of training and mrpro git installs.
+numpy==2.3.5
+scipy==1.16.3
+h5py==3.15.1
+torch==2.9.1
+nibabel==5.3.3
+nilearn==0.12.1
+pydicom==3.0.1
+einops==0.8.1
+ismrmrd==1.14.2
+PyYAML==6.0.2

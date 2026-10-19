@@ -1,0 +1,40 @@
+{
+  "ibc_relaxo_t2map.h5": {
+    "shape": [
+      50,
+      224,
+      176
+    ],
+    "max_absdiff": 5.960464477539063e-08,
+    "mean_absdiff": 3.5731093084301335e-10,
+    "equal_fraction": 0.9653617086038961,
+    "max_location": [
+      2,
+      179,
+      49
+    ],
+    "reference_value": 0.27619990706443787,
+    "produced_value": 0.27619996666908264,
+    "reference_nonzero": 1191024,
+    "produced_nonzero": 1191024
+  },
+  "ibc_relaxo_s0map_t2.h5": {
+    "shape": [
+      50,
+      224,
+      176
+    ],
+    "max_absdiff": 1.6689300537109375e-06,
+    "mean_absdiff": 1.7509759198119923e-09,
+    "equal_fraction": 0.994622564935065,
+    "max_location": [
+      6,
+      180,
+      144
+    ],
+    "reference_value": 1.4551621675491333,
+    "produced_value": 1.4551604986190796,
+    "reference_nonzero": 1191024,
+    "produced_nonzero": 1191024
+  }
+}

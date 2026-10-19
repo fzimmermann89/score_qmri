@@ -1,0 +1,25 @@
+{
+  "paths": [
+    "/home/zimmer08/datacheck/data/m4raw/gre_data/2022061001_GRE01.h5",
+    "/home/zimmer08/datacheck/data/m4raw/gre_data/2022061001_GRE02.h5"
+  ],
+  "seconds": 33.74409532546997,
+  "shape": [
+    18,
+    256,
+    256
+  ],
+  "reference_shape": [
+    18,
+    256,
+    256
+  ],
+  "finite": true,
+  "exact_equal": false,
+  "device": "cpu",
+  "scope": "Full18slice realGREsubject reconstructed from all available two repeats on oneCPU; noH5copywritten.",
+  "max_abs_error": 0.48802611231803894,
+  "mean_abs_error": 0.004062925931066275,
+  "foreground_support_disagreements": 2274,
+  "allclose_1e_5": false
+}

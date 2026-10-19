@@ -1,0 +1,170 @@
+"""Repack saved MONAI synthetic T1 samples or explicitly generate new samples.
+
+Original: datacheck/monai/run.py SHA256
+ d625c5dbd7725985c646cf24db80d5ef0decfeacdecf37cf8d68a00030fa9d5b.
+Bundle: MONAI/brain_image_synthesis_latent_diffusion_model, revision
+55d88321e08930ba3a71d084ed94afaab0b29320 (local bundle required).
+
+Repacking reproduces existing logical arrays and conditioning attributes without
+sampling, downloading or loading model weights. Generation preserves the original
+conditioning, spatial preparation, mask and quantile recipe, with an explicit
+seed and device. The original had no seed; new generation cannot reproduce the
+historical samples. CPU is the default; GPU use requires --device cuda explicitly.
+The old CUDA compile wrapper is omitted. No inference runs at import or --help.
+The generator requires compatible MONAI AutoencoderKL/DiffusionModelUNet old-state
+loading support, plus the pinned bundle's scripts/sampler.py and local weights.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import sys
+from collections.abc import Sequence
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import h5py
+import numpy as np
+
+if TYPE_CHECKING:
+    import torch
+
+BUNDLE_REVISION = "55d88321e08930ba3a71d084ed94afaab0b29320"
+
+
+def repack_samples(source: Path, output: Path, subjects: Sequence[str] | None = None, limit: int | None = None) -> None:
+    """Copy saved arrays and metadata in slabs, refusing every existing output."""
+    if output.exists() or output.is_symlink():
+        raise FileExistsError(output)
+    if limit is not None and limit < 1:
+        raise ValueError("Limit must be positive.")
+    with h5py.File(source, "r") as original:
+        names = sorted(original, key=lambda key: (0, int(key)) if key.isdecimal() else (1, key))
+        if subjects:
+            unknown = set(subjects) - set(names)
+            if unknown:
+                raise ValueError(f"Unknown saved samples: {sorted(unknown)}")
+            names = [name for name in names if name in subjects]
+        names = names[:limit]
+        if not names:
+            raise ValueError("No selected saved samples.")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with h5py.File(output, "x") as target:
+            for name, value in original.attrs.items():
+                target.attrs[name] = value
+            target.attrs["n_samples"] = len(names)
+            for name in names:
+                src = original[name]
+                if not isinstance(src, h5py.Dataset) or src.ndim != 3 or src.dtype != np.float32:
+                    raise ValueError(f"{name}: expected a float32 slice volume.")
+                dst = target.create_dataset(
+                    name, shape=src.shape, dtype=src.dtype, compression="lzf", shuffle=True, chunks=(1, *src.shape[1:])
+                )
+                for key, value in src.attrs.items():
+                    dst.attrs[key] = value
+                for z in range(len(src)):
+                    dst[z] = src[z]
+
+
+def prepare_generated_sample(volume: torch.Tensor) -> torch.Tensor:
+    """Apply the original generated-volume orientation, slices, mask and scaling."""
+    import torch
+
+    from dataset_preparation.raw_mri import clean_mask_2d
+
+    x = volume.transpose(0, 2).flip(-2)[40:-40:4].cpu().float().detach()
+    x = torch.nn.functional.pad(x[None], (16, 16, 16, 16))[0]
+    mask = torch.stack([clean_mask_2d(m) for m in x > 0.05])
+    x -= torch.quantile(x[~mask], 0.95)
+    x /= torch.quantile(x[mask], 0.99)
+    x[~mask] = 0
+    x.clamp_max_(1.2)
+    return x
+
+
+def generate_samples(bundle_root: Path, output: Path, limit: int = 1, seed: int = 0, device: str = "cpu") -> None:
+    """Generate new explicitly seeded samples from an already downloaded bundle."""
+    if output.exists() or output.is_symlink():
+        raise FileExistsError(output)
+    if limit < 1:
+        raise ValueError("Limit must be positive.")
+    config = bundle_root / "configs/inference.json"
+    required = [config, bundle_root / "scripts/sampler.py", bundle_root / "models/model.pt", bundle_root / "models/autoencoder.pt"]
+    for path in required:
+        if not path.is_file():
+            raise FileNotFoundError(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    import torch
+    from monai.bundle import ConfigParser
+
+    torch.manual_seed(seed)
+    selected_device = torch.device(device)
+    parser = ConfigParser()
+    parser.read_config(str(config))
+    parser.update(
+        {
+            "bundle_root": str(bundle_root.resolve()),
+            "device": selected_device,
+            "load_autoencoder": "$@load_autoencoder_func(torch.load(@load_autoencoder_path, map_location='cpu'))",
+            "load_diffusion": "$@load_diffusion_func(torch.load(@load_diffusion_path, map_location='cpu'))",
+        }
+    )
+    # The pinned MONAI config imports scripts.sampler from its own bundle directory.
+    sys.path.insert(0, str(bundle_root.resolve()))
+    try:
+        scheduler = parser.get_parsed_content("scheduler")
+        autoencoder = parser.get_parsed_content("autoencoder").eval()
+        diffusion = parser.get_parsed_content("diffusion").eval()
+        sampler = parser.get_parsed_content("sampler")
+        with torch.inference_mode(), h5py.File(output, "x") as target:
+            target.attrs["n_samples"] = limit
+            target.attrs["seed"] = seed
+            target.attrs["expected_bundle_revision"] = BUNDLE_REVISION
+            target.attrs["config_sha256"] = hashlib.sha256(config.read_bytes()).hexdigest()
+            for idx in range(limit):
+                gender = torch.randint(0, 2, (1, 1, 1), device=selected_device).to(torch.float32)
+                other = torch.rand((1, 1, 3), device=selected_device, dtype=torch.float32)
+                conditioning = torch.cat([gender, other], dim=-1)
+                conditioning[..., -1] = 1.0
+                noise = torch.randn((1, 3, 20, 28, 20), device=selected_device, dtype=torch.float32)
+                sampled = sampler.sampling_fn(noise, autoencoder, diffusion, scheduler, conditioning)
+                image = prepare_generated_sample(sampled[0, 0])
+                data = target.create_dataset(
+                    str(idx), data=image.numpy(), dtype=np.float32, compression="lzf", shuffle=True, chunks=(1, *image.shape[1:])
+                )
+                for name, value in zip(("gender", "age", "ventricular_vol", "brain_vol"), conditioning.squeeze().cpu(), strict=True):
+                    data.attrs[name] = float(value)
+    finally:
+        sys.path.pop(0)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("mode", choices=("repack", "generate"))
+    parser.add_argument("--input-root", type=Path, help="Existing samples_500.h5 for repack.")
+    parser.add_argument("--bundle-root", type=Path, help="Local pinned MONAI bundle for generate.")
+    parser.add_argument("--output", required=True, type=Path, help="New output H5, normally ldm_t1w.h5.")
+    parser.add_argument("--subjects", nargs="+", help="Saved sample keys, repack only.")
+    parser.add_argument("--limit", type=int, help="Sample limit; generation defaults to one.")
+    parser.add_argument("--seed", type=int, default=0, help="New generation seed; historical seed was not saved.")
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--threads", type=int, default=1)
+    args = parser.parse_args(argv)
+    if args.limit is not None and args.limit < 1 or args.threads < 1:
+        parser.error("--limit and --threads must be positive.")
+    if args.mode == "repack":
+        if args.input_root is None or args.bundle_root is not None:
+            parser.error("repack requires --input-root and no --bundle-root.")
+        repack_samples(args.input_root, args.output, args.subjects, args.limit)
+    else:
+        if args.bundle_root is None or args.input_root is not None or args.subjects:
+            parser.error("generate requires --bundle-root and no --input-root/--subjects.")
+        import torch
+
+        torch.set_num_threads(args.threads)
+        generate_samples(args.bundle_root, args.output, args.limit or 1, args.seed, args.device)
+
+
+if __name__ == "__main__":
+    main()

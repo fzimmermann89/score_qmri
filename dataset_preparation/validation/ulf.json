@@ -1,0 +1,58 @@
+{
+  "scope": "One real subject POCEMR001 from original HPC3T NIfTI references prepared on CPU and read back against active collection for all three modalities.",
+  "seconds": 8.610905408859253,
+  "results": [
+    {
+      "modality": "t1",
+      "source_shape": [
+        126,
+        256,
+        256
+      ],
+      "reference_shape": [
+        126,
+        256,
+        256
+      ],
+      "equal": true,
+      "source_sha256": "ac459ef998d63b37e4cbb1775883750448d15d7c4838a8e87694a862b94cf0ba",
+      "reference_sha256": "ac459ef998d63b37e4cbb1775883750448d15d7c4838a8e87694a862b94cf0ba",
+      "max_abs_error": 0.0
+    },
+    {
+      "modality": "t2",
+      "source_shape": [
+        129,
+        256,
+        256
+      ],
+      "reference_shape": [
+        129,
+        256,
+        256
+      ],
+      "equal": true,
+      "source_sha256": "f58883d40b33afa402de4e3323c3e7e0f2f7e12f5a65724690a52565e5a52b85",
+      "reference_sha256": "f58883d40b33afa402de4e3323c3e7e0f2f7e12f5a65724690a52565e5a52b85",
+      "max_abs_error": 0.0
+    },
+    {
+      "modality": "flair",
+      "source_shape": [
+        126,
+        256,
+        256
+      ],
+      "reference_shape": [
+        126,
+        256,
+        256
+      ],
+      "equal": true,
+      "source_sha256": "3fa2d084c5f4bb5e3b114490b2eb7703ed3e41db1b4db00120511ebf9a0e470a",
+      "reference_sha256": "3fa2d084c5f4bb5e3b114490b2eb7703ed3e41db1b4db00120511ebf9a0e470a",
+      "max_abs_error": 0.0
+    }
+  ],
+  "passed": true
+}

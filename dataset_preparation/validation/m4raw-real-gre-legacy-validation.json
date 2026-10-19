@@ -1,0 +1,46 @@
+{
+  "seconds": 24.931429386138916,
+  "scope": "Real18slice GREoldcalibration0.05/0.5 alternative withtwomaskthresholds; CPUonly noH5written.",
+  "results": [
+    {
+      "calibration_threshold": 0.05,
+      "calibration_crop": 0.5,
+      "mask_threshold": 0.1,
+      "reference": "active",
+      "max_abs_error": 1.6693006753921509,
+      "mean_abs_error": 0.11987397074699402,
+      "foreground_support_disagreements": 57321,
+      "allclose_1e_5": false
+    },
+    {
+      "calibration_threshold": 0.05,
+      "calibration_crop": 0.5,
+      "mask_threshold": 0.1,
+      "reference": "prepared",
+      "max_abs_error": 1.6693006753921509,
+      "mean_abs_error": 0.11987397074699402,
+      "foreground_support_disagreements": 57321,
+      "allclose_1e_5": false
+    },
+    {
+      "calibration_threshold": 0.05,
+      "calibration_crop": 0.5,
+      "mask_threshold": 0.2,
+      "reference": "active",
+      "max_abs_error": 1.6693006753921509,
+      "mean_abs_error": 0.11848396807909012,
+      "foreground_support_disagreements": 79013,
+      "allclose_1e_5": false
+    },
+    {
+      "calibration_threshold": 0.05,
+      "calibration_crop": 0.5,
+      "mask_threshold": 0.2,
+      "reference": "prepared",
+      "max_abs_error": 1.6693006753921509,
+      "mean_abs_error": 0.11848396807909012,
+      "foreground_support_disagreements": 79013,
+      "allclose_1e_5": false
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "source": "/home/zimmer08/datacheck/samples_500.h5",
+  "reference": "/home/zimmer08/data/score_qmri_consistent_2026-10-19_le/ldm_t1w.h5",
+  "produced": "/home/zimmer08/score-qmri-preparation-audit-2026-10-20/echo/ldm_one_sample.h5",
+  "produced_bytes": 1575995,
+  "checks": [
+    {
+      "name": "0",
+      "source_shape": [
+        20,
+        256,
+        192
+      ],
+      "reference_shape": [
+        20,
+        256,
+        192
+      ],
+      "array_equal": true,
+      "source_sha256": "686f41c8bb082c3799bda9374b85dc4ad9e33b482d595a5686a987888c627885",
+      "reference_sha256": "686f41c8bb082c3799bda9374b85dc4ad9e33b482d595a5686a987888c627885",
+      "repacked_equal": true,
+      "attributes_equal": true
+    },
+    {
+      "name": "10",
+      "source_shape": [
+        20,
+        256,
+        192
+      ],
+      "reference_shape": [
+        20,
+        256,
+        192
+      ],
+      "array_equal": true,
+      "source_sha256": "d67abcdc2dc58bc0c26de7e909043af8f5aa4a3b7962ac3e272242828fd3cd4a",
+      "reference_sha256": "d67abcdc2dc58bc0c26de7e909043af8f5aa4a3b7962ac3e272242828fd3cd4a"
+    },
+    {
+      "name": "499",
+      "source_shape": [
+        20,
+        256,
+        192
+      ],
+      "reference_shape": [
+        20,
+        256,
+        192
+      ],
+      "array_equal": true,
+      "source_sha256": "0b0d273ce7b3a32b6ea0f2ea267e86adac42c028fec0bd9d081277b47097e828",
+      "reference_sha256": "0b0d273ce7b3a32b6ea0f2ea267e86adac42c028fec0bd9d081277b47097e828"
+    }
+  ],
+  "scope": "One saved sample repacked and read back. Three complete existing sample arrays compared with current collection. Fresh model inference not run.",
+  "passed": true
+}

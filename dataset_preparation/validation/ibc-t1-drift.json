@@ -1,0 +1,44 @@
+{
+  "t1map": {
+    "max_location": [
+      22,
+      176,
+      150
+    ],
+    "reference_maxdiff_value": 4.936304092407227,
+    "produced_maxdiff_value": 4.937468528747559,
+    "mean_absdiff": 1.3805372873321176e-05,
+    "diff_quantiles": [
+      0.0,
+      0.0,
+      8.368492126464844e-05,
+      0.00024509429931640625,
+      0.00044727325439453125,
+      0.0011644363403320312
+    ],
+    "support_same": true,
+    "reference_nonzero": 2736759,
+    "candidate_nonzero": 2736759
+  },
+  "m0map": {
+    "max_location": [
+      6,
+      134,
+      60
+    ],
+    "reference_maxdiff_value": 1.477370023727417,
+    "produced_maxdiff_value": 1.4541465044021606,
+    "mean_absdiff": 5.156487986823777e-06,
+    "diff_quantiles": [
+      0.0,
+      6.854534149169922e-06,
+      2.002716064453125e-05,
+      6.729364395141602e-05,
+      0.00026991868019105025,
+      0.023223519325256348
+    ],
+    "support_same": true,
+    "reference_nonzero": 2736759,
+    "candidate_nonzero": 2736759
+  }
+}

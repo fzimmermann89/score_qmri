@@ -1,0 +1,126 @@
+{
+  "t1": {
+    "ibc_relaxo_t1map.h5": {
+      "equal": false,
+      "bit_exact": false,
+      "rtol": 1e-05,
+      "atol": 2e-06,
+      "max_abs_difference": 0.0011644363403320312,
+      "mode": "full",
+      "subject_subset": [
+        "sub-01_ses-21"
+      ],
+      "dataset_path_subset": null,
+      "attributes_checked": true,
+      "layout_checked": true,
+      "checked_datasets": 1,
+      "checked_slices": 121,
+      "checked_values": 5451776,
+      "datasets": [
+        {
+          "path": "sub-01_ses-21",
+          "bit_exact": false,
+          "different_values": 1269552,
+          "checked_slices": 121,
+          "max_abs_difference": 0.0011644363403320312
+        }
+      ],
+      "issues": [
+        {
+          "path": "sub-01_ses-21",
+          "reason": "values",
+          "mismatched_slices": 121
+        }
+      ]
+    },
+    "ibc_relaxo_m0map.h5": {
+      "equal": false,
+      "bit_exact": false,
+      "rtol": 1e-05,
+      "atol": 2e-06,
+      "max_abs_difference": 0.023223519325256348,
+      "mode": "full",
+      "subject_subset": [
+        "sub-01_ses-21"
+      ],
+      "dataset_path_subset": null,
+      "attributes_checked": true,
+      "layout_checked": true,
+      "checked_datasets": 1,
+      "checked_slices": 121,
+      "checked_values": 5451776,
+      "datasets": [
+        {
+          "path": "sub-01_ses-21",
+          "bit_exact": false,
+          "different_values": 2455212,
+          "checked_slices": 121,
+          "max_abs_difference": 0.023223519325256348
+        }
+      ],
+      "issues": [
+        {
+          "path": "sub-01_ses-21",
+          "reason": "values",
+          "mismatched_slices": 121
+        }
+      ]
+    }
+  },
+  "t2star": {
+    "ibc_relaxo_t2starmap.h5": {
+      "equal": true,
+      "bit_exact": true,
+      "rtol": 1e-05,
+      "atol": 2e-06,
+      "max_abs_difference": 0.0,
+      "mode": "full",
+      "subject_subset": [
+        "sub-01_ses-21"
+      ],
+      "dataset_path_subset": null,
+      "attributes_checked": true,
+      "layout_checked": true,
+      "checked_datasets": 1,
+      "checked_slices": 116,
+      "checked_values": 4751360,
+      "datasets": [
+        {
+          "path": "sub-01_ses-21",
+          "bit_exact": true,
+          "different_values": 0,
+          "checked_slices": 116,
+          "max_abs_difference": 0.0
+        }
+      ],
+      "issues": []
+    },
+    "ibc_relaxo_s0map.h5": {
+      "equal": true,
+      "bit_exact": true,
+      "rtol": 1e-05,
+      "atol": 2e-06,
+      "max_abs_difference": 0.0,
+      "mode": "full",
+      "subject_subset": [
+        "sub-01_ses-21"
+      ],
+      "dataset_path_subset": null,
+      "attributes_checked": true,
+      "layout_checked": true,
+      "checked_datasets": 1,
+      "checked_slices": 116,
+      "checked_values": 4751360,
+      "datasets": [
+        {
+          "path": "sub-01_ses-21",
+          "bit_exact": true,
+          "different_values": 0,
+          "checked_slices": 116,
+          "max_abs_difference": 0.0
+        }
+      ],
+      "issues": []
+    }
+  }
+}

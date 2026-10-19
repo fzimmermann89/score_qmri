@@ -1,0 +1,48 @@
+{
+  "mask_large": true,
+  "mask_small": true,
+  "mask_two": true,
+  "ds003967_t1map_cropped": {
+    "raw": "/home/zimmer08/data/ds003967/.git/annex/objects/v7/KP/MD5E-s18662529--2cf5d7b20653ef0e5f73373c7de92fdb.nii.gz/MD5E-s18662529--2cf5d7b20653ef0e5f73373c7de92fdb.nii.gz",
+    "key": "MD5E-s18662529--2cf5d7b20653ef0e5f73373c7de92fdb.nii",
+    "shape": [
+      90,
+      120,
+      114
+    ],
+    "reference_shape": [
+      90,
+      120,
+      114
+    ],
+    "exact": true,
+    "max_abs": 0.0
+  },
+  "ds004889_flair": {
+    "shape": [
+      90,
+      256,
+      256
+    ],
+    "exact": true,
+    "max_abs": 0.0,
+    "reference_nonempty_slices": 68,
+    "final_cleanup": "Do NOT filter this later regenerated source: padded90slice array is canonical unchanged"
+  },
+  "ds002785_t1w": {
+    "raw": "/home/zimmer08/data/ds002785/.git/annex/objects/z4/z0/MD5E-s13593405--402753f32dc6b6a403b6b107b36e2205.nii.gz/MD5E-s13593405--402753f32dc6b6a403b6b107b36e2205.nii.gz",
+    "key": "MD5E-s13593405--402753f32dc6b6a403b6b107b36e2205.nii",
+    "shape": [
+      104,
+      240,
+      240
+    ],
+    "reference_shape": [
+      104,
+      240,
+      240
+    ],
+    "exact": true,
+    "max_abs": 0.0
+  }
+}

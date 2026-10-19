@@ -1,0 +1,13 @@
+{
+  "catalog_execute_exit": 0,
+  "shape": [
+    9,
+    12,
+    6
+  ],
+  "dtype": "float32",
+  "seconds": 1.5,
+  "reexecute_refused": true,
+  "existing_output_unchanged": true,
+  "artifact_root": "/home/zimmer08/score-qmri-preparation-audit-2026-10-20/local/validation/catalog-review-6lpt1m7a"
+}
