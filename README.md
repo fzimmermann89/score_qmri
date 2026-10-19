@@ -38,3 +38,5 @@ pre-commit run --all-files
 - Song et al., ICLR 2021 (Score-Based SDEs)
 - Chung et al., ICLR 2023 (DPS)
 - Perez et al., AAAI 2018 (FiLM)
+
+See [reconstruction smoke checks](docs/reconstruction-smoke.md) for bounded retrospective model/operator diagnostics.

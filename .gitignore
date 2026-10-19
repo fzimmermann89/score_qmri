@@ -227,3 +227,6 @@ uv.lock
 
 # Node.js / Frontend
 node_modules/
+
+# Reproducible evaluation outputs (manifests and arrays are kept outside git).
+results/
