@@ -1,0 +1,24 @@
+{
+  "tests": {
+    "command": "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m pytest --noconftest dataset_preparation/tests -q",
+    "passed": 42
+  },
+  "ruff": [
+    "ruff check dataset_preparation",
+    "ruff format --check dataset_preparation"
+  ],
+  "mypy": {
+    "command": "mypy dataset_preparation --follow-imports=silent --disable-error-code=import-untyped",
+    "source_files": 29,
+    "result": "Success: no issues found",
+    "note": "Import-untyped is disabled for missing optional library typing metadata in the existing training environment; all source-level strict typing checks remain active. Actual Torch dependency types were analyzed; no skip-import approximation."
+  },
+  "coverage": {
+    "configured_files_after_wand_fix": 69,
+    "recipes": 69,
+    "missing": [],
+    "additional": []
+  },
+  "optional_test_collection": "When preparation-only dependencies are absent, only this optional test directory is omitted; pytest startup remains functional. Existing training tests and conftest are unchanged.",
+  "resource_scope": "CPU-only bounded representative reconstruction checks. No GPU or scheduler jobs; original source/data/training files unchanged. Proposed CI workflow remains local because GitHub credential lacks workflow scope."
+}

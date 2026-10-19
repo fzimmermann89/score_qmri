@@ -108,6 +108,8 @@ The following remain explicitly weaker:
 - M4Raw GRE: meaningful mismatch remains (mean absolute error about 0.0041, maximum about 0.488). The cleaned code and the recovered original current script give bit-identical CPU outputs on that actual input; neither reproduces the historical archive. Source ordering and old/new calibration variants were investigated; the cause remains unresolved. Other M4Raw modalities and raw CC have not been regenerated end-to-end.
 - Full MONAI generation and complete fresh-source downloads were not run. Missing historical RNG state prevents exact regeneration of synthetic samples. The archived-sample repack remains an exact logical reproduction path.
 
+The final [M4Raw forensic report](validation/M4RAW-FINAL-FORENSICS.md) records the executed-source, raw-copy and numerical probes. The actual January 5 executed producer and helpers were recovered; independent Echo/Ceph raw file hashes match, and the historical padding implementation also matches. No evidence establishes a GPU/backend explanation for the remaining mismatch.
+
 These limits are not hidden by the filename coverage check. The PR makes all recipes inspectable and runnable, but does not certify every historical dataset as reproducible from raw input yet.
 
 Verify a newly prepared file against the selected reference without loading whole volumes:

@@ -49,7 +49,7 @@ def test_streaming_matches_original_including_underflow(tmp_path: Path) -> None:
 def test_pack_copies_values_and_attributes_and_refuses_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(brainweb, "SHAPE", (3, 4, 5))
     source = tmp_path / "s04.h5"
-    values = np.arange(3 * 4 * 5 * 11, dtype=np.uint8).reshape(3, 4, 5, 11)
+    values: np.ndarray = np.arange(3 * 4 * 5 * 11, dtype=np.uint8).reshape(3, 4, 5, 11)
     with h5py.File(source, "x") as file:
         file.attrs["classnames"] = brainweb.CLASSES[1:]
         file.attrs["subject"] = 4

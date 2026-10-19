@@ -13,7 +13,7 @@ import math
 from contextlib import ExitStack
 from pathlib import Path
 
-import nibabel as nib
+import nibabel as nib  # type: ignore[import-not-found]  # Optional standalone preparation dependency.
 import numpy as np
 import scipy.ndimage as ndi
 import torch

@@ -24,7 +24,7 @@ import urllib.request
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack
 from pathlib import Path
-from typing import BinaryIO, Literal
+from typing import BinaryIO, Literal, cast
 
 import h5py
 import numpy as np
@@ -58,7 +58,7 @@ def normalize_slab(values: Sequence[np.ndarray], baselines: Sequence[int], mode:
     return np.stack([(x * 255).astype(np.uint8) for x in normalized], axis=-1)
 
 
-def _read_plane(stream: BinaryIO, shape: tuple[int, int, int], z: int) -> np.ndarray:
+def _read_plane(stream: BinaryIO | gzip.GzipFile, shape: tuple[int, int, int], z: int) -> np.ndarray:
     size = shape[1] * shape[2] * 2
     stream.seek(z * size)
     data = stream.read(size)
@@ -67,7 +67,7 @@ def _read_plane(stream: BinaryIO, shape: tuple[int, int, int], z: int) -> np.nda
     plane = np.frombuffer(data, dtype="<u2").reshape(shape[1:])
     if plane.max(initial=0) > 4095:
         raise ValueError("Raw values exceed 4095; check the source and byte order.")
-    return plane
+    return cast(np.ndarray, plane)
 
 
 def iter_raw_slabs(

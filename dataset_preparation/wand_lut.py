@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 
-def create_lut(max_b1: int = 200, max_t1: int = 3000):
+def create_lut(max_b1: int = 200, max_t1: int = 3000) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     maxB1 = max_b1
     maxT1 = max_t1
     SSi = 3500

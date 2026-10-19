@@ -13,7 +13,7 @@ from collections import defaultdict
 from contextlib import ExitStack
 from pathlib import Path
 
-import nibabel as nib
+import nibabel as nib  # type: ignore[import-not-found]  # Optional standalone preparation dependency.
 import numpy as np
 import torch
 
@@ -158,7 +158,7 @@ def process_mp2rage(
 def mp2rage_volumes(folder: Path, lut: Path, chunk_size: int = 256) -> dict[str, np.ndarray]:
     """Original WAND mask and intensity pipeline after LUT matching."""
     patterns = ["*inv-1_part-mag*.nii.gz", "*inv-1_part-phase*.nii.gz", "*inv-2_part-mag*.nii.gz", "*inv-2_part-phase*.nii.gz"]
-    s1, s2, _ = load_complex_mp2rage(*(next(folder.glob(p)) for p in patterns))
+    s1, s2, _ = load_complex_mp2rage(*(str(next(folder.glob(p))) for p in patterns))
     psir, mp2 = compute_psir_mp2rage(s1, s2)
     results = fit_t1_m0(psir, mp2, s1, s2, torch.full(psir.shape, 100.0), str(lut), "cpu", chunk_size)
     t1, m0, t1w = (m.moveaxis((0, 1, 2), (2, 1, 0)).flip(1)[100:] for m in results)

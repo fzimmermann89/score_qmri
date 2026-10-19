@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import h5py
-import nibabel as nib
+import nibabel as nib  # type: ignore[import-not-found]  # Optional preparation environment.
 import numpy as np
 import pytest
 import torch
@@ -14,7 +14,7 @@ from dataset_preparation.openneuro import centered, file_recipe, prepare
 
 
 def test_t1_map_units_orientation_interpolation(tmp_path: Path) -> None:
-    data = np.arange(20 * 15 * 10, dtype=np.float64).reshape(20, 15, 10)
+    data: np.ndarray = np.arange(20 * 15 * 10, dtype=np.float64).reshape(20, 15, 10)
     path = tmp_path / "map.nii.gz"
     nib.save(nib.Nifti1Image(data, np.eye(4)), path)
     actual = file_recipe("ds003967", "t1map_cropped", path).numpy()
@@ -71,8 +71,10 @@ def test_zenodo_curated_default_drops_empty_map_slice(tmp_path: Path) -> None:
             nib.save(nib.Nifti1Image(array, np.eye(4)), root / f"{acquisition}_{tag}.nii")
     for stage, slices in (("curated", 7), ("prepared", 8)):
         output = tmp_path / stage
-        options = {} if stage == "curated" else {"stage": stage}
-        prepare_mrf("zenodo8183344", tmp_path / "raw", output, modalities=["t1map"], **options)
+        if stage == "curated":
+            prepare_mrf("zenodo8183344", tmp_path / "raw", output, modalities=["t1map"])
+        else:
+            prepare_mrf("zenodo8183344", tmp_path / "raw", output, modalities=["t1map"], stage=stage)
         with h5py.File(output / "mrf_zenodo8183344_t1map.h5") as handle:
             for name in ("V01_MR6_original", "V01_MR6_reposition"):
                 assert handle[name].shape[0] == slices

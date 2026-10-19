@@ -92,9 +92,10 @@ def normalize_file(
         with exclusive_h5(output_path) as target:
             for group in groups:
                 target.create_group(group)
-            for group in groups or [None]:
-                origin = source[group] if group else source
-                destination = target[group] if group else target
+            group_names: list[str | None] = [*groups] if groups else [None]
+            for group_name in group_names:
+                origin = source[group_name] if group_name else source
+                destination = target[group_name] if group_name else target
                 for name in names:
                     if name not in origin:
                         continue

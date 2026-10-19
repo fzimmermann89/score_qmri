@@ -96,7 +96,7 @@ def generate_samples(bundle_root: Path, output: Path, limit: int = 1, seed: int 
             raise FileNotFoundError(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     import torch
-    from monai.bundle import ConfigParser
+    from monai.bundle import ConfigParser  # type: ignore[import-not-found]  # Optional generation dependency.
 
     torch.manual_seed(seed)
     selected_device = torch.device(device)

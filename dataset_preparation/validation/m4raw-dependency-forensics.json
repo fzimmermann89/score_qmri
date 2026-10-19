@@ -1,0 +1,12 @@
+{
+  "current_mrpro_distribution": "0.260420+dirty4e90b588",
+  "current_torch_distribution": "2.9.1",
+  "source_current": "/home/zimmer08/datacheck/.venv/lib/python3.12/site-packages/mrpro/utils/pad_or_crop.py",
+  "source_current_sha256": "1808c600a61c9b8c028adc76abde90569e4a5675ca46aa3279e44b6778108aec",
+  "mrpro_before20260105_commit": "ada0527ec9ed98de2c36089afc71ee2a246a1fb5",
+  "historical_source_sha256": "8984c9951ef7d4f5fa2ba33d21933f227d91eccd59745112b5b5f46533c383fc",
+  "pad_function_same_AST": true,
+  "historical_lockfile_available": false,
+  "historical_runtime_version_verified": false,
+  "note": "LastavailablepreJan5mrpro pad/crop implementation uses sameconstantlastdimensions alignment. This doesnotestablish exact packageinstallversionusedbythehistoricalIPythonkernel."
+}

@@ -13,7 +13,7 @@ from dataset_preparation.raw_mri import clean_mask_2d
 
 def test_repack_preserves_samples_attributes_and_inputs(tmp_path: Path) -> None:
     source = tmp_path / "saved.h5"
-    values = np.arange(3 * 8 * 8, dtype=np.float32).reshape(3, 8, 8)
+    values: np.ndarray = np.arange(3 * 8 * 8, dtype=np.float32).reshape(3, 8, 8)
     with h5py.File(source, "x") as file:
         file.attrs["n_samples"] = 2
         for key in ["0", "1"]:

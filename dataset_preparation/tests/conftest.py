@@ -1,7 +1,7 @@
 """Keep optional preparation dependencies separate from the training suite."""
 
-import pytest
+import importlib.util
 
-pytest.importorskip("nibabel", reason="Install dataset_preparation/requirements.txt to run preparation tests")
-pytest.importorskip("nilearn", reason="Install dataset_preparation/requirements.txt to run preparation tests")
-pytest.importorskip("pydicom", reason="Install dataset_preparation/requirements.txt to run preparation tests")
+# Raising importorskip while loading an initial conftest aborts pytest startup.
+# Omit only this optional test directory when the preparation extras are absent.
+collect_ignore_glob = ["test_*.py"] if any(importlib.util.find_spec(name) is None for name in ("nibabel", "nilearn", "pydicom")) else []

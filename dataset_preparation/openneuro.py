@@ -13,7 +13,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import ExitStack
 from pathlib import Path
 
-import nibabel as nib
+import nibabel as nib  # type: ignore[import-not-found]  # Optional preparation environment.
 import numpy as np
 import scipy.ndimage as ndi
 import torch
@@ -94,7 +94,7 @@ def first(root: Path, pattern: str) -> Path:
 
 def centered(data: torch.Tensor, shape: tuple[int, ...]) -> torch.Tensor:
     """Match mrpro.utils.pad_or_crop centered PyTorch pad semantics."""
-    pads = []
+    pads: list[int] = []
     for current, target in zip(reversed(data.shape), reversed(shape), strict=True):
         delta = target - current
         left = math.trunc(delta / 2)
@@ -248,7 +248,7 @@ def prepare(
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"{dataset}_{m}.h5")) for m in sorted(wanted)}
         if dataset in {"ds000221", "ds004611"}:
-            paths = input_root.glob("sub*") if dataset == "ds000221" else input_root.rglob("anat")
+            paths: Iterable[Path] = input_root.glob("sub*") if dataset == "ds000221" else input_root.rglob("anat")
             roots = selected_paths(paths, subjects=subjects, limit=limit)
             if not roots:
                 raise ValueError(f"No selected subjects in {input_root}")

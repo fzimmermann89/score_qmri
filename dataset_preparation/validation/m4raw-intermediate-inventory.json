@@ -1,0 +1,90 @@
+[
+  {
+    "path": "/home/zimmer08/data/prepared/m4raw_gre.h5",
+    "bytes": 783756579,
+    "subjects": 183,
+    "shape": [
+      18,
+      256,
+      256
+    ],
+    "sha256_subject": "7788b34b2ef88b17d935c8331993cc45ae3f370ed3cf800237bdece09b4a5093"
+  },
+  {
+    "path": "/home/zimmer08/data/prepared/m4raw_t2w.h5",
+    "bytes": 680323102,
+    "subjects": 208,
+    "shape": [
+      18,
+      256,
+      256
+    ],
+    "sha256_subject": "10c8cd79f35c7ca46696270273cb42eed08bc533d0f4736f26301d9a71036c7e"
+  },
+  {
+    "path": "/home/zimmer08/data/prepared/m4raw_t1w.h5",
+    "bytes": 751691165,
+    "subjects": 208,
+    "shape": [
+      18,
+      256,
+      256
+    ],
+    "sha256_subject": "f25de160355af027296eeb8af42749f4acbaed918a69e051ea258d64b7bcb965"
+  },
+  {
+    "path": "/home/zimmer08/data/prepared/m4raw_flair.h5",
+    "bytes": 745172941,
+    "subjects": 208,
+    "shape": [
+      18,
+      256,
+      256
+    ],
+    "sha256_subject": "d4e21e8b9408e5fa733a4bdc0a69bb774ec6aacf47372fb9448e4bb8d5286c8c"
+  },
+  {
+    "path": "/home/zimmer08/datacheck/data/prepared/m4raw_gre.h5",
+    "bytes": 783756579,
+    "subjects": 183,
+    "shape": [
+      18,
+      256,
+      256
+    ],
+    "sha256_subject": "7788b34b2ef88b17d935c8331993cc45ae3f370ed3cf800237bdece09b4a5093"
+  },
+  {
+    "path": "/home/zimmer08/datacheck/data/prepared/m4raw_t2w.h5",
+    "bytes": 680323102,
+    "subjects": 208,
+    "shape": [
+      18,
+      256,
+      256
+    ],
+    "sha256_subject": "10c8cd79f35c7ca46696270273cb42eed08bc533d0f4736f26301d9a71036c7e"
+  },
+  {
+    "path": "/home/zimmer08/datacheck/data/prepared/m4raw_t1w.h5",
+    "bytes": 751691165,
+    "subjects": 208,
+    "shape": [
+      18,
+      256,
+      256
+    ],
+    "sha256_subject": "f25de160355af027296eeb8af42749f4acbaed918a69e051ea258d64b7bcb965"
+  },
+  {
+    "path": "/home/zimmer08/datacheck/data/prepared/m4raw_flair.h5",
+    "bytes": 745172941,
+    "subjects": 208,
+    "shape": [
+      18,
+      256,
+      256
+    ],
+    "sha256_subject": "d4e21e8b9408e5fa733a4bdc0a69bb774ec6aacf47372fb9448e4bb8d5286c8c"
+  }
+]

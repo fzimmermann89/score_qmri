@@ -34,7 +34,7 @@ def compare_h5(
         raise ValueError("sample_slices must be positive")
     if not np.isfinite([rtol, atol]).all() or min(rtol, atol) < 0:
         raise ValueError("Tolerances must be finite and nonnegative")
-    issues = []
+    issues: list[dict[str, object]] = []
     checked_datasets = 0
     checked_slices = 0
     checked_values = 0
@@ -94,7 +94,7 @@ def compare_h5(
                 for key in ("chunks", "compression", "compression_opts", "shuffle", "fletcher32", "scaleoffset")
             ):
                 issues.append({"path": name, "reason": "container layout"})
-            indices = list(range(a.shape[0])) if a.ndim else [()]
+            indices: list[int | tuple[()]] = list(range(a.shape[0])) if a.ndim else [()]
             if a.ndim and sample_slices is not None and len(indices) > sample_slices:
                 indices = np.unique(np.linspace(0, len(indices) - 1, sample_slices).astype(int)).tolist()
             mismatched_slices = 0

@@ -42,6 +42,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from contextlib import ExitStack
 from pathlib import Path
+from typing import cast
 
 import h5py
 import numpy as np
@@ -56,7 +57,7 @@ def pad_or_crop(data: Tensor, new_shape: Sequence[int]) -> Tensor:
     if len(new_shape) > data.ndim:
         raise ValueError("New shape exceeds tensor dimensions.")
     shape = (*data.shape[: -len(new_shape)], *new_shape)
-    padding = []
+    padding: list[int] = []
     for old, new in zip(data.shape, shape, strict=True):
         after = math.trunc((new - old) / 2)
         before = new - old - after
@@ -74,7 +75,7 @@ def clean_mask_3d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
     lab, n = ndi.label(m, structure=ndi.generate_binary_structure(3, 1))
     if n:
         m = lab == np.bincount(lab.ravel())[1:].argmax() + 1
-    return torch.tensor(m, dtype=bool)
+    return torch.tensor(m, dtype=torch.bool)
 
 
 def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
@@ -87,7 +88,7 @@ def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
     lab, n = ndi.label(m, structure=ndi.generate_binary_structure(2, 1))
     if n:
         m = lab == np.bincount(lab.ravel())[1:].argmax() + 1
-    return torch.tensor(m, dtype=bool)
+    return torch.tensor(m, dtype=torch.bool)
 
 
 def remove_polynomial_phase(img: torch.Tensor, order: int = 1, threshold: float = 0.2, threshold_max: float = 0.6) -> torch.Tensor:
@@ -146,7 +147,7 @@ def remove_polynomial_phase(img: torch.Tensor, order: int = 1, threshold: float 
 
 def ift(x: torch.Tensor) -> torch.Tensor:
     d = (-1, -2)
-    return torch.fft.ifftshift(torch.fft.ifftn(torch.fft.fftshift(x, dim=d), dim=d), dim=d)
+    return cast(Tensor, torch.fft.ifftshift(torch.fft.ifftn(torch.fft.fftshift(x, dim=d), dim=d), dim=d))
 
 
 def espirit_2d(
@@ -215,7 +216,7 @@ def pocs_partial_fourier(kspace: torch.Tensor, n_iter: int = 10) -> torch.Tensor
         k_est = torch.fft.fftshift(torch.fft.fftn(img, dim=(1, 2)), dim=(1, 2))
         k_est = torch.where(mask, kspace, k_est)
         img = torch.fft.ifftn(torch.fft.ifftshift(k_est, dim=(1, 2)), dim=(1, 2))
-    return k_est
+    return cast(Tensor, k_est)
 
 
 def espirit_3d(
@@ -301,7 +302,7 @@ def espirit_3d(
 
 def ifft_3d(k: torch.Tensor) -> torch.Tensor:
     d = (-1, -2, -3)
-    return torch.fft.fftshift(torch.fft.ifftn(torch.fft.ifftshift(k, dim=d), dim=d), dim=d)
+    return cast(Tensor, torch.fft.fftshift(torch.fft.ifftn(torch.fft.ifftshift(k, dim=d), dim=d), dim=d))
 
 
 def _write(group: h5py.Group, name: str, tensor: Tensor, coil_chunks: bool = False) -> None:
@@ -509,7 +510,7 @@ def prepare(
                 with h5py.File(path, "r") as source:
                     values.append(torch.tensor(np.array(source["kspace"]), device=device))
                     if family == "fastmri":
-                        import ismrmrd
+                        import ismrmrd  # type: ignore[import-not-found]  # Optional preparation dependency.
 
                         header = ismrmrd.xsd.CreateFromDocument(source["ismrmrd_header"][()])
                         size = header.encoding[0].reconSpace.matrixSize

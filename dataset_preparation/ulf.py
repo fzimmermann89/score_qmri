@@ -46,7 +46,7 @@ def prepare(
     limit: int | None = None,
 ) -> None:
     """Prepare subjects from local 3T references into new exclusive H5 files."""
-    import nibabel as nib
+    import nibabel as nib  # type: ignore[import-not-found]  # Optional preparation dependency.
 
     if not modalities or not set(modalities) <= {"t1", "t2", "flair"} or len(set(modalities)) != len(modalities):
         raise ValueError("Select distinct modalities from t1, t2, flair.")

@@ -19,7 +19,7 @@ from .nifti import clean_mask_2d, select
 
 
 def volumes(folder: Path, modalities: list[str]) -> dict[str, np.ndarray]:
-    result = {}
+    result: dict[str, np.ndarray] = {}
     if {"t1", "m0mag"} & set(modalities):
         maps = loadmat(folder / "mrQ_maps.mat")["mrQ_maps"][0, 0]
         m0 = np.flip(np.swapaxes(np.moveaxis(maps["M0"], -1, 0), 1, 2), 1)

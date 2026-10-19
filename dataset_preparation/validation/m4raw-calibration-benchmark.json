@@ -1,0 +1,16 @@
+{
+  "paths": [
+    "/home/zimmer08/datacheck/data/m4raw/gre_data/2022061001_GRE01.h5",
+    "/home/zimmer08/datacheck/data/m4raw/gre_data/2022061001_GRE02.h5"
+  ],
+  "input_shape": [
+    1,
+    8,
+    1,
+    256,
+    256
+  ],
+  "seconds_one_slice": 4.3489484786987305,
+  "finite": true,
+  "device": "cpu"
+}

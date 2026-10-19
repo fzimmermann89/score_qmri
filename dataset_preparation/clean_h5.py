@@ -28,7 +28,7 @@ def retained_indices(
     valid = []
     for index in range(dataset.shape[0]):
         active = np.abs(dataset[index]) > threshold
-        count = np.max(np.sum(active, axis=(-2, -1))) if active.ndim == 3 else np.sum(active)
+        count = int(np.max(np.sum(active, axis=(-2, -1))) if active.ndim == 3 else np.sum(active))
         if count >= min_pixels:
             valid.append(index)
     return valid

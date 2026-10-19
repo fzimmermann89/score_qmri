@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import h5py
-import nibabel as nib
+import nibabel as nib  # type: ignore[import-not-found]  # Optional preparation dependency.
 import numpy as np
 import pytest
 import torch
@@ -13,7 +13,7 @@ from dataset_preparation.ulf import prepare, prepare_volume
 
 
 def test_processing_matches_original_cell() -> None:
-    volume = np.zeros((64, 64, 4), dtype=np.float64)
+    volume: np.ndarray = np.zeros((64, 64, 4), dtype=np.float64)
     volume[3:-3, 3:-3] = 1.0
     volume[20:40, 20:40] = 2.0
     expected = np.transpose(volume, (2, 1, 0))
@@ -31,7 +31,7 @@ def test_processing_matches_original_cell() -> None:
 def test_one_nifti_and_no_overwrite(tmp_path: Path) -> None:
     folder = tmp_path / "raw" / "POCEMR001" / "3T"
     folder.mkdir(parents=True)
-    volume = np.zeros((64, 64, 4), dtype=np.float32)
+    volume: np.ndarray = np.zeros((64, 64, 4), dtype=np.float32)
     volume[3:-3, 3:-3] = 1.0
     nifti = folder / "POCEMR001_T1.nii.gz"
     nib.save(nib.Nifti1Image(volume, np.eye(4)), nifti)

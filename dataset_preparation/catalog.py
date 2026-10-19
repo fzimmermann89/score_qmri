@@ -11,7 +11,10 @@ from pathlib import Path
 
 
 def load_catalog() -> dict:
-    return json.loads(Path(__file__).with_name("catalog.json").read_text())
+    data = json.loads(Path(__file__).with_name("catalog.json").read_text())
+    if not isinstance(data, dict):
+        raise ValueError("The recipe catalog must be a JSON object")
+    return data
 
 
 def yaml_files(path: Path) -> set[str]:

@@ -1,0 +1,23 @@
+{
+  "subject": "2022061001",
+  "z": 9,
+  "seconds": 5.9981396198272705,
+  "scope": "Single realGREslice numerical sensitivity probe complex64 vscomplex128 CPUcalibration thenboth castcomplex64beforeoriginalphasefit; notanattempt toselectnewrawrecipe.",
+  "precision_comparison_phase_mean_abs_radians": 0.00032601284328848124,
+  "results": [
+    {
+      "calibration_dtype": "torch.complex64",
+      "fitted_magnitude_scale": 4.9714884757995605,
+      "phase_mean_abs_radians_foreground": 0.052304044365882874,
+      "scaled_magnitude_mean_abs_error": 0.0011272685369476676,
+      "scaled_complex_mean_abs_error": 0.014190695248544216
+    },
+    {
+      "calibration_dtype": "torch.complex128",
+      "fitted_magnitude_scale": 4.971596717834473,
+      "phase_mean_abs_radians_foreground": 0.05209072306752205,
+      "scaled_magnitude_mean_abs_error": 0.0011224730405956507,
+      "scaled_complex_mean_abs_error": 0.014132062904536724
+    }
+  ]
+}

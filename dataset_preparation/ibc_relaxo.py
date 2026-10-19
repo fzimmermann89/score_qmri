@@ -11,16 +11,21 @@ No download is attempted; acquire the IBC Relaxometry sourcedata separately.
 import argparse
 import json
 from contextlib import ExitStack
+from importlib import import_module
 from pathlib import Path
+from typing import cast
 
-import nibabel as nib
+import nibabel as nib  # type: ignore[import-not-found]  # Optional standalone preparation dependency.
 import numpy as np
 import scipy.ndimage as ndi
 import torch
-from nilearn.image import resample_to_img
-from threadpoolctl import threadpool_limits
 
 from dataset_preparation.common import exclusive_h5, write_dataset
+
+# These optional preparation packages have no typing metadata. Load only their
+# public entry points; there is no preparation or resampling at import time.
+resample_to_img = import_module("nilearn.image").resample_to_img
+threadpool_limits = import_module("threadpoolctl").threadpool_limits
 
 
 def clean_mask_3d(mask: np.ndarray) -> torch.Tensor:
@@ -36,7 +41,7 @@ def clean_mask_3d(mask: np.ndarray) -> torch.Tensor:
         lab, n = ndi.label(s, structure=ndi.generate_binary_structure(2, 1))
         if n:
             s = lab == (np.bincount(lab.ravel())[1:].argmax() + 1)
-        ms.append(torch.tensor(s, dtype=bool))
+        ms.append(torch.tensor(s, dtype=torch.bool))
     return torch.stack(ms, dim=0)
 
 
@@ -66,7 +71,7 @@ def load_b1_map(base_path: Path, sub: str, ses: str, ref_img: nib.Nifti1Image) -
     b1_img = nib.load(path)
     # Pin the defaults from the historical Nilearn 0.12 producer.
     b1_resampled = resample_to_img(b1_img, ref_img, interpolation="continuous", force_resample=False, copy_header=False)
-    return b1_resampled.get_fdata(dtype=np.float32) / 1000.0
+    return cast(np.ndarray, b1_resampled.get_fdata(dtype=np.float32) / 1000.0)
 
 
 def create_mask(vfa_data: np.ndarray, b1_rel: np.ndarray) -> torch.Tensor:
@@ -82,7 +87,7 @@ def fit_t1_linear(
     vfa_data: np.ndarray,
     fa_deg: np.ndarray,
     b1_rel: np.ndarray,
-    mask: np.ndarray,
+    mask: np.ndarray | torch.Tensor,
     tr: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -191,7 +196,7 @@ def load_t2star_data(base_path: Path, sub: str, ses: str) -> tuple[np.ndarray, n
     return mag, te, img
 
 
-def historical_t2star_mask(mask: np.ndarray) -> torch.Tensor:
+def historical_t2star_mask(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
     """Executed session224 line6 mask used before its line40 T2star writer."""
     st = ndi.generate_binary_structure(3, 1)
     mask = ndi.binary_opening(np.asarray(mask).astype(bool), structure=st)
@@ -200,16 +205,16 @@ def historical_t2star_mask(mask: np.ndarray) -> torch.Tensor:
     labels, count = ndi.label(mask, structure=st)
     if count:
         mask = labels == (np.bincount(labels.ravel())[1:].argmax() + 1)
-    return torch.tensor(mask, dtype=bool)
+    return torch.tensor(mask, dtype=torch.bool)
 
 
-def create_mask_t2star(mag: np.ndarray) -> torch.Tensor:
+def create_mask_t2star(mag: np.ndarray | torch.Tensor) -> torch.Tensor:
     mask = mag.mean(-1) > 200
     mask = historical_t2star_mask(mask)
     return mask
 
 
-def fit_t2star(mag: np.ndarray, te: np.ndarray, mask: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
+def fit_t2star(mag: np.ndarray | torch.Tensor, te: np.ndarray, mask: np.ndarray | torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Log-linear T2* fitting.
 
@@ -248,29 +253,29 @@ def fit_t2star(mag: np.ndarray, te: np.ndarray, mask: np.ndarray) -> tuple[torch
     r2star = np.clip(-slope, 1e-6, 500)
     t2star[idx] = 1.0 / r2star
     s0[idx] = np.exp(intercept)
-    s0 = torch.tensor(s0)
+    s0_tensor = torch.tensor(s0)
     # mask = mask * (t2star < 5) * (s0 > 50)
-    mask = torch.stack([torch.tensor(ndi.binary_erosion(m)) for m in mask])
-    s0 = s0.clamp_max(s0[mask].quantile(0.95))
-    s0 = s0 / s0[mask].quantile(0.8)
-    s0 = s0 * mask
-    t2star = torch.tensor(t2star) * mask
-    t2star = t2star.clamp_max(0.1)
-    s0 = s0[20:-20]
-    t2star = t2star[20:-20]
+    mask_tensor = torch.stack([torch.tensor(ndi.binary_erosion(m)) for m in mask])
+    s0_tensor = s0_tensor.clamp_max(s0_tensor[mask_tensor].quantile(0.95))
+    s0_tensor = s0_tensor / s0_tensor[mask_tensor].quantile(0.8)
+    s0_tensor = s0_tensor * mask_tensor
+    t2star_tensor = torch.tensor(t2star) * mask_tensor
+    t2star_tensor = t2star_tensor.clamp_max(0.1)
+    s0_tensor = s0_tensor[20:-20]
+    t2star_tensor = t2star_tensor[20:-20]
 
     # t2star = np.clip(t2star, 0, 0.2)
 
-    return t2star, s0
+    return t2star_tensor, s0_tensor
 
 
 def compute_t2star_map(base_path: Path, sub: str, ses: str) -> tuple[torch.Tensor, torch.Tensor]:
     mag, te, ref_img = load_t2star_data(base_path, sub, ses)
-    mag = torch.tensor(mag).movedim(0, 2)
-    mag = mag[80:-20]
+    mag_tensor = torch.tensor(mag).movedim(0, 2)
+    mag_tensor = mag_tensor[80:-20]
 
-    mask = create_mask_t2star(mag)
-    t2star, s0 = fit_t2star(mag, te, mask)
+    mask = create_mask_t2star(mag_tensor)
+    t2star, s0 = fit_t2star(mag_tensor, te, mask)
     return t2star, s0
 
 
@@ -330,7 +335,7 @@ def create_mask_t2(mag: np.ndarray, threshold: float = 100) -> torch.Tensor:
     return mask
 
 
-def fit_t2(mag: np.ndarray, te: np.ndarray, mask: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
+def fit_t2(mag: np.ndarray, te: np.ndarray, mask: np.ndarray | torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Log-linear T2 fitting for multi-echo spin-echo data.
 
@@ -370,15 +375,15 @@ def fit_t2(mag: np.ndarray, te: np.ndarray, mask: np.ndarray) -> tuple[torch.Ten
     t2[idx] = 1.0 / r2
     s0[idx] = np.exp(intercept)
 
-    s0 = torch.tensor(s0)
-    mask = torch.stack([torch.tensor(ndi.binary_erosion(m)) for m in mask])
-    s0 = s0.clamp_max(s0[mask].quantile(0.95))
-    s0 = s0 / s0[mask].quantile(0.8)
-    s0 = s0 * mask
+    s0_tensor = torch.tensor(s0)
+    mask_tensor = torch.stack([torch.tensor(ndi.binary_erosion(m)) for m in mask])
+    s0_tensor = s0_tensor.clamp_max(s0_tensor[mask_tensor].quantile(0.95))
+    s0_tensor = s0_tensor / s0_tensor[mask_tensor].quantile(0.8)
+    s0_tensor = s0_tensor * mask_tensor
 
-    t2 = torch.tensor(t2) * mask
-    t2 = t2.clamp_max(0.3)  # T2 typically <300ms in tissue (longer than T2*)
-    return t2, s0
+    t2_tensor = torch.tensor(t2) * mask_tensor
+    t2_tensor = t2_tensor.clamp_max(0.3)  # T2 typically <300ms in tissue (longer than T2*)
+    return t2_tensor, s0_tensor
 
 
 def compute_t2_map(
@@ -389,12 +394,12 @@ def compute_t2_map(
     crop: tuple[int, int] = (10, 10),
 ) -> tuple[torch.Tensor, torch.Tensor]:
     mag, te, ref_img = load_t2_data(base_path, sub, ses, run)
-    mag = torch.tensor(mag).swapaxes(0, 2).flip(1)
-    mag = mag[..., :10]
+    mag_tensor = torch.tensor(mag).swapaxes(0, 2).flip(1)
+    mag_tensor = mag_tensor[..., :10]
     te = te[:10]
 
-    mask = create_mask_t2(mag.numpy())
-    t2, s0 = fit_t2(mag.numpy(), te, mask)
+    mask = create_mask_t2(mag_tensor.numpy())
+    t2, s0 = fit_t2(mag_tensor.numpy(), te, mask)
 
     t2 = t2[crop[0] : -crop[1] if crop[1] else None]
     s0 = s0[crop[0] : -crop[1] if crop[1] else None]
@@ -449,17 +454,18 @@ def prepare(
         handles = [stack.enter_context(exclusive_h5(path)) for path in outputs]
         for name in names:
             sub, ses, run = entries[name]
+            arrays: tuple[torch.Tensor | np.ndarray, ...]
             if family == "t1":
                 arrays = t1_map(sub, ses, input_path)
             elif family == "t2star":
                 arrays = compute_t2star_map(input_path, sub, ses)
             else:
-                arrays = compute_t2_map(input_path, sub, ses, run)
+                t2_arrays = compute_t2_map(input_path, sub, ses, run)
                 # Original v13 writer uses mrpro.utils.pad_or_crop(224,176).
                 # Its odd-size convention differs from normalize_h5.py.
                 from dataset_preparation.nifti import pad_or_crop
 
-                arrays = tuple(pad_or_crop(array.numpy(), (224, 176)) for array in arrays)
+                arrays = tuple(pad_or_crop(array.numpy(), (224, 176)) for array in t2_arrays)
             for handle, array in zip(handles, arrays, strict=True):
                 write_dataset(handle, name, np.asarray(array))
     return names

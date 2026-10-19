@@ -45,7 +45,7 @@ def zenodo_subject(root: Path, which: str, modalities: set[str]) -> Iterator[tup
 
 def nist_series(root: Path, modality: str, dicom_order: dict[str, list[str]] | None = None) -> torch.Tensor:
     """Read the original five DICOM candidates and sort by SliceLocation."""
-    import pydicom
+    import pydicom  # type: ignore[import-not-found]  # Optional preparation environment.
 
     if dicom_order is None:
         files = sorted(list(root.rglob("*.IMA"))[:5])
