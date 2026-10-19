@@ -15,54 +15,12 @@ Diffusion model framework for learning MRI priors (2-channel real/imag or mag/ze
 
 ```bash
 source .venv/bin/activate
-score-qmri-train fit --config config.yaml
+score-qmri fit --config data.yaml --config model.yaml --job_name my-run
 ```
 
-## Key Config (config.yaml)
+Training datasets and loader settings are in `data.yaml`; model and optimizer overrides are in `model.yaml`. Pass both files in that order. Dataset paths resolve relative to the working directory.
 
-```yaml
-# Values shown are defaults in code unless explicitly set in config.yaml.
-model:
-  learning_rate: 1e-4
-
-  # UNet parameters (defaults shown)
-  # base_channels: 96
-  # channel_mult: [1, 2, 2, 2, 4, 4]
-  # num_res_blocks: 2
-  # attention_levels: [-1, -2, -3]
-  # head_dim: 64
-
-  # EDM parameters (defaults shown)
-  sigma_min: 0.002
-  sigma_max: 10.0
-  sigma_data: 0.2
-  p_mean: -1.2
-  p_std: 1.2
-  rho: 7.0
-
-  normalization:
-    train_clip: 1.2
-    sample_clip: 1.0
-    kind_scales:
-      T1MAP: 0.25
-      T2MAP: 2
-      T2STARMAP: 8
-
-# Optional overrides (defaults in code)
-# model.base_channels: 96
-# model.num_res_blocks: 2
-
-
-data:
-  batch_size: 64
-  sample_size: [256, 256]
-  kind_normalization: 0.3
-
-trainer:
-  max_steps: 1000000
-  gradient_clip_val: 1.0
-
-```
+See [checkpoint compatibility](docs/checkpoints.md) for strict model loading and portable checkpoint conversion.
 
 ## Dev
 

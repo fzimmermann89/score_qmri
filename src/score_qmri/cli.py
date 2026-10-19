@@ -16,6 +16,7 @@ from lightning.pytorch.loggers import WandbLogger
 
 from score_qmri.datasets.lightning import MRIDataModule
 from score_qmri.training.lightning_module import DiffusionLightningModule
+from score_qmri.utils.checkpoint import checkpoint_config
 from score_qmri.utils.config import normalize_config
 
 if not sys.warnoptions:
@@ -69,7 +70,7 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         checkpoint: dict[str, Any],
     ) -> None:
         if hasattr(self.config, "as_dict"):
-            checkpoint["cli_config"] = self.config.as_dict()
+            checkpoint["cli_config"] = checkpoint_config(self.config)
 
 
 class DiffusionTrainer(Trainer):
@@ -202,7 +203,8 @@ class DiffusionLightningCLI(LightningCLI):
             mode="min",
             save_top_k=3,
             save_last=True,
-            filename="{step:06d}-{train_loss:.4f}",
+            filename="step={step:06d}",
+            auto_insert_metric_name=False,
             every_n_train_steps=1000,
         )
 
