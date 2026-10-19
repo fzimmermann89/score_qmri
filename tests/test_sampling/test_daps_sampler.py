@@ -63,7 +63,7 @@ def test_masking_operator_has_required_methods():
 def test_daps_sampler_output_shape():
     unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    config = DAPSConfig(anneal_steps=3, reverse_steps=1, langevin_steps=2, tau=1.0)
+    config = DAPSConfig(anneal_steps=3, reverse_steps=1, langevin_steps=2, tau=1.0, inner_kernel="gaussian")
     sampler = DAPSSampler(model, config)
 
     B, H, W = 2, 32, 32
@@ -151,8 +151,8 @@ def test_daps_lr_decays():
 def test_daps_sampler_runs_langevin_steps():
     unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
     model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    config_1 = DAPSConfig(anneal_steps=2, reverse_steps=1, langevin_steps=1, tau=1.0)
-    config_5 = DAPSConfig(anneal_steps=2, reverse_steps=1, langevin_steps=5, tau=1.0)
+    config_1 = DAPSConfig(anneal_steps=2, reverse_steps=1, langevin_steps=1, tau=1.0, inner_kernel="langevin")
+    config_5 = DAPSConfig(anneal_steps=2, reverse_steps=1, langevin_steps=5, tau=1.0, inner_kernel="langevin")
 
     sampler_1 = DAPSSampler(model, config_1)
     sampler_5 = DAPSSampler(model, config_5)
@@ -166,3 +166,18 @@ def test_daps_sampler_runs_langevin_steps():
 
     assert result_1.shape == result_5.shape
     assert not torch.allclose(result_1, result_5)
+
+
+def test_langevin_likelihood_gradient_uses_per_real_noise_variance():
+    sampler = DAPSSampler.__new__(DAPSSampler)
+    sampler.cfg = DAPSConfig(inner_kernel="langevin", langevin_steps=1, langevin_lr=1.0, tau=0.5)
+    center = torch.full((1, 2, 1, 1), 0.4)
+    measurement = torch.full((1, 1, 1, 1, 1), 0.1 + 0.2j)
+    sigma = 0.5
+    lr = 0.1 / (sigma**-2 + sampler.cfg.tau**-2)
+    kind = torch.tensor([int(DatasetKind.COMPLEX_T1W_COILWISE)])
+    result = sampler._langevin(center, sigma, 0, kind, IdentityOperator(), measurement, torch.Generator().manual_seed(43))
+    noise = torch.randn(center.shape, generator=torch.Generator().manual_seed(43))
+    residual = center - torch.tensor([0.1, 0.2]).reshape(1, 2, 1, 1)
+    expected = center - lr * residual / sampler.cfg.tau**2 + (2 * lr) ** 0.5 * noise
+    torch.testing.assert_close(result, expected)
