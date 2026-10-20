@@ -2,7 +2,7 @@
 Request/download the training data through
 https://github.com/khtohidulislam/ULF-EnC-Challenge and extract it;
 --input-root must contain subject/3T folders (not enhanced 64mT predictions).
-Run: python ulf.py --input-root TRAIN3 --output-dir NEW --limit 1."""
+Run: python ulf.py --input-root TRAIN3 --output-dir NEW."""
 
 from __future__ import annotations
 
@@ -50,18 +50,14 @@ def prepare(
     output_dir: Path,
     modalities: Sequence[str] = ("t1", "t2", "flair"),
     subjects: Sequence[str] | None = None,
-    limit: int | None = None,
 ) -> None:
     """Prepare subjects from local 3T references into new exclusive H5 files."""
 
     if len(set(modalities)) != len(modalities):
         raise ValueError("Select distinct modalities.")
-    if limit is not None and limit < 1:
-        raise ValueError("Limit must be positive.")
     folders = sorted(input_root.rglob("3T"))
     if subjects:
         folders = [folder for folder in folders if folder.parent.stem in subjects]
-    folders = folders[:limit]
     if not folders:
         raise ValueError("No selected subject/3T input directories.")
     pairs: dict[str, list[tuple[str, Path]]] = {}
@@ -92,12 +88,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--modalities", nargs="+", default=["t1", "t2", "flair"], choices=("t1", "t2", "flair"))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args(argv)
-    if args.limit is not None and args.limit < 1:
-        parser.error("--limit must be positive.")
     torch.set_num_threads(1)
-    prepare(args.input_root, args.output_dir, args.modalities, args.subjects, args.limit)
+    prepare(args.input_root, args.output_dir, args.modalities, args.subjects)
 
 
 if __name__ == "__main__":

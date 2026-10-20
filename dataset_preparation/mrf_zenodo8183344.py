@@ -1,7 +1,7 @@
 """Build mrf_zenodo8183344_{t1map,t2map,t1w,t2w}.h5.
 Download and extract https://zenodo.org/records/8183344; --input-root must
 contain MR? sessions with original/reposition MPRAGE, T1, T2 and TSE NIfTIs.
-Run: python mrf_zenodo8183344.py --input-root RAW --output-dir NEW --limit 1.
+Run: python mrf_zenodo8183344.py --input-root RAW --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -46,14 +46,12 @@ def clean_mask_2d(mask: torch.Tensor | np.ndarray) -> torch.Tensor:
     return torch.tensor(result, dtype=torch.bool)
 
 
-def select_roots(paths: Iterator[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
+def select_roots(paths: Iterator[Path], subjects: list[str] | None) -> list[Path]:
     """Select subject ancestors as well as series/session names."""
-    if limit is not None and limit < 1:
-        raise ValueError("--limit must be positive")
     roots = sorted(set(paths))
     if subjects:
         roots = [p for p in roots if set(p.parts) & set(subjects) or p.stem in subjects]
-    return roots[:limit] if limit is not None else roots
+    return roots
 
 
 def first(root: Path, pattern: str) -> Path:
@@ -87,11 +85,9 @@ def zenodo_subject(root: Path, which: str, modalities: set[str]) -> Iterator[tup
         yield "t2w", name, (image * mask.float() / image.max())[3:-5].float()
 
 
-def prepare(
-    input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
-) -> None:
+def prepare(input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None) -> None:
     wanted = set(modalities or MODALITIES)
-    roots = select_roots(input_root.rglob("MR?"), subjects, limit)
+    roots = select_roots(input_root.rglob("MR?"), subjects)
     if not roots:
         raise ValueError("No MR? sessions found")
     with ExitStack() as stack:
@@ -109,7 +105,6 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
     prepare(**vars(args))

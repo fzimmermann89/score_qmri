@@ -55,14 +55,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
     paths = [path for path in args.input_root.rglob("qmap*") if path.is_file()]
-    if args.limit is not None:
-        if args.limit <= 0:
-            parser.error("limit must be positive")
-        paths = paths[: args.limit]
     if not paths:
         parser.error("No qmap NPZ files found")
     # The source writes one stacked 'data' dataset, not a subject per NPZ.

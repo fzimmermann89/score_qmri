@@ -21,7 +21,7 @@ def download_file(url: str, output: Path) -> None:
         shutil.copyfileobj(response, target, length=1024 * 1024)
 
 
-def rockland_plan(manifest: Path, subjects: list[str], modalities: list[str], limit: int | None = None) -> list[tuple[str, Path]]:
+def rockland_plan(manifest: Path, subjects: list[str], modalities: list[str]) -> list[tuple[str, Path]]:
     """Select anatomical rows from the original Rockland CSV, preserving keys."""
     prefix = "data/Projects/RocklandSample/RawDataBIDSLatest/"
     result = []
@@ -40,10 +40,6 @@ def rockland_plan(manifest: Path, subjects: list[str], modalities: list[str], li
                 continue
             result.append(("https://fcp-indi.s3.amazonaws.com/" + urllib.parse.quote(key), relative))
     result = sorted(set(result))
-    if limit is not None:
-        if limit <= 0:
-            raise ValueError("limit must be positive")
-        result = result[:limit]
     if not result:
         raise ValueError("No matching Rockland files")
     return result
@@ -63,7 +59,6 @@ def main() -> None:
     rockland.add_argument("--manifest", type=Path, required=True)
     rockland.add_argument("--subjects", nargs="+", required=True)
     rockland.add_argument("--modalities", nargs="+", choices=["T1w", "T2w", "FLAIR"], required=True)
-    rockland.add_argument("--limit", type=int)
     rockland.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.output.exists() or args.output.is_symlink():
@@ -75,7 +70,7 @@ def main() -> None:
         subprocess.run(["git", "-C", str(args.output), "checkout", args.revision], check=True)
         subprocess.run(["datalad", "get", "-d", str(args.output), "--", *(str(args.output / p) for p in args.get)], check=True)
     else:
-        for url, relative in rockland_plan(args.manifest, args.subjects, args.modalities, args.limit):
+        for url, relative in rockland_plan(args.manifest, args.subjects, args.modalities):
             print(relative, flush=True)
             download_file(url, args.output / relative)
 

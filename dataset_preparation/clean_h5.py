@@ -52,11 +52,8 @@ def clean_file(
     input_path: str | Path,
     output_path: str | Path,
     subjects: list[str] | None = None,
-    limit: int | None = None,
 ) -> dict[str, dict[str, int]]:
-    """Create a new filtered file, optionally selecting a bounded subject subset."""
-    if limit is not None and limit <= 0:
-        raise ValueError("limit must be positive")
+    """Create a new filtered file, optionally selecting subjects."""
     with h5py.File(str(input_path), "r") as source:
         groups = [name for name in ("coilwise", "combined") if name in source and isinstance(source[name], h5py.Group)]
         reference = source["combined"] if "combined" in groups else source[groups[0]] if groups else source
@@ -68,8 +65,6 @@ def clean_file(
             if missing:
                 raise ValueError(f"Unknown subjects: {sorted(missing)}")
             names = [name for name in names if name in subjects]
-        if limit is not None:
-            names = names[:limit]
         if not names:
             raise ValueError("No subjects selected")
         report = {}
@@ -95,9 +90,8 @@ def main() -> None:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path, help="New output file; existing paths are refused")
     parser.add_argument("--subjects", nargs="+", help="Exact HDF5 subject keys")
-    parser.add_argument("--limit", type=int, help="Only the first N selected subjects")
     args = parser.parse_args()
-    for name, counts in clean_file(args.input, args.output, args.subjects, args.limit).items():
+    for name, counts in clean_file(args.input, args.output, args.subjects).items():
         print(f"{name}: {counts['input_slices']} -> {counts['output_slices']} slices")
 
 

@@ -1,7 +1,7 @@
 """Build quiero_{t1map,t2map,m0map}.h5 from the three-channel 4Pub maps.
 Download 3DMRFReproducibility.zip from https://zenodo.org/records/3989799
 and pass its extracted 4Pub directory as --input-root.
-Run: python quiero.py --input-root RAW --output-dir NEW --limit 1.
+Run: python quiero.py --input-root RAW --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -31,14 +31,10 @@ def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Data
     return handle.create_dataset(name, data=array, chunks=(1, *array.shape[1:]), compression="lzf", shuffle=True)
 
 
-def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
+def select(paths: list[Path], subjects: list[str] | None) -> list[Path]:
     paths = sorted(set(paths))
     if subjects:
         paths = [p for p in paths if any(s in p.parts or p.name.startswith(s + "_") or p.stem == s for s in subjects)]
-    if limit is not None:
-        if limit <= 0:
-            raise ValueError("limit must be positive")
-        paths = paths[:limit]
     if not paths:
         raise ValueError("No matching input files")
     return paths
@@ -75,13 +71,11 @@ def quiero_volumes(path: Path) -> dict[str, np.ndarray]:
     return {"t1map": t1.numpy(), "t2map": t2.numpy(), "m0map": m0.numpy()}
 
 
-def prepare(
-    input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
-) -> None:
+def prepare(input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None) -> None:
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"quiero_{m}.h5")) for m in modalities or MODALITIES}
         paths = [path for path in input_root.rglob("*test.nii") if nib.load(path).shape[-1] == 3]
-        for path in select(paths, subjects, limit):
+        for path in select(paths, subjects):
             name = path.parent.parent.stem + "_" + path.stem
             for modality, array in quiero_volumes(path).items():
                 if modality in outputs:
@@ -94,7 +88,6 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
     prepare(**vars(args))

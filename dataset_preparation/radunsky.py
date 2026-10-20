@@ -4,7 +4,7 @@ https://doi.org/10.1371/journal.pone.0297244 and extract beneath --input-root;
 each subject needs mrQ_maps.mat, T2map_EMC.mat and T2_star_map.mat.
 The paper’s repository link returned 404; reuse the saved session archives
 or request the maps from the authors if that link is still unavailable.
-Run: python radunsky.py --input-root RAW --output-dir NEW --limit 1."""
+Run: python radunsky.py --input-root RAW --output-dir NEW."""
 
 from __future__ import annotations
 
@@ -44,14 +44,10 @@ def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
     return torch.tensor(result, dtype=torch.bool)
 
 
-def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
+def select(paths: list[Path], subjects: list[str] | None) -> list[Path]:
     paths = sorted(set(paths))
     if subjects:
         paths = [p for p in paths if any(s in p.parts or p.name.startswith(s + "_") or p.stem == s for s in subjects)]
-    if limit is not None:
-        if limit <= 0:
-            raise ValueError("limit must be positive")
-        paths = paths[:limit]
     if not paths:
         raise ValueError("No matching input files")
     return paths
@@ -87,10 +83,9 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=["t1", "m0mag", "t2", "t2star"], default=["t1", "m0mag", "t2", "t2star"])
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
-    folders = select([p.parent for p in args.input_root.rglob("mrQ_maps.mat")], args.subjects, args.limit)
+    folders = select([p.parent for p in args.input_root.rglob("mrQ_maps.mat")], args.subjects)
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(args.output_dir / f"radunsky_{m}.h5")) for m in args.modalities}
         for folder in folders:

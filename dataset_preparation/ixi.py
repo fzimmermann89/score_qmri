@@ -1,7 +1,7 @@
 """Build ixi_{t1w,t2w,pd}.h5 from IXI NIfTI scans.
 Download T1/T2/PD archives from https://brain-development.org/ixi-dataset/
 and extract them beneath --input-root. Retain the original filenames.
-Run: python ixi.py --input-root RAW --output-dir NEW --limit 1.
+Run: python ixi.py --input-root RAW --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -40,14 +40,10 @@ def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Data
     return handle.create_dataset(name, data=array, chunks=(1, *array.shape[1:]), compression="lzf", shuffle=True)
 
 
-def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
+def select(paths: list[Path], subjects: list[str] | None) -> list[Path]:
     paths = sorted(set(paths))
     if subjects:
         paths = [p for p in paths if any(s in p.parts or p.name.startswith((s + "_", s + "-")) or p.stem == s for s in subjects)]
-    if limit is not None:
-        if limit <= 0:
-            raise ValueError("limit must be positive")
-        paths = paths[:limit]
     if not paths:
         raise ValueError("No matching input files")
     return paths
@@ -85,11 +81,9 @@ def ixi_volume(path: Path, modality: str) -> np.ndarray:
     return tensor[good].numpy()
 
 
-def prepare(
-    input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
-) -> None:
+def prepare(input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None) -> None:
     tags = {"t1w": "T1", "t2w": "T2", "pd": "PD"}
-    selected = {m: select(list(input_root.rglob(f"*{tags[m]}*.nii.gz")), subjects, limit) for m in modalities or MODALITIES}
+    selected = {m: select(list(input_root.rglob(f"*{tags[m]}*.nii.gz")), subjects) for m in modalities or MODALITIES}
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"ixi_{m}.h5")) for m in selected}
         for modality, paths in selected.items():
@@ -106,7 +100,6 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
     prepare(**vars(args))

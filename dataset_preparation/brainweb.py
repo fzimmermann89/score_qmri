@@ -3,7 +3,7 @@ Use pack with the original newer sXX.h5 files, or raw with cached
 sXX/CLASS.gz raw-short tissue files from https://brainweb.bic.mni.mcgill.ca/.
 raw --download fetches missing gzip classes. Keep the original uint16 baseline
 subtraction, including its rare underflow, to match the selected H5.
-Run: python brainweb.py pack --input-root SUBJECTS --output NEW.h5 --limit 1."""
+Run: python brainweb.py pack --input-root SUBJECTS --output NEW.h5."""
 
 from __future__ import annotations
 
@@ -159,12 +159,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--input-root", type=Path, required=True, help="Flat subject H5 directory for pack; gzip cache for raw.")
     parser.add_argument("--output", type=Path, required=True, help="New H5 path; existing paths are refused.")
     parser.add_argument("--subjects", nargs="+", default=list(SUBJECTS), choices=SUBJECTS)
-    parser.add_argument("--limit", type=int, help="Prepare the first N selected subjects, in canonical order.")
     parser.add_argument("--download", action="store_true", help="Explicitly allow missing raw gzip downloads, sequentially.")
     args = parser.parse_args(argv)
-    if args.limit is not None and args.limit < 1:
-        parser.error("--limit must be positive.")
-    subjects = [subject for subject in SUBJECTS if subject in args.subjects][: args.limit]
+    subjects = [subject for subject in SUBJECTS if subject in args.subjects]
     if args.mode == "pack":
         if args.download:
             parser.error("pack accepts --input-root and preserves existing normalization; raw options are invalid.")

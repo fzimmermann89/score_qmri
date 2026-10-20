@@ -31,12 +31,10 @@ def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
     return torch.tensor(result, dtype=torch.bool)
 
 
-def repack_samples(source: Path, output: Path, subjects: Sequence[str] | None = None, limit: int | None = None) -> None:
+def repack_samples(source: Path, output: Path, subjects: Sequence[str] | None = None) -> None:
     """Copy saved arrays and metadata in slabs, refusing every existing output."""
     if output.exists() or output.is_symlink():
         raise FileExistsError(output)
-    if limit is not None and limit < 1:
-        raise ValueError("Limit must be positive.")
     with h5py.File(str(source), "r") as original:
         names = sorted(original, key=lambda key: (0, int(key)) if key.isdecimal() else (1, key))
         if subjects:
@@ -44,7 +42,6 @@ def repack_samples(source: Path, output: Path, subjects: Sequence[str] | None = 
             if unknown:
                 raise ValueError(f"Unknown saved samples: {sorted(unknown)}")
             names = [name for name in names if name in subjects]
-        names = names[:limit]
         if not names:
             raise ValueError("No selected saved samples.")
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -77,12 +74,10 @@ def prepare_generated_sample(volume: torch.Tensor) -> torch.Tensor:
     return x
 
 
-def generate_samples(bundle_root: Path, output: Path, limit: int = 1, seed: int = 0, device: str = "cpu") -> None:
+def generate_samples(bundle_root: Path, output: Path, seed: int = 0, device: str = "cpu") -> None:
     """Generate new explicitly seeded samples from an already downloaded bundle."""
     if output.exists() or output.is_symlink():
         raise FileExistsError(output)
-    if limit < 1:
-        raise ValueError("Limit must be positive.")
     config = bundle_root / "configs/inference.json"
     required = [config, bundle_root / "scripts/sampler.py", bundle_root / "models/model.pt", bundle_root / "models/autoencoder.pt"]
     for path in required:
@@ -111,9 +106,9 @@ def generate_samples(bundle_root: Path, output: Path, limit: int = 1, seed: int 
         diffusion = parser.get_parsed_content("diffusion").eval()
         sampler = parser.get_parsed_content("sampler")
         with torch.inference_mode(), h5py.File(str(output), "w-") as target:
-            target.attrs["n_samples"] = limit
+            target.attrs["n_samples"] = 500
             target.attrs["seed"] = seed
-            for idx in range(limit):
+            for idx in range(500):
                 gender = torch.randint(0, 2, (1, 1, 1), device=selected_device).to(torch.float32)
                 other = torch.rand((1, 1, 3), device=selected_device, dtype=torch.float32)
                 conditioning = torch.cat([gender, other], dim=-1)
@@ -137,21 +132,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--bundle-root", type=Path, help="Local pinned MONAI bundle for generate.")
     parser.add_argument("--output", required=True, type=Path, help="New output H5, normally ldm_t1w.h5.")
     parser.add_argument("--subjects", nargs="+", help="Saved sample keys, repack only.")
-    parser.add_argument("--limit", type=int, help="Sample limit; generation defaults to one.")
     parser.add_argument("--seed", type=int, default=0, help="New generation seed; historical seed was not saved.")
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args(argv)
-    if args.limit is not None and args.limit < 1:
-        parser.error("--limit must be positive.")
     if args.mode == "repack":
         if args.input_root is None or args.bundle_root is not None:
             parser.error("repack requires --input-root and no --bundle-root.")
-        repack_samples(args.input_root, args.output, args.subjects, args.limit)
+        repack_samples(args.input_root, args.output, args.subjects)
     else:
         if args.bundle_root is None or args.input_root is not None or args.subjects:
             parser.error("generate requires --bundle-root and no --input-root/--subjects.")
         torch.set_num_threads(1)
-        generate_samples(args.bundle_root, args.output, args.limit or 1, args.seed, args.device)
+        generate_samples(args.bundle_root, args.output, args.seed, args.device)
 
 
 if __name__ == "__main__":

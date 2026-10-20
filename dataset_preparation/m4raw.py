@@ -3,7 +3,7 @@ Download the original V1.5 archives via https://zenodo.org/records/8056074
 (version history); extract beneath --input-root, retaining repeat filenames.
 Raw reconstruction still differs from the training H5. --prepared instead
 filters archived m4raw_*.h5 intermediates and matched the checked subjects exactly.
-Run: python m4raw.py --input-root INPUT --output-dir NEW --limit 1.
+Run: python m4raw.py --input-root INPUT --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -49,10 +49,7 @@ def clean_file(
     input_path: str | Path,
     output_path: str | Path,
     subjects: list[str] | None = None,
-    limit: int | None = None,
 ) -> None:
-    if limit is not None and limit <= 0:
-        raise ValueError("limit must be positive")
     with h5py.File(str(input_path), "r") as source:
         reference = source
         names = sorted(name for name in reference if isinstance(reference[name], h5py.Dataset))
@@ -61,8 +58,6 @@ def clean_file(
             if missing:
                 raise ValueError(f"Unknown subjects: {sorted(missing)}")
             names = [name for name in names if name in subjects]
-        if limit is not None:
-            names = names[:limit]
         if not names:
             raise ValueError("No subjects selected")
         with exclusive_h5(output_path) as target:
@@ -219,11 +214,8 @@ def prepare(
     output_dir: Path,
     modalities: Sequence[str] | None = None,
     subjects: Sequence[str] | None = None,
-    limit: int | None = None,
     device: str = "cpu",
 ) -> None:
-    if limit is not None and limit < 1:
-        raise ValueError("Limit must be positive.")
     groups: dict[tuple[str, str], list[Path]] = defaultdict(list)
     # The original repeat order sets the first-coil phase reference.
     for path in input_root.rglob("*.h5"):
@@ -242,7 +234,7 @@ def prepare(
         if path.exists() or path.is_symlink():
             raise FileExistsError(path)
     for modality in modalities or MODALITIES:
-        names = sorted(name for kind, name in groups if kind == modality)[:limit]
+        names = sorted(name for kind, name in groups if kind == modality)
         if not names:
             print(f"No {modality} inputs")
             continue
@@ -266,20 +258,17 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int, default=1)
-    parser.add_argument("--all", action="store_true")
     parser.add_argument("--prepared", action="store_true", help="Filter archived prepared H5 files instead of reconstructing k-space")
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args()
-    limit = None if args.all else args.limit
     torch.set_num_threads(1)
     if args.prepared:
         for modality in args.modalities:
             filename = f"m4raw_{modality}.h5"
-            clean_file(args.input_root / filename, args.output_dir / filename, args.subjects, limit)
+            clean_file(args.input_root / filename, args.output_dir / filename, args.subjects)
     else:
         with torch.inference_mode():
-            prepare(args.input_root, args.output_dir, args.modalities, args.subjects, limit, args.device)
+            prepare(args.input_root, args.output_dir, args.modalities, args.subjects, args.device)
 
 
 if __name__ == "__main__":

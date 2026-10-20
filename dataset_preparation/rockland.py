@@ -1,7 +1,7 @@
 """Build rockland_{t1w,t2w,flair}.h5 from NKI-Rockland BIDS anatomy.
 Get T1w/T2w/FLAIR NIfTIs via https://fcon_1000.projects.nitrc.org/indi/enhanced/
 or the original aws_links.csv; retain the BIDS filenames under --input-root.
-Run: python rockland.py --input-root RAW --output-dir NEW --limit 1.
+Run: python rockland.py --input-root RAW --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -40,14 +40,10 @@ def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Data
     return handle.create_dataset(name, data=array, chunks=(1, *array.shape[1:]), compression="lzf", shuffle=True)
 
 
-def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
+def select(paths: list[Path], subjects: list[str] | None) -> list[Path]:
     paths = sorted(set(paths))
     if subjects:
         paths = [p for p in paths if any(s in p.parts or p.name.startswith(s + "_") or p.stem == s for s in subjects)]
-    if limit is not None:
-        if limit <= 0:
-            raise ValueError("limit must be positive")
-        paths = paths[:limit]
     if not paths:
         raise ValueError("No matching input files")
     return paths
@@ -84,11 +80,9 @@ def rockland_volume(path: Path) -> np.ndarray:
     return tensor[good][30:].float().numpy()
 
 
-def prepare(
-    input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
-) -> None:
+def prepare(input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None) -> None:
     tags = {"t1w": "T1w", "t2w": "T2w", "flair": "FLAIR"}
-    selected = {m: select(list(input_root.rglob(f"*{tags[m]}*.nii.gz")), subjects, limit) for m in modalities or MODALITIES}
+    selected = {m: select(list(input_root.rglob(f"*{tags[m]}*.nii.gz")), subjects) for m in modalities or MODALITIES}
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"rockland_{m}.h5")) for m in selected}
         for modality, paths in selected.items():
@@ -105,7 +99,6 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
     prepare(**vars(args))

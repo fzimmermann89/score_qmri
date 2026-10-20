@@ -2,7 +2,7 @@
 Download the relaxometry NIfTIs and JSON sidecars using the IBC data access
 instructions at https://individual-brain-charting.github.io/docs/ibc_api.html;
 pass the sourcedata root as --input-root. The recovered fit still differs slightly from the historical T1/M0 H5.
-Run: python ibc_t1.py --input-root RAW --output-dir NEW --limit 1.
+Run: python ibc_t1.py --input-root RAW --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -151,10 +151,8 @@ def t1_map(sub: str, ses: str, base_path: Path) -> tuple[torch.Tensor, torch.Ten
     return t1.float(), m0.float()
 
 
-def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = None, limit: int | None = None) -> None:
+def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = None) -> None:
     """Write the paired parameter/S0 files for selected subject/session keys."""
-    if limit is not None and limit <= 0:
-        raise ValueError("limit must be positive")
     entries = {}
     for path in sorted(input_path.rglob("*fa03*_T1map.nii.gz")):
         parts = path.name.split("_")
@@ -169,8 +167,6 @@ def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = Non
         if missing:
             raise ValueError(f"Unknown subject/session keys: {sorted(missing)}")
         names = [name for name in names if name in subjects]
-    if limit is not None:
-        names = names[:limit]
     if not names:
         raise ValueError("No matching subjects")
     kinds = ("t1map", "m0map")
@@ -192,15 +188,10 @@ def main() -> None:
     parser.add_argument("--input-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
-    parser.add_argument("--all", action="store_true")
     args = parser.parse_args()
     torch.set_num_threads(1)
     with threadpool_limits(limits=1):
-        limit = None if args.all else args.limit
-        if limit is None and not args.all and not args.subjects:
-            limit = 1
-        prepare(args.input_root, args.output_dir, args.subjects, limit)
+        prepare(args.input_root, args.output_dir, args.subjects)
 
 
 if __name__ == "__main__":

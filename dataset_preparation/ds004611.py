@@ -1,7 +1,7 @@
 """Build ds004611_*.h5 from the downloaded ds004611 NIfTIs.
 Get https://openneuro.org/datasets/ds004611 with its git-annex file contents;
 pass the dataset root as --input-root. Original masks, units and crops are retained.
-Run: python ds004611.py --input-root RAW --output-dir NEW --limit 1.
+Run: python ds004611.py --input-root RAW --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -32,14 +32,12 @@ def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Data
     return handle.create_dataset(name, data=array, chunks=(1, *array.shape[1:]), compression="lzf", shuffle=True)
 
 
-def selected_paths(paths: Iterable[Path], subjects: list[str] | None = None, limit: int | None = None) -> list[Path]:
+def selected_paths(paths: Iterable[Path], subjects: list[str] | None = None) -> list[Path]:
     """Match BIDS subject ancestors, preserving stable deterministic ordering."""
-    if limit is not None and limit < 1:
-        raise ValueError("--limit must be positive")
     result = sorted(set(paths))
     if subjects:
         result = [p for p in result if set(p.parts) & set(subjects) or p.stem in subjects]
-    return result[:limit] if limit is not None else result
+    return result
 
 
 def load_nifti(path: Path) -> torch.Tensor:
@@ -91,9 +89,7 @@ def subject_4611(root: Path, modality: str) -> Iterator[tuple[str, torch.Tensor]
             yield f"{name}_{i}", image / image.max()
 
 
-def prepare(
-    input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
-) -> None:
+def prepare(input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None) -> None:
     requirements = {
         "t1map": ("*T1map*.nii.gz", "*inv-1*.nii.gz", "*inv-2*.nii.gz"),
         "t2map": ("*T1map*.nii.gz", "*inv-1*.nii.gz", "*inv-2*.nii.gz", "*T2map*.nii.gz"),
@@ -103,7 +99,7 @@ def prepare(
     folders = list(input_root.rglob("anat"))
     for modality in modalities or MODALITIES:
         eligible = [root for root in folders if all(any(p.is_file() for p in root.rglob(pattern)) for pattern in requirements[modality])]
-        selected = selected_paths(eligible, subjects, limit)
+        selected = selected_paths(eligible, subjects)
         if not selected:
             raise ValueError(f"No {modality} inputs for selected subjects")
         with exclusive_h5(output_dir / f"ds004611_{modality}.h5") as output:
@@ -118,7 +114,6 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
     prepare(**vars(args))

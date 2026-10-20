@@ -2,7 +2,7 @@
 Get https://openneuro.org/datasets/ds002685 with its git-annex file contents;
 pass the dataset root as --input-root. Skip the two TSE scans absent from the training H5;
 retain native widths and the original masks and crops.
-Run: python ds002685.py --input-root RAW --output-dir NEW --limit 1.
+Run: python ds002685.py --input-root RAW --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -42,14 +42,12 @@ def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Data
     return handle.create_dataset(name, data=array, chunks=(1, *array.shape[1:]), compression="lzf", shuffle=True)
 
 
-def selected_paths(paths: Iterable[Path], subjects: list[str] | None = None, limit: int | None = None) -> list[Path]:
+def selected_paths(paths: Iterable[Path], subjects: list[str] | None = None) -> list[Path]:
     """Match BIDS subject ancestors, preserving stable deterministic ordering."""
-    if limit is not None and limit < 1:
-        raise ValueError("--limit must be positive")
     result = sorted(set(paths))
     if subjects:
         result = [p for p in result if set(p.parts) & set(subjects) or p.stem in subjects]
-    return result[:limit] if limit is not None else result
+    return result
 
 
 def clean_mask_3d(mask: torch.Tensor | np.ndarray) -> torch.Tensor:
@@ -82,9 +80,7 @@ def volume(modality: str, path: Path) -> torch.Tensor:
     return (image / image.max())[100:220].float()
 
 
-def prepare(
-    input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
-) -> None:
+def prepare(input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None) -> None:
     selected = {}
     for modality in modalities or MODALITIES:
         pattern = {"t1w": "*ses-00_T1w*.nii.gz", "t2w": "*ses-00*T2w*.nii.gz", "flair": "*FLAIR*.nii.gz"}[modality]
@@ -95,7 +91,6 @@ def prepare(
                 if p.is_file() and p.stem not in {"sub-01_ses-00_acq-tse_T2w.nii", "sub-02_ses-00_acq-tse_T2w.nii"}
             ),
             subjects,
-            limit,
         )
         if not paths:
             raise ValueError(f"No matching {pattern} inputs")
@@ -113,7 +108,6 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
     prepare(**vars(args))

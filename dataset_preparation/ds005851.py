@@ -1,7 +1,7 @@
 """Build ds005851_{t1map,t2map,m0_abs}.h5 from MNI R1/R2/PD derivatives.
 Download https://openneuro.org/datasets/ds005851, including annex contents,
 and pass the dataset root as --input-root. Preserve the original rate conversions.
-Run: python ds005851.py --input-root RAW --output-dir NEW --limit 1.
+Run: python ds005851.py --input-root RAW --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -40,14 +40,10 @@ def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Data
     return handle.create_dataset(name, data=array, chunks=(1, *array.shape[1:]), compression="lzf", shuffle=True)
 
 
-def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
+def select(paths: list[Path], subjects: list[str] | None) -> list[Path]:
     paths = sorted(set(paths))
     if subjects:
         paths = [p for p in paths if any(s in p.parts or p.name.startswith(s + "_") or p.stem == s for s in subjects)]
-    if limit is not None:
-        if limit <= 0:
-            raise ValueError("limit must be positive")
-        paths = paths[:limit]
     if not paths:
         raise ValueError("No matching input files")
     return paths
@@ -83,10 +79,8 @@ def ds005851_volumes(folder: Path) -> dict[str, np.ndarray]:
     return {"t1map": t1[good].float().numpy(), "t2map": t2[good].float().numpy(), "m0_abs": pd[good].numpy().astype(np.complex64)}
 
 
-def prepare(
-    input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
-) -> None:
-    folders = select([p.parent for p in input_root.rglob("*MNI_PD*.*")], subjects, limit)
+def prepare(input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None) -> None:
+    folders = select([p.parent for p in input_root.rglob("*MNI_PD*.*")], subjects)
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"ds005851_{m}.h5")) for m in modalities or MODALITIES}
         for folder in folders:
@@ -101,7 +95,6 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
     prepare(**vars(args))

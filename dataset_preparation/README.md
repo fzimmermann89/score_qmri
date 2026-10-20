@@ -36,9 +36,9 @@ Prepare the datasets used by `data.yaml`. Each script's header lists the require
 For example, from the repository root:
 
 ```bash
-python dataset_preparation/ds000221.py --input-root RAW --output-dir NEW --limit 1
+python dataset_preparation/ds000221.py --input-root RAW --output-dir NEW
 ```
 
-Run a script with `--help` for its options. Scripts refuse existing output files.
+Commands process all matching inputs. Run a script with `--help` for its options. Scripts refuse existing output files.
 
-CC, fastMRI and M4Raw support archived prepared inputs. Raw CC remains unverified; raw M4Raw differs from the historical H5 files. WAND M0 and IBC fits retain numerical differences. Reuse saved synthetic samples to reproduce the historical synthetic T1 data.
+`clean_h5.py` removes slices with fewer than 1,000 pixels above magnitude `1e-6` from existing H5 files. The `--prepared` option in fastMRI/M4Raw runs this cleanup instead of reconstructing raw k-space; CC uses a prepared H5 by default and reconstructs with `--raw`. Raw CC remains unverified; raw M4Raw differs from the historical H5 files. WAND M0 and IBC fits retain numerical differences. Reuse saved synthetic samples to reproduce the historical synthetic T1 data.

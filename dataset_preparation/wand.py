@@ -3,7 +3,7 @@ Follow https://git.cardiff.ac.uk/cubric/wand to download the required NIfTIs
 from https://gin.g-node.org/CUBRIC/WAND; pass the downloaded root as --input-root.
 MP2RAGE also needs a complete four-table LUT (--lut); use the original
 trusted LUT_UK7T.pkl or generate an NPZ with wand_lut.py.
-Run: python wand.py --input-root WAND --output-dir NEW --modalities t2w --limit 1."""
+Run: python wand.py --input-root WAND --output-dir NEW --modalities t2w."""
 
 from __future__ import annotations
 
@@ -54,15 +54,11 @@ def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
     return torch.tensor(result, dtype=torch.bool)
 
 
-def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
+def select(paths: list[Path], subjects: list[str] | None) -> list[Path]:
     """Filter by BIDS ancestor or filename without changing volume contents."""
     paths = sorted(set(paths))
     if subjects:
         paths = [p for p in paths if any(s in p.parts or p.name.startswith(s + "_") or p.stem == s for s in subjects)]
-    if limit is not None:
-        if limit <= 0:
-            raise ValueError("limit must be positive")
-        paths = paths[:limit]
     if not paths:
         raise ValueError("No matching input files; check input root, subjects and downloaded annex content")
     return paths
@@ -211,7 +207,6 @@ def main() -> None:
     parser.add_argument("--modalities", nargs="+", choices=["t1map", "m0_complex", "m0_mag", "t1w", "t2w", "t1w_neu"], required=True)
     parser.add_argument("--lut", type=Path)
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     quantitative = set(args.modalities) & {"t1map", "m0_complex", "m0_mag", "t1w"}
     if quantitative and (args.lut is None or not args.lut.is_file()):
@@ -222,11 +217,11 @@ def main() -> None:
         groups = defaultdict(list)
         for path in sorted(args.input_root.rglob("*MP2RAGE*.nii.gz")):
             groups[path.stem.split("_acq")[0]].append(path)
-        folders = select([v[0].parent for v in groups.values() if len(v) == 4], args.subjects, args.limit)
+        folders = select([v[0].parent for v in groups.values() if len(v) == 4], args.subjects)
     selected = {}
     for modality, pattern in [("t2w", "*nlgradcorr_T2w*.nii.gz"), ("t1w_neu", "**/anat/**/*T1w*.nii.gz")]:
         if modality in args.modalities:
-            selected[modality] = select(list(args.input_root.rglob(pattern)), args.subjects, args.limit)
+            selected[modality] = select(list(args.input_root.rglob(pattern)), args.subjects)
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(args.output_dir / f"wand_{m}.h5")) for m in args.modalities}
         for folder in folders:

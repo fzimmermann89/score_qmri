@@ -3,7 +3,7 @@ For fresh raw data, download 12-channel Train/Val H5 files from
 https://www.ccdataset.com/mr-reconstruction-challenge and pass their root
 with --raw. Raw reconstruction writes cc_reconstructed.h5 and is not yet
 verified against the training collection; the prepared-input path is exact.
-Run: python cc.py --input-root INPUT --output-dir NEW --limit 1.
+Run: python cc.py --input-root INPUT --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -46,10 +46,7 @@ def clean_file(
     input_path: str | Path,
     output_path: str | Path,
     subjects: list[str] | None = None,
-    limit: int | None = None,
 ) -> None:
-    if limit is not None and limit <= 0:
-        raise ValueError("limit must be positive")
     with h5py.File(str(input_path), "r") as source:
         reference = source["combined"]
         names = sorted(name for name in reference if isinstance(reference[name], h5py.Dataset))
@@ -58,8 +55,6 @@ def clean_file(
             if missing:
                 raise ValueError(f"Unknown subjects: {sorted(missing)}")
             names = [name for name in names if name in subjects]
-        if limit is not None:
-            names = names[:limit]
         if not names:
             raise ValueError("No subjects selected")
         with exclusive_h5(output_path) as target:
@@ -207,12 +202,9 @@ def reconstruct(
     input_root: Path,
     output_dir: Path,
     subjects: Sequence[str] | None = None,
-    limit: int | None = None,
     device: str = "cpu",
 ) -> None:
-    if limit is not None and limit < 1:
-        raise ValueError("Limit must be positive.")
-    files = sorted(path for path in input_root.rglob("*.h5") if not subjects or path.stem in subjects)[:limit]
+    files = sorted(path for path in input_root.rglob("*.h5") if not subjects or path.stem in subjects)
     if not files:
         raise ValueError("No matching raw inputs found; no output files created.")
     if len({path.stem for path in files}) != len(files):
@@ -233,17 +225,14 @@ def main() -> None:
     parser.add_argument("--input-root", type=Path, required=True, help="Archived prepared cc.h5; a raw H5 directory with --raw")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int, default=1)
-    parser.add_argument("--all", action="store_true")
     parser.add_argument("--raw", action="store_true")
     args = parser.parse_args()
-    limit = None if args.all else args.limit
     torch.set_num_threads(1)
     if args.raw:
         with torch.inference_mode():
-            reconstruct(args.input_root, args.output_dir, subjects=args.subjects, limit=limit)
+            reconstruct(args.input_root, args.output_dir, subjects=args.subjects)
     else:
-        clean_file(args.input_root, args.output_dir / "cc.h5", args.subjects, limit)
+        clean_file(args.input_root, args.output_dir / "cc.h5", args.subjects)
 
 
 if __name__ == "__main__":

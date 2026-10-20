@@ -3,7 +3,7 @@ Request/download the brain multicoil archives at https://fastmri.med.nyu.edu/
 and extract beneath --input-root. Raw FFT/calibration has small numerical
 differences from the training H5. --prepared instead filters archived
 fastmri_*.h5 intermediates and matched the checked training subjects exactly.
-Run: python fastmri.py --input-root INPUT --output-dir NEW --limit 1.
+Run: python fastmri.py --input-root INPUT --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -48,10 +48,7 @@ def clean_file(
     input_path: str | Path,
     output_path: str | Path,
     subjects: list[str] | None = None,
-    limit: int | None = None,
 ) -> None:
-    if limit is not None and limit <= 0:
-        raise ValueError("limit must be positive")
     with h5py.File(str(input_path), "r") as source:
         reference = source["combined"]
         names = sorted(name for name in reference if isinstance(reference[name], h5py.Dataset))
@@ -60,8 +57,6 @@ def clean_file(
             if missing:
                 raise ValueError(f"Unknown subjects: {sorted(missing)}")
             names = [name for name in names if name in subjects]
-        if limit is not None:
-            names = names[:limit]
         if not names:
             raise ValueError("No subjects selected")
         with exclusive_h5(output_path) as target:
@@ -193,13 +188,10 @@ def prepare(
     output_dir: Path,
     modalities: Sequence[str] | None = None,
     subjects: Sequence[str] | None = None,
-    limit: int | None = None,
     device: str = "cpu",
 ) -> None:
     import ismrmrd
 
-    if limit is not None and limit < 1:
-        raise ValueError("Limit must be positive.")
     files: dict[str, list[tuple[str, Path]]] = {}
     for path in sorted(input_root.rglob("*.h5")):
         parts = path.stem[13:].split("_")
@@ -217,14 +209,14 @@ def prepare(
         if modality not in files:
             print(f"No {modality} inputs")
     for modality, candidates in files.items():
-        selected = sorted(candidates)[:limit]
+        selected = sorted(candidates)
         if len({name for name, _ in selected}) != len(selected):
             raise ValueError("Multiple raw files have the same output subject key; select an unambiguous input root.")
         path = output_dir / f"fastmri_{modality}.h5"
         if path.exists() or path.is_symlink():
             raise FileExistsError(path)
     for modality, candidates in files.items():
-        selected = sorted(candidates)[:limit]
+        selected = sorted(candidates)
         with exclusive_h5(output_dir / f"fastmri_{modality}.h5") as target:
             combined_group = target.create_group("combined")
             coilwise_group = target.create_group("coilwise")
@@ -248,20 +240,17 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int, default=1)
-    parser.add_argument("--all", action="store_true")
     parser.add_argument("--prepared", action="store_true", help="Filter archived prepared H5 files instead of reconstructing k-space")
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args()
-    limit = None if args.all else args.limit
     torch.set_num_threads(1)
     if args.prepared:
         for modality in args.modalities:
             filename = f"fastmri_{modality}.h5"
-            clean_file(args.input_root / filename, args.output_dir / filename, args.subjects, limit)
+            clean_file(args.input_root / filename, args.output_dir / filename, args.subjects)
     else:
         with torch.inference_mode():
-            prepare(args.input_root, args.output_dir, args.modalities, args.subjects, limit, args.device)
+            prepare(args.input_root, args.output_dir, args.modalities, args.subjects, args.device)
 
 
 if __name__ == "__main__":

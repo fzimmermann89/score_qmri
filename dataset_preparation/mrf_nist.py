@@ -2,7 +2,7 @@
 Download MRF_invivo_anon.zip from https://data.nist.gov/od/id/mds2-3379
 and extract it beneath --input-root. The historical first-five-file selection
 uses the native filesystem order, as in the original script.
-Run: python mrf_nist.py --input-root RAW --output-dir NEW --limit 1.
+Run: python mrf_nist.py --input-root RAW --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -64,14 +64,12 @@ def centered(data: torch.Tensor, shape: tuple[int, ...]) -> torch.Tensor:
     return torch.nn.functional.pad(data, pads)
 
 
-def select_roots(paths: Iterator[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
+def select_roots(paths: Iterator[Path], subjects: list[str] | None) -> list[Path]:
     """Select subject ancestors as well as series/session names."""
-    if limit is not None and limit < 1:
-        raise ValueError("--limit must be positive")
     roots = sorted(set(paths))
     if subjects:
         roots = [p for p in roots if set(p.parts) & set(subjects) or p.stem in subjects]
-    return roots[:limit] if limit is not None else roots
+    return roots
 
 
 def nist_series(root: Path, modality: str) -> torch.Tensor:
@@ -101,12 +99,11 @@ def prepare(
     output_dir: Path,
     modalities: list[str] | None = None,
     subjects: list[str] | None = None,
-    limit: int | None = None,
 ) -> None:
     selected = {}
     for modality in modalities or MODALITIES:
         tag = {"t1map": "T1", "t2map": "T2", "m0map": "M0"}[modality]
-        roots = select_roots((p for p in input_root.rglob(f"*{tag}*") if p.is_dir()), subjects, limit)
+        roots = select_roots((p for p in input_root.rglob(f"*{tag}*") if p.is_dir()), subjects)
         if not roots:
             raise ValueError(f"No {tag} DICOM series found")
         selected[modality] = roots
@@ -123,7 +120,6 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
     prepare(**vars(args))
