@@ -137,4 +137,4 @@ def test_quiero_limit_ignores_non_parameter_scans(tmp_path: Path, monkeypatch: p
     quiero.prepare(raw, output, modalities=["t1map"], limit=1)
     with h5py.File(str(output / "quiero_t1map.h5")) as handle:
         assert len(handle) == 1
-        np.testing.assert_array_equal(next(iter(handle.values()))[:], expected)
+        np.testing.assert_array_equal(handle[next(iter(handle))][:], expected)
