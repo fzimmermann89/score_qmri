@@ -32,7 +32,7 @@ def exclusive_h5(path: str | Path) -> h5py.File:
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(path, "x")
+    return h5py.File(str(path), "w-")
 
 
 def axial_chunks(shape: tuple[int, ...]) -> tuple[int, ...]:
@@ -75,7 +75,7 @@ def clean_file(
     """Create a new filtered file, optionally selecting a bounded subject subset."""
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
-    with h5py.File(input_path, "r") as source:
+    with h5py.File(str(input_path), "r") as source:
         groups = [name for name in ("coilwise", "combined") if name in source and isinstance(source[name], h5py.Group)]
         reference = source["combined"] if "combined" in groups else source[groups[0]] if groups else source
         names = sorted(name for name in reference if isinstance(reference[name], h5py.Dataset))
@@ -242,7 +242,7 @@ def fix_legacy_cc(input_file: Path, output_file: Path, subjects: Sequence[str] |
     """Stream the original axis swaps and50:-20 crop without reading whole volumes."""
     if output_file.exists() or output_file.is_symlink():
         raise FileExistsError(output_file)
-    with h5py.File(input_file, "r") as source, h5py.File(output_file, "x") as target:
+    with h5py.File(str(input_file), "r") as source, h5py.File(str(output_file), "w-") as target:
         combined = target.create_group("combined")
         coilwise = target.create_group("coilwise")
         names = sorted(source["combined"])
@@ -303,7 +303,7 @@ def reconstruct(
             raise FileExistsError(output)
     output_dir.mkdir(parents=True, exist_ok=True)
     with ExitStack() as stack:
-        targets = {modality: stack.enter_context(h5py.File(output_dir / filename, "x")) for modality, filename in filenames.items()}
+        targets = {modality: stack.enter_context(h5py.File(str(output_dir / filename), "w-")) for modality, filename in filenames.items()}
         for target in targets.values():
             target.create_group("combined")
             target.create_group("coilwise")
@@ -311,7 +311,7 @@ def reconstruct(
             paths = groups[modality, name]
             values = []
             for path in paths:
-                with h5py.File(path, "r") as source:
+                with h5py.File(str(path), "r") as source:
                     values.append(torch.tensor(np.array(source["kspace"]), device=device))
             target = targets[modality]
             combined, coilwise = cc_images(values[0])

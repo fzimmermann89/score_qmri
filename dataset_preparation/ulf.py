@@ -79,7 +79,7 @@ def prepare(
             raise FileExistsError(output)
     output_dir.mkdir(parents=True, exist_ok=True)
     with ExitStack() as stack:
-        targets = {modality: stack.enter_context(h5py.File(output_dir / f"ulf_{modality}.h5", "x")) for modality in modalities}
+        targets = {modality: stack.enter_context(h5py.File(str(output_dir / f"ulf_{modality}.h5"), "w-")) for modality in modalities}
         for modality, inputs in pairs.items():
             for subject, file in inputs:
                 data = prepare_volume(nib.load(file).get_fdata())

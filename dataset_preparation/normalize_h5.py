@@ -17,7 +17,7 @@ def exclusive_h5(path: str | Path) -> h5py.File:
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(path, "x")
+    return h5py.File(str(path), "w-")
 
 
 def axial_chunks(shape: tuple[int, ...]) -> tuple[int, ...]:
@@ -89,7 +89,7 @@ def normalize_file(
     if min(shape) <= 0 or (limit is not None and limit <= 0):
         raise ValueError("shape and limit must be positive")
     skip = set(recipe.skip_subjects or []) if recipe else set()
-    with h5py.File(source_path, "r") as source:
+    with h5py.File(str(source_path), "r") as source:
         groups = [name for name in ("coilwise", "combined") if name in source and isinstance(source[name], h5py.Group)]
         names = sorted(set().union(*(set(source[group]) for group in groups))) if groups else sorted(source)
         if subjects is not None:

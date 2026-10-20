@@ -38,7 +38,7 @@ def test_one_nifti_and_no_overwrite(tmp_path: Path) -> None:
     output = tmp_path / "output"
     prepare(tmp_path / "raw", output, modalities=["t1"], limit=1)
     h5 = output / "ulf_t1.h5"
-    with h5py.File(h5, "r") as file:
+    with h5py.File(str(h5), "r") as file:
         assert list(file) == ["POCEMR001"]
         np.testing.assert_array_equal(file["POCEMR001"][:], prepare_volume(volume.astype(np.float64)))
     written = h5.read_bytes()

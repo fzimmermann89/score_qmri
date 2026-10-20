@@ -14,7 +14,7 @@ from dataset_preparation.ulf import clean_mask_2d
 def test_repack_preserves_samples_attributes_and_inputs(tmp_path: Path) -> None:
     source = tmp_path / "saved.h5"
     values: np.ndarray = np.arange(3 * 8 * 8, dtype=np.float32).reshape(3, 8, 8)
-    with h5py.File(source, "x") as file:
+    with h5py.File(str(source), "w-") as file:
         file.attrs["n_samples"] = 2
         for key in ["0", "1"]:
             data = file.create_dataset(key, data=values)
@@ -23,7 +23,7 @@ def test_repack_preserves_samples_attributes_and_inputs(tmp_path: Path) -> None:
     before = source.read_bytes()
     output = tmp_path / "ldm_t1w.h5"
     latent_t1.repack_samples(source, output, limit=1)
-    with h5py.File(output, "r") as file:
+    with h5py.File(str(output), "r") as file:
         assert list(file) == ["0"]
         assert file.attrs["n_samples"] == 1
         np.testing.assert_array_equal(file["0"][:], values)

@@ -34,7 +34,7 @@ def exclusive_h5(path: str | Path) -> h5py.File:
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(path, "x")
+    return h5py.File(str(path), "w-")
 
 
 def axial_chunks(shape: tuple[int, ...]) -> tuple[int, ...]:
@@ -77,7 +77,7 @@ def clean_file(
     """Create a new filtered file, optionally selecting a bounded subject subset."""
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
-    with h5py.File(input_path, "r") as source:
+    with h5py.File(str(input_path), "r") as source:
         groups = [name for name in ("coilwise", "combined") if name in source and isinstance(source[name], h5py.Group)]
         reference = source["combined"] if "combined" in groups else source[groups[0]] if groups else source
         names = sorted(name for name in reference if isinstance(reference[name], h5py.Dataset))
@@ -289,7 +289,7 @@ def prepare(
             raise FileExistsError(output)
     output_dir.mkdir(parents=True, exist_ok=True)
     with ExitStack() as stack:
-        targets = {modality: stack.enter_context(h5py.File(output_dir / filename, "x")) for modality, filename in filenames.items()}
+        targets = {modality: stack.enter_context(h5py.File(str(output_dir / filename), "w-")) for modality, filename in filenames.items()}
         for modality, name in selected:
             paths = groups[modality, name]
             if manifest is not None:
@@ -302,7 +302,7 @@ def prepare(
                 paths = ordered
             values = []
             for path in paths:
-                with h5py.File(path, "r") as source:
+                with h5py.File(str(path), "r") as source:
                     values.append(torch.tensor(np.array(source["kspace"]), device=device))
             target = targets[modality]
             image = m4raw_image(values, gre=modality == "gre")

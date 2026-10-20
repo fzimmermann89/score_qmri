@@ -44,13 +44,13 @@ def test_legacy_cc_streaming_matches_original_axis_recipe(tmp_path: Path) -> Non
     source = tmp_path / "legacy.h5"
     values: np.ndarray = np.arange(72 * 4 * 5, dtype=np.float32).reshape(72, 4, 5).astype(np.complex64)
     coils: np.ndarray = np.arange(5 * 2 * 72 * 4, dtype=np.float32).reshape(5, 2, 72, 4).astype(np.complex64)
-    with h5py.File(source, "x") as file:
+    with h5py.File(str(source), "w-") as file:
         file.create_group("combined").create_dataset("subject", data=values)
         file.create_group("coilwise").create_dataset("subject", data=coils)
     before = source.read_bytes()
     output = tmp_path / "fixed.h5"
     cc.fix_legacy_cc(source, output)
-    with h5py.File(output, "r") as file:
+    with h5py.File(str(output), "r") as file:
         np.testing.assert_array_equal(file["combined/subject"][:], values[50:-20])
         expected = np.swapaxes(np.swapaxes(coils, 0, 2), -1, -2)[50:-20]
         np.testing.assert_array_equal(file["coilwise/subject"][:], expected)
@@ -68,7 +68,7 @@ def test_no_inputs_no_outputs_and_existing_destination_refused(tmp_path: Path) -
     with pytest.raises(ValueError, match="No matching"):
         m4raw.prepare(inputs, output)
     assert not output.exists()
-    with h5py.File(inputs / "subject_T101.h5", "x") as file:
+    with h5py.File(str(inputs / "subject_T101.h5"), "w-") as file:
         file.create_dataset("kspace", data=np.ones((2, 1, 4, 4), dtype=np.complex64))
     output.mkdir()
     existing = output / "m4raw_t1w.h5"

@@ -34,7 +34,7 @@ def exclusive_h5(path: str | Path) -> h5py.File:
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(path, "x")
+    return h5py.File(str(path), "w-")
 
 
 def normalize_slab(values: Sequence[np.ndarray], baselines: Sequence[int]) -> np.ndarray:
@@ -109,7 +109,7 @@ def pack_subjects(input_root: Path, output: Path, subjects: Sequence[str], slab_
         raise FileExistsError(output)
     sources = [input_root / f"s{subject}.h5" for subject in subjects]
     for source, subject in zip(sources, subjects, strict=True):
-        with h5py.File(source, "r") as file:
+        with h5py.File(str(source), "r") as file:
             data = file["classes"]
             if data.shape != (*SHAPE, len(CLASSES) - 1) or data.dtype != np.uint8:
                 raise ValueError(f"Unexpected newer Brainweb schema: {source}")
@@ -117,7 +117,7 @@ def pack_subjects(input_root: Path, output: Path, subjects: Sequence[str], slab_
                 raise ValueError(f"Unexpected class names/subject: {source}")
     with exclusive_h5(output) as target:
         for source, subject in zip(sources, subjects, strict=True):
-            with h5py.File(source, "r") as file:
+            with h5py.File(str(source), "r") as file:
                 group = target.create_group(f"subject_{subject}")
                 for name, value in file.attrs.items():
                     group.attrs[name] = value

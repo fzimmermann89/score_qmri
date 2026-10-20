@@ -41,7 +41,7 @@ def repack_samples(source: Path, output: Path, subjects: Sequence[str] | None = 
         raise FileExistsError(output)
     if limit is not None and limit < 1:
         raise ValueError("Limit must be positive.")
-    with h5py.File(source, "r") as original:
+    with h5py.File(str(source), "r") as original:
         names = sorted(original, key=lambda key: (0, int(key)) if key.isdecimal() else (1, key))
         if subjects:
             unknown = set(subjects) - set(names)
@@ -52,7 +52,7 @@ def repack_samples(source: Path, output: Path, subjects: Sequence[str] | None = 
         if not names:
             raise ValueError("No selected saved samples.")
         output.parent.mkdir(parents=True, exist_ok=True)
-        with h5py.File(output, "x") as target:
+        with h5py.File(str(output), "w-") as target:
             for name, value in original.attrs.items():
                 target.attrs[name] = value
             target.attrs["n_samples"] = len(names)
@@ -117,7 +117,7 @@ def generate_samples(bundle_root: Path, output: Path, limit: int = 1, seed: int 
         autoencoder = parser.get_parsed_content("autoencoder").eval()
         diffusion = parser.get_parsed_content("diffusion").eval()
         sampler = parser.get_parsed_content("sampler")
-        with torch.inference_mode(), h5py.File(output, "x") as target:
+        with torch.inference_mode(), h5py.File(str(output), "w-") as target:
             target.attrs["n_samples"] = limit
             target.attrs["seed"] = seed
             for idx in range(limit):

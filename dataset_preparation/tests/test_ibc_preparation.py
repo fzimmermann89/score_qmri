@@ -45,12 +45,12 @@ def test_echo_fits_recover_known_decay_and_normalized_signal() -> None:
 def test_shape_normalization_uses_original_odd_crop_and_refuses_overwrite(tmp_path: Path) -> None:
     source, output = tmp_path / "source.h5", tmp_path / "out.h5"
     data: np.ndarray = np.arange(2 * 7 * 9, dtype=np.float32).reshape(2, 7, 9)
-    with h5py.File(source, "x") as handle:
+    with h5py.File(str(source), "w-") as handle:
         handle.create_dataset("subject", data=data)
     normalize_file(source, output, (4, 12))
     expected = torch.nn.functional.pad(torch.from_numpy(data), (1, 2, -2, -1)).numpy()
     np.testing.assert_array_equal(pad_or_crop_centered(data, 4, 12), expected)
-    with h5py.File(output, "r") as handle:
+    with h5py.File(str(output), "r") as handle:
         np.testing.assert_array_equal(handle["subject"][:], expected)
     with pytest.raises(FileExistsError):
         normalize_file(source, output, (4, 12))
@@ -58,10 +58,10 @@ def test_shape_normalization_uses_original_odd_crop_and_refuses_overwrite(tmp_pa
 
 def test_historical_normalization_skips_bad_ibc_subject(tmp_path: Path) -> None:
     source, output = tmp_path / "ibc_relaxo_s0map.h5", tmp_path / "out.h5"
-    with h5py.File(source, "x") as handle:
+    with h5py.File(str(source), "w-") as handle:
         handle.create_dataset("sub-12_ses-17", data=np.ones((2, 8, 8), np.float32))
         handle.create_dataset("sub-14_ses-20", data=np.ones((2, 8, 8), np.float32))
     normalize_file(source, output)
-    with h5py.File(output, "r") as handle:
+    with h5py.File(str(output), "r") as handle:
         assert list(handle) == ["sub-14_ses-20"]
         assert handle["sub-14_ses-20"].shape == (2, 256, 160)

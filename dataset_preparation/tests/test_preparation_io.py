@@ -36,7 +36,7 @@ def test_cleanup_matches_legacy_boundaries_and_drops_attributes(tmp_path: Path) 
     original_bytes = source.read_bytes()
     report = clean_file(source, target)
     assert report["subject"] == {"input_slices": 5, "output_slices": 2}
-    with h5py.File(target, "r") as handle:
+    with h5py.File(str(target), "r") as handle:
         assert list(handle) == ["subject"]
         np.testing.assert_array_equal(handle["subject"][:], data[[2, 4]])
         assert not list(handle.attrs)
@@ -56,7 +56,7 @@ def test_grouped_cleanup_uses_combined_indices_for_all_coils(tmp_path: Path) -> 
         handle.create_dataset("combined/subj", data=combined)
         handle.create_dataset("coilwise/subj", data=coilwise)
     clean_file(source, target)
-    with h5py.File(target, "r") as handle:
+    with h5py.File(str(target), "r") as handle:
         np.testing.assert_array_equal(handle["combined/subj"][:], combined[[1]])
         np.testing.assert_array_equal(handle["coilwise/subj"][:], coilwise[[1]])
         assert handle["coilwise/subj"].chunks == (1, 1, 40, 40)
@@ -70,5 +70,5 @@ def test_coilwise_only_filter_counts_largest_coil_not_sum(tmp_path: Path) -> Non
     with exclusive_h5(source) as handle:
         handle.create_dataset("coilwise/subj", data=data)
     clean_file(source, target)
-    with h5py.File(target, "r") as handle:
+    with h5py.File(str(target), "r") as handle:
         np.testing.assert_array_equal(handle["coilwise/subj"][:], data[[1]])

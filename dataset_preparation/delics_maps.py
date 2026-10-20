@@ -21,7 +21,7 @@ def exclusive_h5(path: str | Path) -> h5py.File:
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(path, "x")
+    return h5py.File(str(path), "w-")
 
 
 def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Dataset:

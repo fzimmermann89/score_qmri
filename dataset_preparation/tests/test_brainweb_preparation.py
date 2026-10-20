@@ -47,7 +47,7 @@ def test_pack_copies_values_and_attributes_and_refuses_overwrite(tmp_path: Path,
     monkeypatch.setattr(brainweb, "SHAPE", (3, 4, 5))
     source = tmp_path / "s04.h5"
     values: np.ndarray = np.arange(3 * 4 * 5 * 11, dtype=np.uint8).reshape(3, 4, 5, 11)
-    with h5py.File(source, "x") as file:
+    with h5py.File(str(source), "w-") as file:
         file.attrs["classnames"] = brainweb.CLASSES[1:]
         file.attrs["subject"] = 4
         file.attrs["version"] = 1
@@ -56,7 +56,7 @@ def test_pack_copies_values_and_attributes_and_refuses_overwrite(tmp_path: Path,
     before = source.read_bytes()
     output = tmp_path / "packed.h5"
     brainweb.pack_subjects(tmp_path, output, ["04"], slab_size=2)
-    with h5py.File(output, "r") as file:
+    with h5py.File(str(output), "r") as file:
         group = file["subject_04"]
         np.testing.assert_array_equal(group["classes"][:], values)
         assert tuple(group.attrs["classnames"]) == brainweb.CLASSES[1:]

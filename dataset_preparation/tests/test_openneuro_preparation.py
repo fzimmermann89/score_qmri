@@ -41,7 +41,7 @@ def test_limit_selects_subject_with_requested_contrast(tmp_path: Path, monkeypat
     output = tmp_path / "output"
     script.prepare(tmp_path / "raw", output, modalities=[modality], limit=1)
     assert seen == [present]
-    with h5py.File(output / f"{dataset}_{modality}.h5") as handle:
+    with h5py.File(str(output / f"{dataset}_{modality}.h5")) as handle:
         assert list(handle) == ["sub-02"]
 
 
@@ -68,7 +68,7 @@ def test_output_exclusive_creation_preserves_existing_file(tmp_path: Path) -> No
     with pytest.raises(FileExistsError):
         prepare(source, output, limit=1)
     assert target.read_bytes() == before
-    with h5py.File(target) as file:
+    with h5py.File(str(target)) as file:
         assert file["map.nii"].dtype == np.float32
 
 
@@ -103,7 +103,7 @@ def test_zenodo_curated_default_drops_empty_map_slice(tmp_path: Path) -> None:
             nib.save(nib.Nifti1Image(array, np.eye(4)), root / f"{acquisition}_{tag}.nii")
     output = tmp_path / "curated"
     prepare_mrf(tmp_path / "raw", output, modalities=["t1map"])
-    with h5py.File(output / "mrf_zenodo8183344_t1map.h5") as handle:
+    with h5py.File(str(output / "mrf_zenodo8183344_t1map.h5")) as handle:
         for name in ("V01_MR6_original", "V01_MR6_reposition"):
             assert handle[name].shape[0] == 7
             assert handle[name].dtype == np.float32
