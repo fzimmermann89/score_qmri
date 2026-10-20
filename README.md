@@ -1,6 +1,6 @@
-# Score-Based Posterior Sampling for Quantitative MRI
+# (q)MRI Foundation Models
 
-Diffusion model framework for learning MRI priors (2-channel real/imag or mag/zeros) for qMRI reconstruction.
+Framework for training diffusion models and self-supervised JEPA models for quantitative MRI reconstruction and representation learning.
 
 ## Highlights
 
@@ -11,15 +11,24 @@ Diffusion model framework for learning MRI priors (2-channel real/imag or mag/ze
 - Fixed per-kind normalization for mapping kinds (`kind_scales`)
 - EDM validation sampling with fixed noise
 
+- JEPA pretraining for self-supervised representation learning
+
 ## Quick Start
 
 ```bash
 source .venv/bin/activate
-score-qmri-train fit --config config.yaml
+score-qmri fit --config config.yaml
 ```
 
-## Key Config (config.yaml)
+### JEPA Pretraining
+```bash
+source .venv/bin/activate
+jepa-qmri fit --config jepa_config.yaml
+```
 
+## Configuration
+
+### Diffusion Config (`config.yaml`)
 ```yaml
 # Values shown are defaults in code unless explicitly set in config.yaml.
 model:
@@ -61,11 +70,36 @@ data:
 trainer:
   max_steps: 1000000
   gradient_clip_val: 1.0
-
 ```
 
-## Dev
+### JEPA Config (`jepa_config.yaml`)
+```yaml
+model:
+  img_size: 256
+  patch_size: 16
+  embed_dim: 384
+  encoder_depth: 12
+  encoder_num_heads: 6
+  predictor_depth: 6
+  predictor_embed_dim: 192
+  num_targets: 4
+  target_scale: 0.25
+  target_aspect_ratio: [0.75, 1.5]
+  context_scale: 0.85
+  learning_rate: 1e-4
+  weight_decay: 0.05
+  warmup_steps: 5000
 
+data:
+  batch_size: 64
+  sample_size: [256, 256]
+
+trainer:
+  max_steps: 100000
+  precision: bf16-mixed
+```
+
+## Development
 ```bash
 pytest
 ruff check .
@@ -77,6 +111,7 @@ pre-commit run --all-files
 ## References
 
 - Karras et al., NeurIPS 2022 (EDM)
+- Assran et al., CVPR 2023 (I-JEPA)
 - Song et al., ICLR 2021 (Score-Based SDEs)
 - Chung et al., ICLR 2023 (DPS)
 - Perez et al., AAAI 2018 (FiLM)

@@ -17,7 +17,7 @@ from score_qmri.datasets.kind import DatasetKind
 from score_qmri.datasets.lightning import ConstantSchedule, MagnitudeDatasetConfig, MRIDataModule
 from score_qmri.models.diffusion import DiffusionConfig
 from score_qmri.models.unet import UNet
-from score_qmri.training.lightning_module import DiffusionLightningModule
+from score_qmri.training.diffusion_module import DiffusionLightningModule
 
 
 @pytest.fixture

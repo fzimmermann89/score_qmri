@@ -15,7 +15,7 @@ from lightning.pytorch.cli import LightningArgumentParser, LightningCLI, SaveCon
 from lightning.pytorch.loggers import WandbLogger
 
 from score_qmri.datasets.lightning import MRIDataModule
-from score_qmri.training.lightning_module import DiffusionLightningModule
+from score_qmri.training.diffusion_module import DiffusionLightningModule
 from score_qmri.utils.config import normalize_config
 
 if not sys.warnoptions:
