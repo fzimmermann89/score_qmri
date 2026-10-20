@@ -114,5 +114,5 @@ The recovered IBC T1/M0 functions reproduce execution of the original functions 
 The exact CC/fastMRI/M4Raw comparisons use archived prepared H5 inputs followed by the original slice filter. Raw fastMRI T1 has combined/coilwise maximum differences of 1.36e-5 / 7.07e-4; other raw contrasts are unchecked. Raw M4Raw GRE retains a meaningful mismatch (MAE about 0.0041, maximum 0.488), despite matching execution of the recovered producer. Raw CC is unverified. The missing original RNG seed prevents regeneration of the historical synthetic draws. No tolerances or reference-derived corrections conceal these limits.
 
 ```bash
-python -m pytest --noconftest dataset_preparation/tests -q
+python -m pytest dataset_preparation/tests -q
 ```
