@@ -18,7 +18,7 @@ from .protocols import LinearOperatorProtocol
 class DAPSConfig:
     """Likelihood tau is per real coordinate; Langevin step is dimensionless.
 
-    A fixed, positive preconditioner removes stiffness from the data likelihood
+    A fixed, positive spatial preconditioner removes stiffness from the data likelihood
     and the x_sigma|x0 Gaussian. It changes mixing, not the conditional target.
     The target uses the prior smoothed at prior_sigma (default: model.sigma_min).
     Finite Langevin integration adds numerical approximation.
@@ -88,19 +88,25 @@ class DAPSSampler:
         else:
             center = to_complex(self.model.denoise(noisy, sigmas, kind))
         prior_sigmas = sigmas.new_full(sigmas.shape, self.prior_sigma)
-        # Estimate score stiffness once at the PF endpoint, then freeze Q for
-        # the entire conditional chain. Using prior_sigma^-2 everywhere makes
-        # even a smooth Gaussian prior mix thousands of times too slowly.
+        # Estimate local score stiffness once at the PF endpoint, then freeze Q
+        # for the entire conditional chain. A global RMS lets stiff background
+        # pixels freeze the foreground. Multiple probes stabilize the local RMS.
         with torch.enable_grad():
             point = to_2ch(center).detach().requires_grad_(True)
-            probe = torch.empty_like(point).bernoulli_(0.5, generator=generator).mul_(2).sub_(1)
             score = self.model.score(point, prior_sigmas, kind)
-            (response,) = torch.autograd.grad(score, point, probe)
-            curvature = response.square().flatten(1).mean(1).sqrt().clamp_min(self.model.sigma_data**-2)
-        precision = (sigma**-2 + curvature).reshape((xt.shape[0],) + (1,) * (xt.ndim - 1))
+            squared = torch.zeros_like(point)
+            for i in range(4):
+                probe = torch.empty_like(point).bernoulli_(0.5, generator=generator).mul_(2).sub_(1)
+                (response,) = torch.autograd.grad(score, point, probe, retain_graph=i < 3)
+                squared += response.square()
+            curvature = (squared.mean(1) / 4).sqrt().clamp_min(self.model.sigma_data**-2)
+        precision = (sigma**-2 + curvature).unsqueeze(1).unsqueeze(1)
+        scale = precision.rsqrt()
 
         def preconditioner_precision(v: Tensor) -> Tensor:
-            return precision * v + operator.H(operator(v)[0])[0] / cfg.tau**2
+            # Whiten the diagonal before CG: heterogeneous prior stiffness
+            # must not make the linear solve ill-conditioned too.
+            return v + scale * operator.H(operator(scale * v)[0])[0] / cfg.tau**2
 
         def conditional_score(x: Tensor) -> Tensor:
             residual = operator(x)[0] - measurement
@@ -110,15 +116,16 @@ class DAPSSampler:
         x = center if initial is None else initial
         for _ in range(cfg.langevin_steps):
             score = conditional_score(x)
-            # Cov(innovation)=Q, hence Cov(Q^-1 innovation)=Q^-1.
-            innovation = precision.sqrt() * normal_like(x, generator)
-            innovation += operator.H(normal_like(measurement, generator))[0] / cfg.tau
-            rhs = cfg.langevin_step * score + sqrt(2 * cfg.langevin_step) * innovation
-            proposal = x + conjugate_gradient(preconditioner_precision, rhs, cfg.cg_max_iter, cfg.cg_rtol)
+            # B = scale Q scale. Cov(innovation)=B, giving Q^-1 driving noise
+            # after the whitened solve and the final multiplication by scale.
+            innovation = normal_like(x, generator)
+            innovation += scale * operator.H(normal_like(measurement, generator))[0] / cfg.tau
+            rhs = cfg.langevin_step * scale * score + sqrt(2 * cfg.langevin_step) * innovation
+            proposal = x + scale * conjugate_gradient(preconditioner_precision, rhs, cfg.cg_max_iter, cfg.cg_rtol)
             # Stochastic Heun reuses the same noise; fresh noise here would
             # change the temperature. The correction reduces finite-step bias.
-            correction = 0.5 * cfg.langevin_step * (conditional_score(proposal) - score)
-            x = proposal + conjugate_gradient(preconditioner_precision, correction, cfg.cg_max_iter, cfg.cg_rtol)
+            correction = 0.5 * cfg.langevin_step * scale * (conditional_score(proposal) - score)
+            x = proposal + scale * conjugate_gradient(preconditioner_precision, correction, cfg.cg_max_iter, cfg.cg_rtol)
             if not x.isfinite().all():
                 raise RuntimeError("Nonfinite DAPS trajectory; reduce langevin_step and increase langevin_steps")
         return x

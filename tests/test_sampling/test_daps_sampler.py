@@ -30,6 +30,43 @@ class BimodalPrior:
         return (self.denoise(x, sigma, kind) - x) / sigma[:, None, None, None].square()
 
 
+class HeterogeneousGaussianPrior(GaussianPrior):
+    def __init__(self):
+        super().__init__(torch.diag(torch.tensor([0.04] * 8 + [1e-6] * 8, dtype=torch.float64)))
+        self.variance = self.covariance.diag().reshape(1, 1, 1, 16)
+
+    def denoise(self, x, sigma, kind):
+        variance = self.variance + sigma.expand(len(x))[:, None, None, None].square()
+        return x * self.variance / variance
+
+    def score(self, x, sigma, kind):
+        return -x / (self.variance + sigma.expand(len(x))[:, None, None, None].square())
+
+
+class UninformativeOperator:
+    def __call__(self, x):
+        return (torch.zeros_like(x),)
+
+    @property
+    def H(self):
+        return self
+
+
+def test_stiff_background_does_not_freeze_foreground_mixing():
+    model = HeterogeneousGaussianPrior()
+    initial = torch.zeros(4096, 1, 1, 1, 16, dtype=torch.complex128)
+    cfg = DAPSConfig(tau=0.01, num_steps=3, reverse_steps=2)
+    # An uninformative likelihood leaves the exact smoothed prior as posterior.
+    # Starting at its mean requires generating the missing foreground variance.
+    draws = DAPSSampler(model, cfg).sample(
+        UninformativeOperator(), initial, 1, initial=initial, generator=torch.Generator().manual_seed(71)
+    )[:, 0, 0, 0]
+    target_variance = model.variance.flatten() + model.sigma_min**2
+    for part in [draws.real, draws.imag]:
+        assert torch.max((part.var(0) / target_variance - 1).abs()) < 0.1
+        assert torch.max(part.mean(0).abs() / (target_variance / len(part)).sqrt()) < 5
+
+
 def test_daps_corrects_bimodal_dps_initialization():
     # The measurement changes mode probabilities; checking Gaussian moments
     # alone cannot detect a sampler that keeps the prior's equal mode weights.
