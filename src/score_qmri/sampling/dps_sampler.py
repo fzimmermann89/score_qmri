@@ -19,9 +19,9 @@ class DPSConfig:
     """tau is measurement standard deviation per real coordinate.
 
     The likelihood integrates an isotropic approximation to x0|x_sigma. Its
-    variance is estimated from the denoiser Jacobian in the residual direction,
-    bounded below by sigma²*sigma_data²/(sigma²+sigma_data²). This Gaussian
-    closure is exact for an isotropic Gaussian prior. For learned image priors
+    variance is estimated from the denoiser Jacobian in the residual direction.
+    A nonpositive estimate falls back to sigma²*sigma_data²/(sigma²+sigma_data²).
+    This Gaussian closure is exact for an isotropic Gaussian prior. For learned image priors
     it is an approximation beyond the original DPS plug-in likelihood.
     """
 
@@ -62,12 +62,13 @@ class DPSSampler:
         (response,) = torch.autograd.grad(denoised, x, direction, retain_graph=True)
         # Tweedie's covariance identity: Cov(x0|x_sigma) = sigma² * J_D.
         # Estimate its scale in the data-residual direction. The checkpoint's
-        # isotropic Gaussian closure supplies a positive baseline when J_D is
-        # inaccurate; it is exact for the Gaussian reference prior.
+        # isotropic Gaussian closure supplies a fallback for invalid estimates.
+        # A positive estimate can be smaller than this fallback; flooring it
+        # would bias even an exact Gaussian prior with smaller variance.
         squared = direction.square().flatten(1).sum(1)
         rayleigh = (direction * response).flatten(1).sum(1) / squared.clamp_min(torch.finfo(x.dtype).tiny)
         baseline = self.model.sigma_data**2 / (sigma**2 + self.model.sigma_data**2)
-        variance = sigma**2 * rayleigh.clamp_min(baseline).detach()
+        variance = sigma**2 * torch.where(rayleigh > 0, rayleigh, baseline).detach()
         variance = variance.reshape((x.shape[0],) + (1,) * (measurement.ndim - 1))
 
         def covariance(v: Tensor) -> Tensor:

@@ -52,9 +52,9 @@ class DAPSSampler:
     The conditional score is score_prior(x0)+(x_sigma-x0)/sigma² minus the
     Gaussian likelihood gradient. The driving noise has covariance
     2*step*preconditioner; the same increment is reused in the Heun corrector.
-    The first chain starts at a probability-flow endpoint; subsequent chains
-    retain x0 for Gibbs updates. The conditional prior score is evaluated at
-    every update.
+    The first chain starts at a supplied image or a probability-flow endpoint;
+    subsequent chains retain x0 for Gibbs updates. The conditional prior score
+    is evaluated at every update.
     """
 
     def __init__(self, model: DiffusionModel, cfg: DAPSConfig) -> None:
@@ -131,9 +131,15 @@ class DAPSSampler:
         kind: DatasetKind | int,
         *,
         noise: Tensor | None = None,
+        initial: Tensor | None = None,
         generator: torch.Generator | None = None,
     ) -> Tensor:
-        """Draw a complex image; all sampling noise uses the supplied generator."""
+        """Draw a complex image; optionally warm-start x0 from an existing draw.
+
+        An initial image changes the starting distribution, not the conditional
+        target. It is independently re-noised before the first Gibbs update.
+        Finite chains still require mixing checks, including across initializations.
+        """
         if not is_complex_kind(int(kind)):
             raise NotImplementedError("DAPS currently supports complex image kinds")
         cfg = self.cfg
@@ -148,10 +154,12 @@ class DAPSSampler:
         epsilon = normal_like(template, generator) if noise is None else noise.to(template.device)
         if epsilon.shape != template.shape:
             raise ValueError("Initial noise must match the image shape")
-        xt = start * epsilon
+        x = None if initial is None else initial.to(device=template.device, dtype=template.dtype).detach()
+        if x is not None and (x.shape != template.shape or not x.isfinite().all()):
+            raise ValueError("Initial image must be finite and match the image shape")
+        xt = start * epsilon if x is None else x + start * epsilon
         grid = karras_sigmas(cfg.num_steps, sigma_min=cfg.sigma_min, sigma_max=start, rho=cfg.rho, device=xt.device)
         grid = torch.cat([grid, grid.new_zeros(1)])
-        x = None
         for sigma, following in zip(grid[:-1], grid[1:], strict=True):
             # Re-noising and a conditional invariant kernel form a Gibbs step.
             # Retain x0 so a finite inner chain preserves its conditioning.

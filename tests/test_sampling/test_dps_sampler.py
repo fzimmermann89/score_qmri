@@ -59,8 +59,9 @@ def assert_gaussian_posterior(draws, covariance, operator, y, tau):
 @pytest.mark.parametrize(
     "matrix", [torch.diag(torch.tensor([1.0, 0.0], dtype=torch.float64)), torch.tensor([[1.0, 0.4], [0.0, 0.2]], dtype=torch.float64)]
 )
-def test_dps_recovers_observed_nullspace_and_cross_covariance(matrix):
-    model = GaussianPrior()
+@pytest.mark.parametrize("prior_variance", [0.01, 0.04])
+def test_dps_recovers_observed_nullspace_and_cross_covariance(matrix, prior_variance):
+    model = GaussianPrior(torch.eye(2, dtype=torch.float64) * prior_variance)
     op = MatrixOperator(matrix)
     y = torch.tensor([0.15 + 0.05j, 0.02 - 0.01j], dtype=torch.complex128).reshape(1, 1, 1, 1, 2)
     y = op(op.H(y)[0])[0] if matrix[1, 1] == 0 else y
@@ -83,15 +84,16 @@ def test_dps_is_invariant_to_measurement_units_and_reproducible():
     torch.testing.assert_close(first, repeated, rtol=0, atol=0)
 
 
-def test_dps_guidance_uses_diffusion_increment_and_conditional_noise():
-    model = GaussianPrior()
+@pytest.mark.parametrize("prior_variance", [0.01, 0.04])
+def test_dps_guidance_uses_diffusion_increment_and_conditional_noise(prior_variance):
+    model = GaussianPrior(torch.eye(2, dtype=torch.float64) * prior_variance)
     op = MatrixOperator(torch.eye(2, dtype=torch.float64))
     x = torch.full((1, 2, 1, 2), 0.2, dtype=torch.float64)
     y = to_complex(torch.full_like(x, 0.1))
     sigma, following = 0.4, 0.3
     cfg = DPSConfig(tau=0.05, cg_rtol=1e-12)
     actual = DPSSampler(model, cfg)._step(x, torch.tensor([1]), op, y, sigma, following, torch.zeros_like(x))
-    gain = 0.04 / (0.04 + sigma**2)
+    gain = prior_variance / (prior_variance + sigma**2)
     conditional_var = sigma**2 * gain
     posterior_mean = gain * x - conditional_var * (gain * x - to_2ch(y)) / (conditional_var + cfg.tau**2)
     ratio = (following / sigma) ** 2
