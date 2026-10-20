@@ -241,3 +241,32 @@ def test_ssim_loss_with_channel_mask():
     loss = ssim_loss(pred, target, channel_mask=channel_mask)
     assert torch.isfinite(loss)
     assert 0 <= loss.item() <= 2
+
+
+def test_masked_ssim_is_per_example_and_matches_individual_evaluations():
+    generator = torch.Generator().manual_seed(73)
+    target = torch.rand(3, 2, 16, 16, generator=generator)
+    pred = (target + torch.randn(3, 2, 16, 16, generator=generator) * 0.1).requires_grad_()
+    channel_mask = torch.tensor([[1.0, 1.0], [1.0, 0.0], [1.0, 0.0]]).unflatten(1, (2, 1, 1))
+    spatial_mask = torch.ones(3, 1, 16, 16)
+    actual = ssim_loss(pred, target, spatial_mask, channel_mask, reduction="none")
+    expected = torch.stack(
+        [ssim_loss(pred[i : i + 1], target[i : i + 1], spatial_mask[i : i + 1], channel_mask[i : i + 1]) for i in range(3)]
+    )
+    assert actual.shape == (3,)
+    torch.testing.assert_close(actual, expected)
+    weights = torch.tensor([0.2, 1.0, 7.0])
+    (actual_gradient,) = torch.autograd.grad((actual * weights).mean(), pred, retain_graph=True)
+    (expected_gradient,) = torch.autograd.grad((expected * weights).mean(), pred)
+    torch.testing.assert_close(actual_gradient, expected_gradient)
+    assert not actual_gradient[1:, 1].count_nonzero()
+
+
+def test_masked_ssim_sample_has_no_cross_example_gradient():
+    pred = torch.rand(2, 2, 16, 16, requires_grad=True)
+    target = torch.zeros_like(pred)
+    mask = torch.ones(2, 2, 1, 1)
+    loss = ssim_loss(pred, target, channel_mask=mask, reduction="none")
+    (gradient,) = torch.autograd.grad(loss[0], pred)
+    assert gradient[0].count_nonzero()
+    assert not gradient[1].count_nonzero()
