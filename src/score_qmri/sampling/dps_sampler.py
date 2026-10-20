@@ -166,8 +166,8 @@ class DPSSampler:
             device=device,
         )
 
-        noise_2ch = _create_noise((B, 2, H, W), kind_t, device, torch.float32) if noise is None else _to_2ch(noise.to(device))
-        x0_init_2ch = _to_2ch(x0_init.to(device)) if x0_init is not None else None
+        noise_2ch = _create_noise((B, 2, H, W), kind_t, device, torch.float32) if noise is None else to_2ch(noise.to(device))
+        x0_init_2ch = to_2ch(x0_init.to(device)) if x0_init is not None else None
         x = x0_init_2ch + noise_2ch * sigma_start if x0_init_2ch is not None else noise_2ch * sigma_start
 
         for i in range(cfg.num_steps):
@@ -184,7 +184,7 @@ class DPSSampler:
         sigma_final = torch.full((B,), sigma_min, device=device)
         x0 = self.model.denoise(x, sigma_final, kind_t)
         x0 = self.model.clamp_x0(x0, kind_t)
-        return _to_complex(x0)
+        return to_complex(x0)
 
     def _compute_guidance_weight(
         self,
@@ -230,7 +230,7 @@ class DPSSampler:
         x0_hat = self.model.denoise(x_in, sigma_t, kind)
 
         x0_for_dc = self.model.clamp_x0(x0_hat, kind) if cfg.clamp_x0_dc else x0_hat
-        y_pred = forward_op(_to_complex(x0_for_dc))[0]
+        y_pred = forward_op(to_complex(x0_for_dc))[0]
 
         residual = (y_pred - measurement).flatten(start_dim=1)
         residual_norm = residual.abs().square().sum(dim=1).sqrt()
