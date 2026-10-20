@@ -12,7 +12,7 @@ from jsonargparse import ArgumentParser
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import AncestralDPSConfig, AncestralDPSSampler, PaperDAPSConfig, PaperDAPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler
 
 
 class GaussianOracle:
@@ -21,8 +21,10 @@ class GaussianOracle:
     device = torch.device("cpu")
     sigma_min = 0.001
     sigma_max = 20.0
+    sigma_data = 0.2
 
     def denoise(self, x: torch.Tensor, sigma: torch.Tensor, kind: torch.Tensor) -> torch.Tensor:
+        sigma = sigma.expand(len(x))
         return x * 0.04 / (0.04 + sigma[:, None, None, None].square())
 
     def score(self, x: torch.Tensor, sigma: torch.Tensor, kind: torch.Tensor) -> torch.Tensor:
@@ -45,7 +47,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--draws", type=int, default=4096)
     parser.add_argument("--seed", type=int, default=777)
-    parser.add_argument("--preset", choices=["dps", "daps-default", "daps-mixed", "daps-refined"], required=True)
+    parser.add_argument("--sampler", choices=["dps", "daps"], required=True)
     args = parser.parse_args()
     if args.draws < 2:
         raise ValueError("At least two draws are needed for a variance estimate")
@@ -53,21 +55,8 @@ def main() -> None:
         raise FileExistsError(args.output)
     torch.set_num_threads(2)
     model = cast(DiffusionModel, GaussianOracle())
-    cfg: AncestralDPSConfig | PaperDAPSConfig
-    sampler: AncestralDPSSampler | PaperDAPSSampler
-    if args.preset == "dps":
-        cfg = AncestralDPSConfig()
-        sampler = AncestralDPSSampler(model, cfg)
-    else:
-        cfg = PaperDAPSConfig(tau=0.01)
-        if args.preset in ("daps-mixed", "daps-refined"):
-            cfg.prior = "score"
-            cfg.lr_min_ratio = 1.0
-        if args.preset == "daps-refined":
-            cfg.reverse_steps = 16
-            cfg.langevin_lr = 5e-6
-            cfg.langevin_steps = 300
-        sampler = PaperDAPSSampler(model, cfg)
+    cfg = DPSConfig(tau=0.01) if args.sampler == "dps" else DAPSConfig(tau=0.01)
+    sampler = DPSSampler(model, cfg) if args.sampler == "dps" else DAPSSampler(model, cfg)
     y = torch.zeros(args.draws, 1, 1, 1, 2, dtype=torch.complex128)
     y[..., 0] = 0.15 + 0.05j
     sample = sampler.sample(Mask(), y, DatasetKind.COMPLEX_T1W_COIL_COMBINED, generator=torch.Generator().manual_seed(args.seed))[

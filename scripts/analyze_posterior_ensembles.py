@@ -88,7 +88,7 @@ def main() -> None:
         maps = posterior_maps(samples, truth)
         spectral_maps = posterior_maps(np.fft.fft2(samples, norm="ortho"), np.fft.fft2(truth, norm="ortho"))
         roi = np.abs(truth) > 0.05 * np.abs(truth).max()
-        method_label = f"DPS g={report['configuration']['guidance_scale']:g}" if report["arguments"]["sampler"] == "dps" else "DAPS score"
+        method_label = report["arguments"]["sampler"].upper()
         label = f"{method_label} · n={len(samples)}"
         entry = {
             "run": str(run),

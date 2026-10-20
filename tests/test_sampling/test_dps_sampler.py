@@ -1,187 +1,115 @@
-"""Tests for DPS sampler."""
+"""Distributional and numerical checks for diffusion posterior sampling."""
 
-from typing import cast
+from dataclasses import replace
 
 import pytest
 import torch
 
-from score_qmri.datasets.kind import DatasetKind
-from score_qmri.models.diffusion import DiffusionConfig, DiffusionModel
-from score_qmri.models.unet import UNet
-from score_qmri.sampling.dps_sampler import DPSConfig, DPSSampler
-from score_qmri.sampling.protocols import LinearOperatorProtocol
+from score_qmri.sampling import DPSConfig, DPSSampler
+from score_qmri.sampling._utils import conjugate_gradient, to_2ch, to_complex
 
 
-class IdentityOperator:
-    """Identity operator for testing: A(x) = x, A†(y) = y."""
+class GaussianPrior:
+    device = torch.device("cpu")
+    sigma_min = 0.001
+    sigma_max = 20.0
+    sigma_data = 0.2
 
-    def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
-        return (x,)
+    def __init__(self, covariance=None):
+        self.covariance = torch.eye(2, dtype=torch.float64) * 0.04 if covariance is None else covariance
 
-    @property
-    def H(self) -> "IdentityOperator":
-        return self
+    def denoise(self, x, sigma, kind):
+        sigma = sigma.expand(len(x))
+        covariance = self.covariance.to(x)
+        gain = torch.linalg.solve(
+            covariance + sigma[:, None, None] ** 2 * torch.eye(2, device=x.device, dtype=x.dtype), covariance.expand(len(x), -1, -1)
+        )
+        return torch.einsum("bij,bcj->bci", gain, x.squeeze(2)).unsqueeze(2)
 
-
-class MaskingOperator:
-    """Simulates k-space undersampling by masking."""
-
-    def __init__(self, mask: torch.Tensor) -> None:
-        self.mask = mask
-
-    def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
-        # x: (B, 1, 1, H, W) complex
-        # FFT to k-space, apply mask, return
-        k = torch.fft.fft2(x, norm="ortho")
-        return (k * self.mask,)
-
-    @property
-    def H(self) -> "MaskingOperatorAdjoint":
-        return MaskingOperatorAdjoint(self.mask)
+    def score(self, x, sigma, kind):
+        sigma = sigma.expand(len(x))
+        precision = self.covariance.to(x) + sigma[:, None, None] ** 2 * torch.eye(2, device=x.device, dtype=x.dtype)
+        return -torch.linalg.solve(precision, x.squeeze(2).mT).mT.unsqueeze(2)
 
 
-class MaskingOperatorAdjoint:
-    """Adjoint of MaskingOperator."""
+class MatrixOperator:
+    def __init__(self, matrix):
+        self.matrix = matrix
 
-    def __init__(self, mask: torch.Tensor) -> None:
-        self.mask = mask
-
-    def __call__(self, y: torch.Tensor) -> tuple[torch.Tensor, ...]:
-        # y: (B, Coils, 1, k2, k1) complex
-        # Apply conjugate mask, IFFT
-        return (torch.fft.ifft2(y * self.mask.conj(), norm="ortho"),)
+    def __call__(self, x):
+        return (x @ self.matrix.to(x).mT,)
 
     @property
-    def H(self) -> MaskingOperator:
-        return MaskingOperator(self.mask)
+    def H(self):
+        return MatrixOperator(self.matrix.mH)
 
 
-def test_dps_config_defaults():
-    cfg = DPSConfig()
-    assert cfg.num_steps == 1000
-    assert cfg.guidance_scale == 0.1
-    assert cfg.normalize_gradient is True
-    assert cfg.rho == 7.0
+def assert_gaussian_posterior(draws, covariance, operator, y, tau):
+    matrix = operator.matrix
+    target_cov = torch.linalg.inv(torch.linalg.inv(covariance) + matrix.mH @ matrix / tau**2)
+    target_mean = target_cov.to(y) @ matrix.mH.to(y) @ y.flatten() / tau**2
+    samples = draws[:, 0, 0, 0]
+    for part, mean in [(samples.real, target_mean.real), (samples.imag, target_mean.imag)]:
+        observed_cov = torch.cov(part.mT)
+        scale = target_cov.diag().real.sqrt()
+        assert torch.max((observed_cov - target_cov.real).abs() / (scale[:, None] * scale[None, :])) < 0.08
+        assert torch.max((part.mean(0) - mean).abs() / (scale / len(part) ** 0.5)) < 5
 
 
-def test_dps_config_custom():
-    cfg = DPSConfig(num_steps=20, rho=5.0, guidance_scale=0.2)
-    assert cfg.num_steps == 20
-    assert cfg.rho == 5.0
-    assert cfg.guidance_scale == 0.2
+@pytest.mark.parametrize(
+    "matrix", [torch.diag(torch.tensor([1.0, 0.0], dtype=torch.float64)), torch.tensor([[1.0, 0.4], [0.0, 0.2]], dtype=torch.float64)]
+)
+def test_dps_recovers_observed_nullspace_and_cross_covariance(matrix):
+    model = GaussianPrior()
+    op = MatrixOperator(matrix)
+    y = torch.tensor([0.15 + 0.05j, 0.02 - 0.01j], dtype=torch.complex128).reshape(1, 1, 1, 1, 2)
+    y = op(op.H(y)[0])[0] if matrix[1, 1] == 0 else y
+    cfg = DPSConfig(tau=0.05, num_steps=512, cg_rtol=1e-10)
+    draws = DPSSampler(model, cfg).sample(op, y.expand(8192, -1, -1, -1, -1), 1, generator=torch.Generator().manual_seed(71))
+    assert_gaussian_posterior(draws, model.covariance, op, y, cfg.tau)
 
 
-def test_identity_operator_protocol():
-    op = IdentityOperator()
-    assert isinstance(op, LinearOperatorProtocol)
-    assert isinstance(op.H, LinearOperatorProtocol)
+def test_dps_is_invariant_to_measurement_units_and_reproducible():
+    model = GaussianPrior()
+    matrix = torch.tensor([[1.0, 0.4], [0.0, 0.2]], dtype=torch.float64)
+    y = torch.full((3, 1, 1, 1, 2), 0.15 + 0.05j, dtype=torch.complex128)
+    cfg = DPSConfig(tau=0.05, num_steps=32, cg_rtol=1e-10)
+    first = DPSSampler(model, cfg).sample(MatrixOperator(matrix), y, 1, generator=torch.Generator().manual_seed(8))
+    scaled = DPSSampler(model, replace(cfg, tau=cfg.tau * 10)).sample(
+        MatrixOperator(matrix * 10), y * 10, 1, generator=torch.Generator().manual_seed(8)
+    )
+    repeated = DPSSampler(model, cfg).sample(MatrixOperator(matrix), y, 1, generator=torch.Generator().manual_seed(8))
+    torch.testing.assert_close(first, scaled, rtol=1e-9, atol=1e-10)
+    torch.testing.assert_close(first, repeated, rtol=0, atol=0)
 
 
-def test_masking_operator_has_required_methods():
-    mask = torch.ones(1, 1, 1, 32, 32)
-    op = MaskingOperator(mask)
-    # Verify operator has required interface (protocol check skipped due to recursive type)
-    assert callable(op)
-    assert hasattr(op, "H")
-    assert callable(op.H)
+def test_dps_guidance_uses_diffusion_increment_and_conditional_noise():
+    model = GaussianPrior()
+    op = MatrixOperator(torch.eye(2, dtype=torch.float64))
+    x = torch.full((1, 2, 1, 2), 0.2, dtype=torch.float64)
+    y = to_complex(torch.full_like(x, 0.1))
+    sigma, following = 0.4, 0.3
+    cfg = DPSConfig(tau=0.05, cg_rtol=1e-12)
+    actual = DPSSampler(model, cfg)._step(x, torch.tensor([1]), op, y, sigma, following, torch.zeros_like(x))
+    gain = 0.04 / (0.04 + sigma**2)
+    conditional_var = sigma**2 * gain
+    posterior_mean = gain * x - conditional_var * (gain * x - to_2ch(y)) / (conditional_var + cfg.tau**2)
+    ratio = (following / sigma) ** 2
+    torch.testing.assert_close(actual, ratio * x + (1 - ratio) * posterior_mean, rtol=1e-12, atol=1e-12)
 
 
-def test_dps_sampler_output_shape():
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    config = DPSConfig(num_steps=5, guidance_scale=0.1)
-    sampler = DPSSampler(model, config)
-
-    B, H, W = 2, 32, 32
-    op = cast(LinearOperatorProtocol, IdentityOperator())
-
-    # Create measurement in mrpro format
-    y = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
-
-    result = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE)
-
-    assert result.shape == (B, 1, 1, H, W)
-    assert result.dtype == torch.complex64
+def test_cg_checks_actual_residual_and_handles_zero_batches():
+    matrix = torch.tensor([[2.0, 0.3], [0.3, 1.0]], dtype=torch.float64)
+    rhs = torch.tensor([[1.0 + 2j, 3.0 - 1j], [0j, 0j]], dtype=torch.complex128)
+    answer = conjugate_gradient(lambda x: x @ matrix.to(x), rhs, 10, 1e-12)
+    torch.testing.assert_close(answer @ matrix.to(answer), rhs)
+    with pytest.raises(RuntimeError, match="converge"):
+        conjugate_gradient(lambda x: x @ matrix.to(x), rhs, 1, 1e-12)
+    with pytest.raises(RuntimeError, match="positive-definite"):
+        conjugate_gradient(lambda x: -x, rhs, 10, 1e-12)
 
 
-def test_dps_sampler_with_masking_operator():
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    config = DPSConfig(num_steps=3, guidance_scale=0.01)
-    sampler = DPSSampler(model, config)
-
-    B, H, W = 1, 32, 32
-
-    # Create random undersampling mask
-    mask = torch.rand(1, 1, 1, H, W) > 0.5
-    mask = mask.float()
-    op = cast(LinearOperatorProtocol, MaskingOperator(mask))
-
-    # Create measurement
-    y = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
-
-    result = sampler.sample(op, y, DatasetKind.COMPLEX_T2W_COILWISE)
-
-    assert result.shape == (B, 1, 1, H, W)
-    assert result.dtype == torch.complex64
-
-
-def test_dps_sampler_rejects_real_kinds():
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    sampler = DPSSampler(model)
-
-    op = cast(LinearOperatorProtocol, IdentityOperator())
-    y = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
-
-    with pytest.raises(NotImplementedError, match="only implemented for complex kind"):
-        sampler.sample(op, y, DatasetKind.T1MAP)
-
-
-def test_dps_sampler_with_initial_noise():
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    config = DPSConfig(num_steps=3)
-    sampler = DPSSampler(model, config)
-
-    B, H, W = 1, 32, 32
-    op = cast(LinearOperatorProtocol, IdentityOperator())
-    y = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
-
-    noise = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
-    result = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COIL_COMBINED, noise=noise)
-
-    assert result.shape == (B, 1, 1, H, W)
-
-
-def test_dps_sampler_deterministic_with_fixed_noise():
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    model.eval()  # Important: freeze normalizer stats
-    config = DPSConfig(num_steps=3)
-    sampler = DPSSampler(model, config)
-
-    op = cast(LinearOperatorProtocol, IdentityOperator())
-    y = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
-
-    noise = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
-
-    r1 = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE, noise=noise.clone())
-    r2 = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE, noise=noise.clone())
-
-    assert torch.allclose(r1, r2, rtol=1e-5, atol=1e-5)
-
-
-def test_dps_gradient_flows():
-    """Test that gradients are computed during sampling."""
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    config = DPSConfig(num_steps=2, guidance_scale=1.0)
-    sampler = DPSSampler(model, config)
-
-    op = cast(LinearOperatorProtocol, IdentityOperator())
-    y = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
-
-    # Should not raise - gradients are computed internally
-    result = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE)
-    assert result is not None
+@pytest.mark.parametrize("tau", [0.0, -1.0, float("nan"), float("inf")])
+def test_dps_requires_physical_measurement_noise(tau):
+    with pytest.raises(ValueError):
+        DPSConfig(tau=tau)
