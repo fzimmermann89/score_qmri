@@ -44,6 +44,43 @@ class MatrixOperator:
         return MatrixOperator(self.matrix.mH)
 
 
+@pytest.mark.parametrize("following", [0.3, 0.0])
+def test_dps_style_guidance_matches_official_norm_correction_on_ve_bridge(following):
+    model = GaussianPrior()
+    operator = MatrixOperator(torch.eye(2, dtype=torch.float64))
+    x = torch.tensor([[[[0.2, -0.1]], [[0.1, 0.3]]]], dtype=torch.float64)
+    y = to_complex(torch.full_like(x, 0.05))
+    sigma = 0.4
+    cfg = DPSConfig(tau=0.05, guidance="dps", guidance_scale=0.3)
+    result = DPSSampler(model, cfg)._step(x, torch.tensor([1]), operator, y, sigma, following, torch.zeros_like(x))
+    gain = 0.04 / (0.04 + sigma**2)
+    residual = gain * x - to_2ch(y)
+    gradient = gain * residual / residual.norm()
+    expected = (following / sigma) ** 2 * x + (1 - (following / sigma) ** 2) * gain * x - cfg.guidance_scale * gradient
+    torch.testing.assert_close(result, expected)
+    repeated = DPSSampler(model, replace(cfg, tau=0.5))._step(x, torch.tensor([1]), operator, y, sigma, following, torch.zeros_like(x))
+    torch.testing.assert_close(result, repeated)
+
+
+def test_dps_style_zero_residual_and_batch_independence():
+    model = GaussianPrior()
+    operator = MatrixOperator(torch.eye(2, dtype=torch.float64))
+    cfg = DPSConfig(tau=0.05, guidance="dps")
+    x = torch.tensor([0.0, 0.2], dtype=torch.float64)[:, None, None, None].expand(-1, 2, 1, 2)
+    y = to_complex(torch.zeros_like(x))
+    sampler = DPSSampler(model, cfg)
+    batch = sampler._step(x, torch.tensor([1, 1]), operator, y, 0.4, 0.3, torch.zeros_like(x))
+    assert torch.equal(batch[0], torch.zeros_like(batch[0]))
+    single = sampler._step(x[1:], torch.tensor([1]), operator, y[1:], 0.4, 0.3, torch.zeros_like(x[1:]))
+    torch.testing.assert_close(batch[1:], single)
+
+
+@pytest.mark.parametrize("options", [{"guidance": "plugin"}, {"guidance_scale": -1}, {"guidance_scale": float("nan")}])
+def test_invalid_dps_guidance(options):
+    with pytest.raises(ValueError, match="guidance"):
+        DPSConfig(tau=0.05, **options)
+
+
 def assert_gaussian_posterior(draws, covariance, operator, y, tau):
     matrix = operator.matrix
     target_cov = torch.linalg.inv(torch.linalg.inv(covariance) + matrix.mH @ matrix / tau**2)

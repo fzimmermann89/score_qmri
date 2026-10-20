@@ -119,9 +119,11 @@ class DiffusionLightningModule(LightningModule):
 
         self._fixed_noise: dict[int, Tensor] = {}
         self.ema: EMA[DiffusionModel] = EMA[DiffusionModel](self.model, decay=self.hparams.ema_decay)
+        self._ema_step = 0
 
     def on_fit_start(self) -> None:
         self.ema.shadow.to(self.device)
+        self._ema_step = self.global_step
 
         if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
             return
@@ -250,8 +252,9 @@ class DiffusionLightningModule(LightningModule):
         if self.hparams.aux_weight != 0:
             # Auxiliary SSIM+L1 is optional: its shared-trunk gradients can
             # compete with the conditional-mean objective at low sigma.
-            sigma_floor = float(self.model.sigma_min)
-            aux_w = 1.0 / (sigma_f.square() + sigma_floor**2)
+            # sqrt(EDM weight) cancels c_out in the raw-network L1 gradient,
+            # removing its former 1/sigma amplification at low noise.
+            aux_w = w.sqrt()
             loss_l1 = l1_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
             loss_ssim = ssim_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
             aux_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
@@ -325,7 +328,10 @@ class DiffusionLightningModule(LightningModule):
         batch: Any,
         batch_idx: int,
     ) -> None:
+        if self.global_step <= self._ema_step:
+            return
         self.ema.update(self.model)
+        self._ema_step = self.global_step
 
         if self.global_step > 0 and self.global_step % self.hparams.validation_interval == 0:
             self._log_samples()

@@ -56,6 +56,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20261020)
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--tau", type=float, default=0.01)
+    parser.add_argument("--dps-guidance", choices=["covariance", "dps"], default="covariance")
+    parser.add_argument("--guidance-scale", type=float, default=0.3)
     parser.add_argument("--prior-sigma", type=float, default=None)
     parser.add_argument("--langevin-step", type=float, default=0.1)
     parser.add_argument("--langevin-steps", type=int, default=200)
@@ -75,7 +77,7 @@ def main() -> None:
     op = MaskedFourier(mask)
     model = DiffusionModel.from_checkpoint(args.checkpoint, map_location="cpu", compile_model=False, weights="ema").to(args.device)
     cfg = (
-        DPSConfig(tau=args.tau, num_steps=args.steps or 1000)
+        DPSConfig(tau=args.tau, num_steps=args.steps or 1000, guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
         if args.sampler == "dps"
         else DAPSConfig(
             tau=args.tau,

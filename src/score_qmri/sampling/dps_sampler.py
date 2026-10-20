@@ -1,7 +1,8 @@
-"""Ancestral diffusion posterior sampling with a noise-aware Gaussian likelihood."""
+"""Covariance-aware and DPS-style guidance on an ancestral VE/EDM bridge."""
 
 from dataclasses import dataclass
 from math import isfinite, sqrt
+from typing import Literal
 
 import torch
 from torch import Tensor
@@ -23,6 +24,11 @@ class DPSConfig:
     A nonpositive estimate falls back to sigma²*sigma_data²/(sigma²+sigma_data²).
     This Gaussian closure is exact for an isotropic Gaussian prior. For learned image priors
     it is an approximation beyond the original DPS plug-in likelihood.
+
+    guidance="dps" instead applies guidance_scale times the residual-norm
+    gradient once per step, following the official DPS conditioning code.
+    This remains a VE/EDM adaptation of its VP-DDPM update, not an exact
+    posterior sampler. Its tuned strength does not use tau.
     """
 
     tau: float
@@ -31,20 +37,24 @@ class DPSConfig:
     rho: float = 7.0
     cg_max_iter: int = 50
     cg_rtol: float = 1e-4
+    guidance: Literal["covariance", "dps"] = "covariance"
+    guidance_scale: float = 0.3
 
     def __post_init__(self) -> None:
         if self.num_steps < 2 or self.cg_max_iter < 1:
             raise ValueError("Require >=2 diffusion steps and positive CG iterations")
         if not all(isfinite(x) and x > 0 for x in (self.tau, self.rho, self.cg_rtol)):
             raise ValueError("tau, rho and CG tolerance must be finite and positive")
+        if self.guidance not in ("covariance", "dps") or not isfinite(self.guidance_scale) or self.guidance_scale < 0:
+            raise ValueError("Require covariance/dps guidance and a finite nonnegative guidance_scale")
 
 
 class DPSSampler:
     """Denoiser-Jacobian likelihood guidance with the ancestral VE/EDM bridge.
 
-    Guidance is integrated with the diffusion variance increment, not a fixed
-    step at every discretization point. The Gaussian conditional approximation
-    remains an approximation; there is no clipping, projection or noise tempering.
+    Covariance guidance uses the diffusion variance increment. The optional
+    DPS-style baseline uses a fixed per-step residual-norm correction instead.
+    Both are approximations, without clipping, projection or noise tempering.
     """
 
     def __init__(self, model: DiffusionModel, cfg: DPSConfig) -> None:
@@ -57,6 +67,10 @@ class DPSSampler:
         cfg = self.cfg
         x = x.detach().requires_grad_(True)
         denoised = self.model.denoise(x, x.new_full((x.shape[0],), sigma), kind)
+        if cfg.guidance == "dps":
+            residual_norm = torch.linalg.vector_norm((operator(to_complex(denoised))[0] - measurement).flatten(1), dim=1)
+            (gradient,) = torch.autograd.grad(residual_norm.sum(), x)
+            return self._ancestral(x, denoised, cfg.guidance_scale * gradient, sigma, sigma_next, noise)
         residual = (operator(to_complex(denoised))[0] - measurement).detach()
         direction = to_2ch(operator.H(residual)[0])
         (response,) = torch.autograd.grad(denoised, x, direction, retain_graph=True)
@@ -76,13 +90,16 @@ class DPSSampler:
 
         weighted = conjugate_gradient(covariance, residual, cfg.cg_max_iter, cfg.cg_rtol)
         (gradient,) = torch.autograd.grad(denoised, x, to_2ch(operator.H(weighted)[0]))
-        with torch.no_grad():
-            ratio = (sigma_next / sigma) ** 2
-            delta = sigma**2 - sigma_next**2
-            mean = ratio * x + (1 - ratio) * denoised - delta * gradient
-            result = mean + sqrt(sigma_next**2 * (1 - ratio)) * noise
-            if not result.isfinite().all():
-                raise RuntimeError("Nonfinite DPS trajectory; check likelihood units and the operator")
+        return self._ancestral(x, denoised, (sigma**2 - sigma_next**2) * gradient, sigma, sigma_next, noise)
+
+    @staticmethod
+    @torch.no_grad()
+    def _ancestral(x: Tensor, denoised: Tensor, correction: Tensor, sigma: float, sigma_next: float, noise: Tensor) -> Tensor:
+        ratio = (sigma_next / sigma) ** 2
+        mean = ratio * x + (1 - ratio) * denoised - correction
+        result = mean + sqrt(sigma_next**2 * (1 - ratio)) * noise
+        if not result.isfinite().all():
+            raise RuntimeError("Nonfinite DPS trajectory; check likelihood units and the operator")
         return result
 
     def sample(
