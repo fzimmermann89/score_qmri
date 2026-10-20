@@ -119,6 +119,7 @@ class DiffusionLightningModule(LightningModule):
 
         self._fixed_noise: dict[int, Tensor] = {}
         self.ema: EMA[DiffusionModel] = EMA[DiffusionModel](self.model, decay=self.hparams.ema_decay)
+        self._last_validation_step = -1
 
     def on_fit_start(self) -> None:
         self.ema.shadow.to(self.device)
@@ -328,8 +329,51 @@ class DiffusionLightningModule(LightningModule):
     ) -> None:
         self.ema.update(self.model)
 
-        if self.global_step > 0 and self.global_step % self.hparams.validation_interval == 0:
+        if (
+            self.global_step > 0
+            and self.global_step % self.hparams.validation_interval == 0
+            and self.global_step != self._last_validation_step
+        ):
+            self._last_validation_step = self.global_step
+            self._log_validation()
             self._log_samples()
+
+    @torch.no_grad()
+    def _log_validation(self) -> None:
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if not isinstance(datamodule, MRIDataModule) or datamodule.validation_batch is None or self.global_rank != 0:
+            return
+        metrics: dict[str, list[Tensor]] = {}
+        for label, model in (("raw", self.model), ("ema", self.ema.shadow)):
+            was_training = model.training
+            model.eval()
+            try:
+                for index in range(len(datamodule.validation_batch["image"])):
+                    batch = {key: value[index : index + 1].to(self.device) for key, value in datamodule.validation_batch.items()}
+                    kind = batch["kind"]
+                    clean = model.normalize(batch["image"], kind)
+                    clean = torch.where(batch["background_mask"].unsqueeze(1), 0, clean)
+                    clean = model.clamp_x0(clean, kind, limit=model.train_clip)
+                    channel = create_channel_mask(kind)
+                    noise = (
+                        torch.randn(clean.shape, generator=torch.Generator().manual_seed(datamodule.base_seed + index)).to(clean) * channel
+                    )
+                    name = DatasetKind(int(kind.item())).name
+                    for sigma in (0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 2.0, 20.0):
+                        if not model.sigma_min <= sigma <= model.sigma_max:
+                            continue
+                        noisy = clean + sigma * noise
+                        prediction = model.denoise(noisy, clean.new_full((1,), sigma), kind)
+                        baseline = model.sigma_data**2 / (sigma**2 + model.sigma_data**2) * noisy
+                        weight = (sigma**2 + model.sigma_data**2) / (sigma * model.sigma_data) ** 2
+                        for metric, image in (("main_edm_mse", prediction), ("baseline_edm_mse", baseline)):
+                            value = weight * noise_loss(image, clean, None, channel)
+                            metrics.setdefault(f"val/{label}/{name}/sigma_{sigma:g}/{metric}", []).append(value)
+            finally:
+                model.train(was_training)
+        self.log_dict(
+            {key: torch.stack(values).mean() for key, values in metrics.items()}, on_step=True, on_epoch=False, rank_zero_only=True
+        )
 
     def _log_samples(self) -> None:
         if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
