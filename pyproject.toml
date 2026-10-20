@@ -19,6 +19,7 @@ dependencies = [
     "einops>=0.7.0",
     "kornia>=0.7.0",
     "matplotlib>3.9",
+    "mrpro @ git+https://github.com/PTB-MR/mrpro.git@nn-stacked-v2",
 ]
 
 [project.optional-dependencies]
@@ -29,10 +30,14 @@ viewer = ["fastapi>=0.100", "uvicorn[standard]>=0.20"]
 [project.scripts]
 score-qmri = "score_qmri.cli:main"
 score-qmri-viewer = "score_qmri.viewer:main"
+score-qmri-fid-stats = "score_qmri.metrics.fid_stats:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.version]
 source = "vcs"

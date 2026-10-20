@@ -2,10 +2,12 @@
 
 from typing import cast
 
+import pytest
 import torch
 
 from score_qmri.datasets.kind import DatasetKind
-from score_qmri.models.diffusion import DiffusionModel
+from score_qmri.models.diffusion import DiffusionConfig, DiffusionModel
+from score_qmri.models.unet import UNet
 from score_qmri.sampling.dps_sampler import DPSConfig, DPSSampler
 from score_qmri.sampling.protocols import LinearOperatorProtocol
 
@@ -56,18 +58,17 @@ class MaskingOperatorAdjoint:
 
 def test_dps_config_defaults():
     cfg = DPSConfig()
-    assert cfg.num_steps == 50
-    assert cfg.guidance_scale == 1.0
-    assert cfg.gradient_clipping == 1.0
+    assert cfg.num_steps == 1000
+    assert cfg.guidance_scale == 0.1
     assert cfg.normalize_gradient is True
     assert cfg.rho == 7.0
 
 
 def test_dps_config_custom():
-    cfg = DPSConfig(num_steps=20, rho=5.0, guidance_scale=0.1)
+    cfg = DPSConfig(num_steps=20, rho=5.0, guidance_scale=0.2)
     assert cfg.num_steps == 20
     assert cfg.rho == 5.0
-    assert cfg.guidance_scale == 0.1
+    assert cfg.guidance_scale == 0.2
 
 
 def test_identity_operator_protocol():
@@ -86,7 +87,8 @@ def test_masking_operator_has_required_methods():
 
 
 def test_dps_sampler_output_shape():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
     config = DPSConfig(num_steps=5, guidance_scale=0.1)
     sampler = DPSSampler(model, config)
 
@@ -103,7 +105,8 @@ def test_dps_sampler_output_shape():
 
 
 def test_dps_sampler_with_masking_operator():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
     config = DPSConfig(num_steps=3, guidance_scale=0.01)
     sampler = DPSSampler(model, config)
 
@@ -124,20 +127,20 @@ def test_dps_sampler_with_masking_operator():
 
 
 def test_dps_sampler_rejects_real_kinds():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
     sampler = DPSSampler(model)
 
     op = cast(LinearOperatorProtocol, IdentityOperator())
     y = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
 
-    import pytest
-
-    with pytest.raises(ValueError, match="only supports complex kinds"):
+    with pytest.raises(NotImplementedError, match="only implemented for complex kind"):
         sampler.sample(op, y, DatasetKind.T1MAP)
 
 
 def test_dps_sampler_with_initial_noise():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
     config = DPSConfig(num_steps=3)
     sampler = DPSSampler(model, config)
 
@@ -145,14 +148,15 @@ def test_dps_sampler_with_initial_noise():
     op = cast(LinearOperatorProtocol, IdentityOperator())
     y = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
 
-    initial_noise = torch.randn(B, 2, H, W)
-    result = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COIL_COMBINED, initial_noise=initial_noise)
+    noise = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
+    result = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COIL_COMBINED, noise=noise)
 
     assert result.shape == (B, 1, 1, H, W)
 
 
 def test_dps_sampler_deterministic_with_fixed_noise():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
     model.eval()  # Important: freeze normalizer stats
     config = DPSConfig(num_steps=3)
     sampler = DPSSampler(model, config)
@@ -160,17 +164,18 @@ def test_dps_sampler_deterministic_with_fixed_noise():
     op = cast(LinearOperatorProtocol, IdentityOperator())
     y = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
 
-    noise = torch.randn(1, 2, 32, 32)
+    noise = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
 
-    r1 = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE, initial_noise=noise.clone())
-    r2 = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE, initial_noise=noise.clone())
+    r1 = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE, noise=noise.clone())
+    r2 = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE, noise=noise.clone())
 
     assert torch.allclose(r1, r2, rtol=1e-5, atol=1e-5)
 
 
 def test_dps_gradient_flows():
     """Test that gradients are computed during sampling."""
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
     config = DPSConfig(num_steps=2, guidance_scale=1.0)
     sampler = DPSSampler(model, config)
 

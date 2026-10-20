@@ -16,7 +16,7 @@ across a wide range of sigma values.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum, auto
 from pathlib import Path
 from typing import Any, cast, overload
@@ -24,10 +24,9 @@ from typing import Any, cast, overload
 import torch
 from torch import Tensor
 
-from score_qmri.datasets.kind import DatasetKind, is_complex_kind, is_mapping_kind
+from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind, is_complex_kind, is_mapping_kind
 
 from .conditioning import ConditioningMLP
-from .unet import UNet
 
 DEFAULT_KIND_SCALES: dict[str, float] = {
     "T1MAP": 1 / 4,
@@ -53,32 +52,58 @@ class NormalizationConfig:
 
 
 @dataclass
-class EDMConfig:
-    """EDM/VE diffusion hyperparameters.
+class DiffusionConfig:
+    """Diffusion model configuration.
 
     Parameters
     ----------
-    sigma_min
-        Minimum sigma used in training and as the terminal sigma in sampling.
-        Must be > 0.
-    sigma_max
-        Maximum sigma used in training and as the starting sigma in sampling.
+    cond_dim
+        Conditioning dimension used by the conditioning MLP and UNet FiLM blocks.
+    num_kinds
+        Number of dataset kinds for the kind embedding.
+    sigma_min, sigma_max
+        Minimum and maximum sigmas used for training and sampling.
     sigma_data
-        Characteristic standard deviation of (normalized) training data.
-        Used only for EDM preconditioning.
+        Characteristic standard deviation of normalized training data.
     p_mean, p_std
-        Log-normal sigma sampling distribution for training:
-            log(sigma) ~ Normal(p_mean, p_std^2)
+        Log-normal sigma sampling distribution for training.
     rho
         Exponent for Karras (poly-rho) sigma schedule in sampling.
+    normalization
+        Normalization configuration.
+
+    Notes
+    -----
+    ``cond_dim`` is the single source of truth for the conditioning dimension.
+    It is used for both:
+
+    - the output dimension of :class:`~score_qmri.models.conditioning.ConditioningMLP`
+    - the FiLM/AdaGN conditioning dimension inside the UNet
     """
 
+    cond_dim: int = 128
+    num_kinds: int = NUM_DATASET_KINDS
     sigma_min: float = 0.001
     sigma_max: float = 20.0
     sigma_data: float = 0.2
     p_mean: float = -1.6
     p_std: float = 1.4
     rho: float = 7.0
+    normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> DiffusionConfig:
+        payload = dict(data)
+
+        normalization = payload.get("normalization")
+        if isinstance(normalization, Mapping):
+            payload["normalization"] = NormalizationConfig(**dict(normalization))
+        elif normalization is None:
+            payload.pop("normalization", None)
+        elif not isinstance(normalization, NormalizationConfig):
+            raise TypeError(f"Unsupported normalization type: {type(normalization)!r}")
+
+        return cls(**payload)
 
 
 class InputFormat(IntEnum):
@@ -197,6 +222,32 @@ def _create_noise(shape: tuple[int, ...], kind: Tensor, device: torch.device, dt
     return _apply_kind_constraints(noise, kind)
 
 
+def _extract_model_config(cli_config: Mapping[str, Any]) -> Mapping[str, Any]:
+    model_cfg = cli_config.get("model")
+    if isinstance(model_cfg, Mapping):
+        return model_cfg
+
+    raise ValueError("Checkpoint cli_config does not contain model configuration.")
+
+
+def _instantiate_unet_from_spec(unet_spec: Mapping[str, Any], *, cond_dim: int | None = None) -> torch.nn.Module:
+    import jsonargparse
+
+    spec = dict(unet_spec)
+    init_args = dict(spec.get("init_args", {}))
+    if cond_dim is not None:
+        init_args["cond_dim"] = int(cond_dim)
+    spec["init_args"] = init_args
+
+    parser = jsonargparse.ArgumentParser()
+    parser.add_subclass_arguments(torch.nn.Module, "unet")
+    cfg = parser.parse_object({"unet": spec})
+    unet = parser.instantiate_classes(cfg).unet
+    if not isinstance(unet, torch.nn.Module):
+        raise TypeError(f"UNet spec did not instantiate torch.nn.Module, got {type(unet)!r}")
+    return unet
+
+
 class DiffusionModel(torch.nn.Module):
     """VE/EDM diffusion model with continuous sigma.
 
@@ -210,28 +261,41 @@ class DiffusionModel(torch.nn.Module):
     - dataset kind embedding
     """
 
+    sigma_min: float
+    sigma_max: float
+    sigma_data: float
+    p_mean: float
+    p_std: float
+    rho: float
+    train_clip: float
+    sample_clip: float
+    _kind_scale_lookup: dict[int, float]
+
     def __init__(
         self,
-        base_channels: int = 64,
-        num_res_blocks: int = 2,
-        channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
-        cond_dim: int = 128,
-        num_kinds: int = 14,
-        attention_levels: tuple[int, ...] = (),
-        head_dim: int = 64,
-        edm: EDMConfig | None = None,
-        normalization: NormalizationConfig | None = None,
+        *,
+        unet: torch.nn.Module,
+        diffusion: DiffusionConfig | dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
 
-        self.edm = edm or EDMConfig()
-        self.sigma_min = float(self.edm.sigma_min)
-        self.sigma_max = float(self.edm.sigma_max)
-        self.sigma_data = float(self.edm.sigma_data)
-        self.p_mean = float(self.edm.p_mean)
-        self.p_std = float(self.edm.p_std)
+        if diffusion is None:
+            diffusion = DiffusionConfig()
+        elif isinstance(diffusion, DiffusionConfig):
+            diffusion = DiffusionConfig.from_mapping(diffusion.__dict__)
+        else:
+            if not isinstance(diffusion, dict):
+                raise TypeError(f"Unsupported diffusion type: {type(diffusion)!r}")
+            diffusion = DiffusionConfig.from_mapping(diffusion)
 
-        norm = normalization or NormalizationConfig()
+        self.sigma_min = float(diffusion.sigma_min)
+        self.sigma_max = float(diffusion.sigma_max)
+        self.sigma_data = float(diffusion.sigma_data)
+        self.p_mean = float(diffusion.p_mean)
+        self.p_std = float(diffusion.p_std)
+        self.rho = float(diffusion.rho)
+
+        norm = diffusion.normalization
         self.train_clip = float(norm.train_clip)
         self.sample_clip = float(norm.sample_clip)
 
@@ -241,18 +305,9 @@ class DiffusionModel(torch.nn.Module):
             kind_enum = DatasetKind[kind_name]
             self._kind_scale_lookup[int(kind_enum)] = float(scale)
 
-        self.cond_mlp = ConditioningMLP(cond_dim=cond_dim, num_kinds=num_kinds)
-        unet = UNet(
-            in_channels=2,
-            base_channels=base_channels,
-            num_res_blocks=num_res_blocks,
-            channel_mult=channel_mult,
-            cond_dim=cond_dim,
-            attention_levels=attention_levels,
-            head_dim=head_dim,
-        )
-        unet.to(memory_format=torch.channels_last)  # type: ignore[call-overload]
-        self.unet = torch.compile(unet, mode="reduce-overhead")
+        self.cond_mlp = ConditioningMLP(cond_dim=diffusion.cond_dim, num_kinds=diffusion.num_kinds)
+
+        self.unet = cast(torch.nn.Module, torch.compile(unet, mode="reduce-overhead"))
 
     @property
     def device(self) -> torch.device:
@@ -340,7 +395,11 @@ class DiffusionModel(torch.nn.Module):
         if x_2ch.is_contiguous(memory_format=torch.channels_last):
             x_in = x_in.contiguous(memory_format=torch.channels_last)
 
-        f_main, f_aux = self.unet(x_in, cond)
+        out = self.unet(x_in, cond=cond)
+        if isinstance(out, Tensor):
+            f_main, f_aux = out.chunk(2, dim=1)
+        else:
+            f_main, f_aux = out
 
         c_skip_b = c_skip.to(device=x_2ch.device, dtype=x_2ch.dtype).view(-1, 1, 1, 1)
         c_out_b = c_out.to(device=x_2ch.device, dtype=x_2ch.dtype).view(-1, 1, 1, 1)
@@ -589,3 +648,68 @@ class DiffusionModel(torch.nn.Module):
         """
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
         return self.load_state_dict(checkpoint)
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        path: str | Path,
+        *,
+        unet: torch.nn.Module | None = None,
+        map_location: torch.device | str | None = None,
+        strict: bool = True,
+        eval_mode: bool = True,
+    ) -> DiffusionModel:
+        """Instantiate a diffusion model from a Lightning-style checkpoint.
+
+        Parameters
+        ----------
+        path
+            Path to checkpoint file (.ckpt or .pt).
+        unet
+            Optional UNet instance. If not provided, the checkpoint must contain
+            ``cli_config.model.unet``.
+        map_location
+            Torch load map_location.
+        strict
+            Whether to require exact key matching when loading weights.
+        eval_mode
+            If True, puts the model in eval mode before returning.
+        """
+        if map_location is None:
+            map_location = "cuda" if torch.cuda.is_available() else "cpu"
+        checkpoint = torch.load(path, map_location=map_location, weights_only=False)
+        hparams = checkpoint.get("hyper_parameters")
+        if not isinstance(hparams, Mapping):
+            raise ValueError(
+                "Checkpoint is missing 'hyper_parameters'. Use DiffusionModel(...).load_checkpoint(...) or provide a Lightning checkpoint."
+            )
+
+        cli_config = checkpoint.get("cli_config")
+        model_cfg: Mapping[str, Any] | None = None
+        if isinstance(cli_config, Mapping):
+            model_cfg = _extract_model_config(cli_config)
+
+        diffusion = hparams.get("diffusion")
+        if diffusion is None:
+            raise ValueError("Checkpoint is missing 'hyper_parameters.diffusion'.")
+        if isinstance(diffusion, Mapping):
+            diffusion = DiffusionConfig.from_mapping(diffusion)
+        elif isinstance(diffusion, DiffusionConfig):
+            diffusion = DiffusionConfig.from_mapping(diffusion.__dict__)
+        else:
+            raise TypeError(f"Unsupported diffusion type: {type(diffusion)!r}")
+
+        if unet is None:
+            if model_cfg is None:
+                raise ValueError("Checkpoint is missing 'cli_config'; provide unet explicitly.")
+            unet_spec = model_cfg.get("unet")
+            if not isinstance(unet_spec, Mapping):
+                raise ValueError("Checkpoint cli_config is missing model.unet specification.")
+            unet = _instantiate_unet_from_spec(unet_spec, cond_dim=diffusion.cond_dim)
+
+        model = cls(unet=unet, diffusion=diffusion)
+
+        model.load_state_dict(checkpoint, strict=strict)
+        if eval_mode:
+            model.eval()
+        return model
