@@ -92,6 +92,7 @@ def _sliding_window(
     return x.as_strided(size=out_shape, stride=out_stride)
 
 
+@torch.compile
 def noise_loss(
     pred: Tensor,
     target: Tensor,
@@ -139,6 +140,7 @@ def noise_loss(
         raise ValueError(f"Invalid reduction: {reduction}. Must be 'mean' or 'none'")
 
 
+@torch.compile
 def l1_loss(
     pred: Tensor,
     target: Tensor,
@@ -186,6 +188,7 @@ def l1_loss(
         raise ValueError(f"Invalid reduction: {reduction}. Must be 'mean' or 'none'")
 
 
+@torch.compile
 def _ssim_loss_real(
     pred: Tensor,
     target: Tensor,
@@ -286,7 +289,7 @@ def ssim_loss(
 
     if channel_mask is not None:
         ch_weights = channel_mask[:, :, 0, 0]
-        loss = (loss_ch0 * ch_weights[:, 0:1] + loss_ch1 * ch_weights[:, 1:2]) / ch_weights.sum(dim=1, keepdim=True).clamp(min=1)
+        loss = (loss_ch0 * ch_weights[:, 0] + loss_ch1 * ch_weights[:, 1]) / ch_weights.sum(dim=1).clamp(min=1)
     else:
         loss = (loss_ch0 + loss_ch1) / 2
 

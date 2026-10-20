@@ -3,12 +3,14 @@
 import torch
 
 from score_qmri.datasets.kind import DatasetKind, is_complex_kind
-from score_qmri.models.diffusion import DiffusionModel
+from score_qmri.models.diffusion import DiffusionConfig, DiffusionModel
+from score_qmri.models.unet import UNet
 from score_qmri.sampling.edm_sampler import EDMSampler, create_fixed_noise
 
 
 def test_edm_sampler_shape():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
     sampler = EDMSampler(model, num_steps=10)
 
     shape = (2, 2, 32, 32)
@@ -18,7 +20,8 @@ def test_edm_sampler_shape():
 
 
 def test_edm_sampler_fixed_noise_deterministic():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
     sampler = EDMSampler(model, num_steps=10)
 
     shape = (1, 2, 32, 32)
@@ -31,7 +34,8 @@ def test_edm_sampler_fixed_noise_deterministic():
 
 
 def test_edm_real_kind_imag_stays_zero():
-    model = DiffusionModel(base_channels=16, num_res_blocks=1, channel_mult=(1, 2))
+    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
+    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
     sampler = EDMSampler(model, num_steps=10)
 
     shape = (1, 2, 32, 32)

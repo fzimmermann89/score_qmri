@@ -3,7 +3,7 @@
 import contextlib
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import h5py
 import numpy as np
@@ -15,11 +15,12 @@ from torch.utils.data import Dataset
 from .augmentation import AugmentationPipeline
 from .config import AugmentationConfig
 from .kind import DatasetKind
+from .utils import _pad_or_crop_centered
 
 
 def _compute_penumbra(signal_mask: np.ndarray, width: int) -> np.ndarray:
     """Compute penumbra mask using distance transform (O(N) vs O(k*N) for dilation)."""
-    dist: np.ndarray = distance_transform_edt(~signal_mask)
+    dist = cast(np.ndarray, distance_transform_edt(~signal_mask))
     return (dist > 0) & (dist <= width)
 
 
@@ -90,6 +91,16 @@ class BaseMRIDataset(Dataset[dict[str, Any]], ABC):
 
         if self.augmentation is not None:
             image, signal_mask = self.augmentation(image, signal_mask)
+
+        pad_width = max(signal_mask.shape) if self.penumbra_width < 0 else self.penumbra_width
+
+        if pad_width > 0:
+            h, w = signal_mask.shape
+            signal_mask = _pad_or_crop_centered(
+                signal_mask.float(),
+                h + 2 * pad_width,
+                w + 2 * pad_width,
+            ).bool()
 
         background_mask = ~signal_mask
 

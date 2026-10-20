@@ -1,7 +1,7 @@
 """Model components for diffusion and JEPA training."""
 
 from .conditioning import ConditioningMLP, SinusoidalEmbedding
-from .diffusion import DenoiseOutput, DenoiseOutputList, DiffusionModel, EDMConfig, NormalizationConfig
+from .diffusion import DenoiseOutput, DenoiseOutputList, DiffusionModel, NormalizationConfig
 from .jepa import JEPA, BlockMaskGenerator, JEPAConfig, Predictor, cosine_ema_schedule, jepa_loss
 from .unet import UNet
 from .vit import MLP, Attention, Block, PatchEmbed, RMSNorm, VisionTransformer
@@ -12,7 +12,6 @@ __all__ = [
     "DiffusionModel",
     "DenoiseOutput",
     "DenoiseOutputList",
-    "EDMConfig",
     "NormalizationConfig",
     "ConditioningMLP",
     "SinusoidalEmbedding",

@@ -119,8 +119,7 @@ class Attention(torch.nn.Module):
             d=self.head_dim,
         ).unbind(0)
 
-        dropout = 0.1 if self.training else 0.0
-        out: Tensor = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False, dropout_p=dropout)
+        out: Tensor = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False, dropout_p=0.0)
 
         out = rearrange(out, "b heads (h w) d -> b (heads d) h w", h=H, w=W)
         if x.is_contiguous(memory_format=torch.channels_last):
@@ -138,35 +137,49 @@ def get_groups(channels: int) -> int:
     return 1
 
 
-class ResBlock(torch.nn.Module):
-    """Residual block with FiLM conditioning.
+class AdaGN(torch.nn.Module):
+    """Adaptive GroupNorm (AdaGN) for diffusion conditioning.
 
-    Uses Pre-Norm architecture (GroupNorm -> SiLU -> Conv).
-    The last convolution is zero-initialized to act as identity at start.
+    Applies GroupNorm32 (affine=False) followed by per-channel scale/shift from a
+    conditioning vector.
+    """
+
+    def __init__(self, channels: int, cond_dim: int = 128) -> None:
+        super().__init__()
+        self.norm = GroupNorm32(get_groups(channels), channels, affine=False)
+        self.cond_proj = torch.nn.Linear(cond_dim, channels * 2)
+
+    def forward(self, x: Tensor, cond: Tensor) -> Tensor:
+        scale, shift = self.cond_proj(cond).chunk(2, dim=1)
+        scale = scale[:, :, None, None].to(dtype=x.dtype)
+        shift = shift[:, :, None, None].to(dtype=x.dtype)
+        h: Tensor = self.norm(x)
+        out: Tensor = h * (1 + scale) + shift
+        return out
+
+
+class ResBlock(torch.nn.Module):
+    """Residual block with AdaGN conditioning.
+
+    Uses Pre-Norm architecture with conditioning injected at both normalization
+    sites:
+
+    - AdaGN(in_ch) -> SiLU -> Conv(in_ch -> out_ch)
+    - AdaGN(out_ch) -> SiLU -> Conv(out_ch -> out_ch) (zero-init)
     """
 
     def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128) -> None:
         super().__init__()
-        groups1 = get_groups(in_ch)
-        self.block1 = torch.nn.Sequential(
-            GroupNorm32(groups1, in_ch),
-            torch.nn.SiLU(),
-            torch.nn.Conv2d(in_ch, out_ch, 3, padding=1),
-        )
-        groups2 = get_groups(out_ch)
-        self.block2 = torch.nn.Sequential(
-            GroupNorm32(groups2, out_ch),
-            torch.nn.SiLU(),
-            zero_module(torch.nn.Conv2d(out_ch, out_ch, 3, padding=1)),
-        )
-        self.cond_proj = torch.nn.Linear(cond_dim, out_ch * 2)
+        self.norm1 = AdaGN(in_ch, cond_dim)
+        self.conv1 = torch.nn.Conv2d(in_ch, out_ch, 3, padding=1)
+        self.norm2 = AdaGN(out_ch, cond_dim)
+        self.conv2 = zero_module(torch.nn.Conv2d(out_ch, out_ch, 3, padding=1))
+        self.act = torch.nn.SiLU()
         self.skip = torch.nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else torch.nn.Identity()
 
     def forward(self, x: Tensor, cond: Tensor) -> Tensor:
-        h: Tensor = self.block1(x)
-        scale, shift = self.cond_proj(cond)[:, :, None, None].chunk(2, dim=1)
-        h = h * (1 + scale) + shift
-        h = self.block2(h)
+        h: Tensor = self.conv1(self.act(self.norm1(x, cond)))
+        h = self.conv2(self.act(self.norm2(h, cond)))
         out: Tensor = self.skip(x) + h
         return out
 
@@ -282,14 +295,14 @@ class UNet(torch.nn.Module):
     def __init__(
         self,
         in_channels: int = 2,
-        base_channels: int = 64,
+        base_channels: int = 96,
         num_res_blocks: int = 2,
-        channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
+        channel_mult: tuple[int, ...] = (1, 2, 2, 4, 4, 4),
         cond_dim: int = 128,
         upsample_mode: UpsampleMode = "nearest",
-        attention_levels: tuple[int, ...] = (),
+        attention_levels: tuple[int, ...] = (-1, -2, -3),
         head_dim: int = 64,
-        positional_embedding: bool = True,
+        positional_embedding: bool = False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels

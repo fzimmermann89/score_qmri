@@ -1,0 +1,27 @@
+memory_budget: 0.99
+
+data:
+  init_args:
+    batch_size: 128
+
+model:
+  unet:
+    class_path: mrpro.nn.nets.UNet
+    init_args:
+      n_dim: 2
+      n_channels_in: 2
+      n_channels_out: 4
+      n_features: [96, 96, 192, 192, 384, 384]
+      encoder_blocks_per_scale: 2
+      attention_depths: [-1, -2, -3]
+      n_heads: 6
+  diffusion:
+    normalization:
+      kind_scales:
+        T1MAP: 0.25
+        T2MAP: 2
+        T2STARMAP: 8
+  learning_rate: 0.8e-4
+  weight_decay: 0.02
+  cond_dropout_rate: 0.2
+  ema_decay: 0.999

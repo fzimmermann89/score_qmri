@@ -62,6 +62,15 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         artifact.add_file(str(config_path))
         wandb.run.log_artifact(artifact)
 
+    def on_save_checkpoint(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        checkpoint: dict[str, Any],
+    ) -> None:
+        if hasattr(self.config, "as_dict"):
+            checkpoint["cli_config"] = self.config.as_dict()
+
 
 class DiffusionTrainer(Trainer):
     """Trainer with generate subcommand for sample generation."""
@@ -144,25 +153,42 @@ class DiffusionLightningCLI(LightningCLI):
     def add_arguments_to_parser(self, parser: jsonargparse.ArgumentParser) -> None:
         parser.add_argument(
             "--job_name",
-            type=str | None,
-            default=None,
-            help="Unique job name for resumption. WandB auto-generates if omitted.",
+            type=str,
+            required=True,
+            help="Unique job name for checkpointing and WandB.",
         )
         parser.add_argument("--wandb_project", type=str, default="mri-diffusion", help="WandB project name.")
         parser.add_argument("--wandb_entity", type=str | None, default=None, help="WandB entity name.")
         parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Base path for checkpoints.")
+        parser.add_argument("--memory_budget", type=float, default=1.0, help="activation checkpointing budget")
+        parser.link_arguments("model.diffusion.cond_dim", "model.unet.init_args.cond_dim", apply_on="parse")
         parser.set_defaults({"data": {"class_path": "score_qmri.datasets.lightning.MRIDataModule"}})
 
     def before_instantiate_classes(self) -> None:
+        config = self.config if self.subcommand is None else getattr(self.config, self.subcommand)
+
         if self.subcommand != "fit":
             return
 
-        config = getattr(self.config, self.subcommand)
+        functorch_mod = getattr(torch, "_functorch", None)
+        if functorch_mod is not None and hasattr(functorch_mod, "config"):
+            functorch_mod.config.activation_memory_budget = config.memory_budget
+
+        job_name = config.job_name
+        run_dir = Path(config.checkpoint_dir) / job_name
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        # Set default_root_dir so Lightning's HPC checkpoints go to job-specific dir
+        config.trainer.default_root_dir = str(run_dir)
+
+        # Store for later use in after_instantiate_classes
+        self._job_name = job_name
+        self._run_dir = run_dir
 
         logger = WandbLogger(
-            id=config.job_name,
-            name=config.job_name,
-            resume="allow" if config.job_name else None,
+            id=job_name,
+            name=job_name,
+            resume="allow",
             project=config.wandb_project,
             entity=config.wandb_entity,
             log_model=False,
@@ -171,7 +197,7 @@ class DiffusionLightningCLI(LightningCLI):
         config.trainer.logger = logger
 
         checkpoint_callback = ModelCheckpoint(
-            dirpath=config.checkpoint_dir,
+            dirpath=str(run_dir),
             monitor="train/loss",
             mode="min",
             save_top_k=3,
@@ -191,46 +217,19 @@ class DiffusionLightningCLI(LightningCLI):
             return
 
         config = getattr(self.config, self.subcommand)
-        logger = self.trainer.logger
 
-        if not isinstance(logger, WandbLogger):
+        if not isinstance(self.trainer.logger, WandbLogger):
             return
 
-        run_name = self._get_synced_run_name(config.job_name)
-        run_dir = Path(config.checkpoint_dir) / run_name
-
-        if self.trainer.global_rank == 0:
-            run_dir.mkdir(parents=True, exist_ok=True)
-        self.trainer.strategy.barrier("after_instantiate_mkdir")
-
-        for callback in self.trainer.callbacks:  # type: ignore[attr-defined]
-            if isinstance(callback, ModelCheckpoint):
-                callback.dirpath = str(run_dir)
-                break
-
-        last_ckpt = run_dir / "last.ckpt"
+        # Auto-resume from last.ckpt if exists and no explicit ckpt_path provided
+        last_ckpt = self._run_dir / "last.ckpt"
         if last_ckpt.exists() and not config.ckpt_path:
             print(f"Auto-resuming from: {last_ckpt}")
             self.trainer.ckpt_path = str(last_ckpt)
 
-        self._log_hyperparams(config, run_name)
+        self._log_hyperparams(config)
 
-    def _get_synced_run_name(self, job_name: str | None) -> str:
-        if job_name:
-            return job_name
-
-        if self.trainer.global_rank == 0:
-            logger = self.trainer.logger
-            assert isinstance(logger, WandbLogger)
-            run_name: str | None = logger.experiment.name
-        else:
-            run_name = None
-
-        synced_name = self.trainer.strategy.broadcast(run_name, src=0)
-        assert isinstance(synced_name, str)
-        return synced_name
-
-    def _log_hyperparams(self, config: jsonargparse.Namespace, run_name: str) -> None:
+    def _log_hyperparams(self, config: jsonargparse.Namespace) -> None:
         logger = self.trainer.logger
         if not isinstance(logger, WandbLogger):
             return
@@ -272,10 +271,9 @@ class DiffusionLightningCLI(LightningCLI):
 
         logger.log_hyperparams(
             {
-                "experiment/job_name": config.job_name,
-                "experiment/run_name": run_name,
+                "experiment/job_name": self._job_name,
                 "experiment/wandb_project": config.wandb_project,
-                "experiment/checkpoint_dir": config.checkpoint_dir,
+                "experiment/checkpoint_dir": str(self._run_dir),
             }
         )
 

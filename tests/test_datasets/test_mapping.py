@@ -9,6 +9,7 @@ import torch
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.datasets.mapping import MappingDataset
+from score_qmri.datasets.utils import _pad_or_crop_centered
 
 
 def test_mapping_dataset_counts_all_subjects(sample_h5_file_mapping: str) -> None:
@@ -91,6 +92,7 @@ def test_mapping_mask_is_nonzero_pixels(sample_h5_file_mapping: str) -> None:
     sample = dataset[0]
 
     image, background_mask = sample["image"], sample["background_mask"]
+    background_mask = _pad_or_crop_centered(background_mask.float(), *image.shape).bool()
     signal_mask = ~background_mask
     assert torch.all((image > 1e-6) == signal_mask)
 
