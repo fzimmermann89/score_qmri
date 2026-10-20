@@ -95,10 +95,10 @@ def pack_subjects(input_root: Path, output: Path, subjects: Sequence[str]) -> No
     sources = [input_root / f"s{subject}.h5" for subject in subjects]
     for source, subject in zip(sources, subjects, strict=True):
         with h5py.File(str(source), "r") as file:
-            data = file["classes"]
+            data = cast(h5py.Dataset, file["classes"])
             if data.shape != (*SHAPE, len(CLASSES) - 1) or data.dtype != np.uint8:
                 raise ValueError(f"Unexpected newer Brainweb schema: {source}")
-            if tuple(file.attrs["classnames"]) != CLASSES[1:] or int(file.attrs["subject"]) != int(subject):
+            if tuple(cast(Sequence[str], file.attrs["classnames"])) != CLASSES[1:] or int(cast(int, file.attrs["subject"])) != int(subject):
                 raise ValueError(f"Unexpected class names/subject: {source}")
     with exclusive_h5(output) as target:
         for source, subject in zip(sources, subjects, strict=True):
@@ -106,7 +106,7 @@ def pack_subjects(input_root: Path, output: Path, subjects: Sequence[str]) -> No
                 group = target.create_group(f"subject_{subject}")
                 for name, value in file.attrs.items():
                     group.attrs[name] = value
-                src = file["classes"]
+                src = cast(h5py.Dataset, file["classes"])
                 dst = _create_classes(group, src.shape)
                 for name, value in src.attrs.items():
                     dst.attrs[name] = value
