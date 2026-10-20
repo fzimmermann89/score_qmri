@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from score_qmri.models.diffusion import (
 from score_qmri.sampling.edm_sampler import EDMSampler, create_fixed_noise
 from score_qmri.training.ema import EMA
 from score_qmri.training.losses import create_channel_mask, l1_loss, noise_loss, ssim_loss
+from score_qmri.training.validation import VALIDATION_SIGMAS, denoising_metrics, validation_reference
 
 LOSS_ANOMALY_THRESHOLD = 100.0
 
@@ -68,7 +70,7 @@ class DiffusionLightningModule(LightningModule):
         learning_rate: float = 5e-5,
         weight_decay: float = 0.01,
         main_weight: float = 1.0,
-        aux_weight: float = 0.3,
+        aux_weight: float = 0.1,
         ssim_weight: float = 0.7,
         l1_weight: float = 0.3,
         penumbra_weight: float = 0.01,
@@ -79,6 +81,7 @@ class DiffusionLightningModule(LightningModule):
         warmup_steps: int = 2000,
         ema_decay: float = 0.9995,
         cond_dropout_rate: float = 0.1,
+        compile_model: bool = True,
     ) -> None:
         super().__init__()
         if diffusion is None:
@@ -109,20 +112,35 @@ class DiffusionLightningModule(LightningModule):
                 "warmup_steps": warmup_steps,
                 "ema_decay": ema_decay,
                 "cond_dropout_rate": cond_dropout_rate,
+                "compile_model": compile_model,
             }
         )
 
         self.model = DiffusionModel(
             unet=unet,
             diffusion=diffusion,
+            compile_model=compile_model,
         )
 
         self._fixed_noise: dict[int, Tensor] = {}
         self.ema: EMA[DiffusionModel] = EMA[DiffusionModel](self.model, decay=self.hparams.ema_decay)
-        self._last_validation_step = -1
+        self._ema_step = 0
+        self._validation_cases: dict[str, Tensor] | None = None
+        self._validation_sha256: str | None = None
 
     def on_fit_start(self) -> None:
         self.ema.shadow.to(self.device)
+        self._ema_step = self.global_step
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if isinstance(datamodule, MRIDataModule) and datamodule.validation_batch is not None:
+            self._validation_cases = datamodule.validation_batch
+            digest = sha256()
+            for key, value in sorted(self._validation_cases.items()):
+                digest.update(key.encode())
+                digest.update(value.cpu().numpy().tobytes())
+            self._validation_sha256 = digest.hexdigest()
+            if self.logger is not None:
+                self.logger.log_hyperparams({"validation/cases_sha256": self._validation_sha256})
 
         if not isinstance(self.logger, WandbLogger) or self.global_rank != 0:
             return
@@ -157,6 +175,12 @@ class DiffusionLightningModule(LightningModule):
         return batch
 
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
+        finite_gradients = [torch.isfinite(p.grad).all() for p in self.model.parameters() if p.grad is not None]
+        if finite_gradients and not torch.stack(finite_gradients).all():
+            scaler = getattr(getattr(self._trainer, "precision_plugin", None), "scaler", None)
+            if scaler is not None and scaler.is_enabled():
+                return
+            raise FloatingPointError("Nonfinite training gradients; optimizer update aborted")
         if self.global_step % 100 != 0:
             return
 
@@ -195,6 +219,7 @@ class DiffusionLightningModule(LightningModule):
         kind = batch["kind"]
 
         signal_mask = ~background_mask
+        valid_samples = signal_mask.sum(dim=(-2, -1)) >= 1000
 
         x0_norm = self.model.normalize(x0_raw, kind)
         x0_norm = torch.where(signal_mask.unsqueeze(1), x0_norm, torch.zeros_like(x0_norm))
@@ -213,12 +238,8 @@ class DiffusionLightningModule(LightningModule):
             cond_mask = torch.bernoulli(torch.full((x0.shape[0],), keep_prob, device=self.device)).unsqueeze(1)
 
         output = self.model(x_sigma, sigma, kind, cond_mask=cond_mask)
-
-        valid_counts = signal_mask.sum(dim=(-2, -1))
-        valid_samples = valid_counts >= 1000
-        n_valid = int(valid_samples.sum().item())
-        if n_valid == 0:
-            print(f"[Rank {self.global_rank}] Skipping step {self.global_step}: no valid samples")
+        self.log("train/skipped_batch", (~valid_samples.any()).float(), sync_dist=False)
+        if not valid_samples.any():
             return torch.nan_to_num(output.x0_main.sum() + output.x0_aux.sum()) * 0.0
 
         x0_v = x0[valid_samples]
@@ -237,37 +258,38 @@ class DiffusionLightningModule(LightningModule):
 
         channel_mask = create_channel_mask(kind_v)
 
-        # EDM main loss (weighted L2 on x0_main)
+        # EDM weighting depends on sigma only. Clean-target spatial weights
+        # would change the conditional mean required for a prior score.
         sigma_data = torch.tensor(self.model.sigma_data, device=self.device, dtype=torch.float32)
         sigma_f = sigma_v.float()
         w = (sigma_f.square() + sigma_data.square()) / (sigma_f * sigma_data).square().clamp(min=1e-8)
 
-        main_mse = noise_loss(x0_main_v, x0_v, loss_weight, channel_mask, reduction="none")
+        main_mse = noise_loss(x0_main_v, x0_v, None, channel_mask, reduction="none")
         loss_main = (main_mse * w).mean()
 
-        # Auxiliary SSIM+L1 (weighted towards low sigma)
-        sigma_floor = float(self.model.sigma_min)
-        aux_w = 1.0 / (sigma_f.square() + sigma_floor**2)
+        total_loss = self.hparams.main_weight * loss_main
+        metrics = {"train/main_l2": loss_main}
+        if self.hparams.aux_weight != 0:
+            # Auxiliary SSIM+L1 is optional: its shared-trunk gradients can
+            # compete with the conditional-mean objective at low sigma.
+            # sqrt(EDM weight) cancels c_out in the raw-network L1 gradient,
+            # removing its former 1/sigma amplification at low noise.
+            aux_w = w.sqrt()
+            loss_l1 = l1_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
+            loss_ssim = ssim_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
+            aux_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
+            total_loss = total_loss + self.hparams.aux_weight * (aux_loss * aux_w).mean()
+            metrics.update({"train/aux_l1": loss_l1.mean(), "train/aux_ssim": 1.0 - loss_ssim.mean()})
 
-        loss_l1 = l1_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
-        loss_ssim = ssim_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
-        aux_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
-        loss_aux = (aux_loss * aux_w).mean()
-
-        total_loss = self.hparams.main_weight * loss_main + self.hparams.aux_weight * loss_aux
-
-        if not torch.isfinite(total_loss) or total_loss > LOSS_ANOMALY_THRESHOLD:
-            loss_val = total_loss.item() if torch.isfinite(total_loss) else float("nan")
-            print(f"[Rank {self.global_rank}] Skipping step {self.global_step}: loss={loss_val:.2f}")
-            return torch.nan_to_num(output.x0_main.sum() + output.x0_aux.sum()) * 0.0
+        if not torch.isfinite(total_loss):
+            raise FloatingPointError("Nonfinite training loss; optimizer update aborted")
+        # Finite large losses are logged and trained with the configured gradient
+        # clipping. Rejecting examples by their loss would change the objective.
+        self.log("train/loss_anomaly", (total_loss.detach() > LOSS_ANOMALY_THRESHOLD).float(), sync_dist=False)
 
         self.log("train/loss", total_loss, prog_bar=True, sync_dist=False)
         self.log_dict(
-            {
-                "train/main_l2": loss_main,
-                "train/aux_l1": loss_l1.mean(),
-                "train/aux_ssim": 1.0 - loss_ssim.mean(),
-            },
+            metrics,
             prog_bar=True,
             rank_zero_only=True,
         )
@@ -327,48 +349,34 @@ class DiffusionLightningModule(LightningModule):
         batch: Any,
         batch_idx: int,
     ) -> None:
+        if self.global_step <= self._ema_step:
+            return
         self.ema.update(self.model)
+        self._ema_step = self.global_step
 
-        if (
-            self.global_step > 0
-            and self.global_step % self.hparams.validation_interval == 0
-            and self.global_step != self._last_validation_step
-        ):
-            self._last_validation_step = self.global_step
+        if self.global_step > 0 and self.global_step % self.hparams.validation_interval == 0:
             self._log_validation()
             self._log_samples()
 
     @torch.no_grad()
     def _log_validation(self) -> None:
         datamodule = getattr(self.trainer, "datamodule", None)
-        if not isinstance(datamodule, MRIDataModule) or datamodule.validation_batch is None or self.global_rank != 0:
+        if self._validation_cases is None or not isinstance(datamodule, MRIDataModule) or self.global_rank != 0:
             return
         metrics: dict[str, list[Tensor]] = {}
         for label, model in (("raw", self.model), ("ema", self.ema.shadow)):
             was_training = model.training
             model.eval()
             try:
-                for index in range(len(datamodule.validation_batch["image"])):
-                    batch = {key: value[index : index + 1].to(self.device) for key, value in datamodule.validation_batch.items()}
-                    kind = batch["kind"]
-                    clean = model.normalize(batch["image"], kind)
-                    clean = torch.where(batch["background_mask"].unsqueeze(1), 0, clean)
-                    clean = model.clamp_x0(clean, kind, limit=model.train_clip)
-                    channel = create_channel_mask(kind)
-                    noise = (
-                        torch.randn(clean.shape, generator=torch.Generator().manual_seed(datamodule.base_seed + index)).to(clean) * channel
-                    )
-                    name = DatasetKind(int(kind.item())).name
-                    for sigma in (0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 2.0, 20.0):
-                        if not model.sigma_min <= sigma <= model.sigma_max:
-                            continue
-                        noisy = clean + sigma * noise
-                        prediction = model.denoise(noisy, clean.new_full((1,), sigma), kind)
-                        baseline = model.sigma_data**2 / (sigma**2 + model.sigma_data**2) * noisy
-                        weight = (sigma**2 + model.sigma_data**2) / (sigma * model.sigma_data) ** 2
-                        for metric, image in (("main_edm_mse", prediction), ("baseline_edm_mse", baseline)):
-                            value = weight * noise_loss(image, clean, None, channel)
-                            metrics.setdefault(f"val/{label}/{name}/sigma_{sigma:g}/{metric}", []).append(value)
+                for index in range(len(self._validation_cases["image"])):
+                    batch = {key: value[index : index + 1].to(self.device) for key, value in self._validation_cases.items()}
+                    clean = validation_reference(model, batch)
+                    noise = torch.randn(clean.shape, generator=torch.Generator().manual_seed(datamodule.base_seed + index)).to(clean)
+                    kind = DatasetKind(int(batch["kind"].item())).name
+                    for sigma in VALIDATION_SIGMAS:
+                        if model.sigma_min <= sigma <= model.sigma_max:
+                            for name, value in denoising_metrics(model, clean, batch["kind"], sigma, noise).items():
+                                metrics.setdefault(f"val/{label}/{kind}/sigma_{sigma:g}/{name}", []).append(value.mean())
             finally:
                 model.train(was_training)
         self.log_dict(
@@ -493,6 +501,7 @@ class DiffusionLightningModule(LightningModule):
 
     def on_save_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         checkpoint["ema"] = self.ema.state_dict()
+        checkpoint["validation_cases_sha256"] = self._validation_sha256
         from score_qmri.utils.checkpoint import plain_config
 
         for key in ("hyper_parameters", "datamodule_hyper_parameters"):
@@ -500,5 +509,8 @@ class DiffusionLightningModule(LightningModule):
                 checkpoint[key] = plain_config(checkpoint[key])
 
     def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        from score_qmri.utils.checkpoint import remap_compiled_state
+
+        checkpoint["state_dict"] = remap_compiled_state(checkpoint["state_dict"], self.state_dict())
         if "ema" in checkpoint:
             self.ema.load_state_dict(checkpoint["ema"])

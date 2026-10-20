@@ -138,21 +138,100 @@ def test_training_step_all_invalid_samples(module):
     }
 
     loss = module.training_step(batch, 0)
-    assert loss is not None
-    assert torch.isfinite(loss)
+    assert loss.requires_grad and loss.item() == 0
+    loss.backward()
+    assert all(parameter.grad is None or torch.count_nonzero(parameter.grad) == 0 for parameter in module.model.parameters())
 
 
-def test_training_step_no_skip_on_partial_invalid(module):
-    background_mask = torch.zeros(4, 64, 64, dtype=torch.bool)
-    background_mask[:2] = True
-    background_mask[:2, :5, :5] = False
+def test_main_score_loss_is_independent_of_foreground_weights(module):
+    """Clean-target coordinate weights must not bias the denoising conditional mean."""
+    background = torch.zeros(1, 64, 64, dtype=torch.bool)
+    background[:, :16] = True
+    penumbra = torch.zeros_like(background)
+    penumbra[:, 16:32] = True
     batch = {
-        "image": torch.randn(4, 2, 64, 64),
-        "penumbra_mask": torch.zeros(4, 64, 64, dtype=torch.bool),
-        "background_mask": background_mask,
-        "kind": torch.tensor([0, 0, 0, 0]),
+        "image": 0.1 * torch.randn(1, 2, 64, 64),
+        "background_mask": background,
+        "penumbra_mask": penumbra,
+        "kind": torch.tensor([1]),
     }
+    module.hparams.aux_weight = 0.0
+    module.hparams.background_weight = 0.05
+    module.hparams.penumbra_weight = 0.01
+    torch.manual_seed(123)
+    weighted = module.training_step(batch, 0)
+    module.hparams.background_weight = 1.0
+    module.hparams.penumbra_weight = 1.0
+    torch.manual_seed(123)
+    uniform = module.training_step(batch, 0)
+    torch.testing.assert_close(weighted, uniform, rtol=1e-6, atol=1e-8)
 
-    for _ in range(5):
-        loss = module.training_step(batch, 0)
-        assert loss is not None
+
+def test_ema_updates_once_per_optimizer_step(module, monkeypatch):
+    from types import SimpleNamespace
+
+    trainer = SimpleNamespace(global_step=0)
+    module._trainer = trainer
+    updates = []
+    monkeypatch.setattr(module.ema, "update", lambda model: updates.append(trainer.global_step))
+    for step in [0, 0, 1, 1, 2, 2]:
+        trainer.global_step = step
+        module.on_train_batch_end(None, None, 0)
+    assert updates == [1, 2]
+
+
+def test_nonfinite_loss_aborts_instead_of_returning_zero(module, monkeypatch):
+    value = float("nan")
+    monkeypatch.setattr(
+        "score_qmri.training.lightning_module.noise_loss", lambda prediction, *args, **kwargs: prediction.flatten(1).sum(1) * value
+    )
+    module.hparams.aux_weight = 0
+    batch = {
+        "image": torch.randn(1, 2, 64, 64),
+        "background_mask": torch.zeros(1, 64, 64, dtype=torch.bool),
+        "penumbra_mask": torch.zeros(1, 64, 64, dtype=torch.bool),
+        "kind": torch.tensor([1]),
+    }
+    with pytest.raises(FloatingPointError, match="training loss"):
+        module.training_step(batch, 0)
+
+
+def test_large_finite_loss_is_trained_instead_of_silently_rejected(module, monkeypatch):
+    monkeypatch.setattr(
+        "score_qmri.training.lightning_module.noise_loss", lambda prediction, *args, **kwargs: prediction.flatten(1).sum(1) * 0 + 1000
+    )
+    module.hparams.aux_weight = 0
+    batch = {
+        "image": torch.randn(1, 2, 64, 64),
+        "background_mask": torch.zeros(1, 64, 64, dtype=torch.bool),
+        "penumbra_mask": torch.zeros(1, 64, 64, dtype=torch.bool),
+        "kind": torch.tensor([1]),
+    }
+    loss = module.training_step(batch, 0)
+    assert loss.requires_grad and loss > 100
+
+
+@pytest.mark.parametrize("scaled", [False, True])
+def test_nonfinite_gradients_do_not_reach_adamw(module, scaled):
+    from types import SimpleNamespace
+
+    optimizer = module.configure_optimizers()["optimizer"]
+    parameter = next(module.model.parameters())
+    before = parameter.detach().clone()
+    scaler = torch.amp.GradScaler("cpu") if scaled else None
+    module._trainer = SimpleNamespace(precision_plugin=SimpleNamespace(scaler=scaler))
+    if scaler is not None:
+        scaler.scale(parameter.sum()).backward()
+    parameter.grad = torch.full_like(parameter, float("nan"))
+    if scaler is None:
+        with pytest.raises(FloatingPointError, match="training gradients"):
+            module.on_before_optimizer_step(optimizer)
+    else:
+        scale = scaler.get_scale()
+        scaler.unscale_(optimizer)
+        module.on_before_optimizer_step(optimizer)
+        scaler.step(optimizer)
+        scaler.update()
+        assert scaler.get_scale() < scale
+    assert torch.equal(parameter, before)
+    assert not optimizer.state

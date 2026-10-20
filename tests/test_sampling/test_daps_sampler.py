@@ -1,168 +1,179 @@
-"""Tests for DAPS sampler."""
+"""Verify DAPS samples its stated conditional target with full preconditioned noise."""
 
-from typing import cast
+from dataclasses import replace
 
 import pytest
 import torch
 
-from score_qmri.datasets.kind import DatasetKind
-from score_qmri.models.diffusion import DiffusionConfig, DiffusionModel
-from score_qmri.models.unet import UNet
-from score_qmri.sampling.daps_sampler import DAPSConfig, DAPSSampler
-from score_qmri.sampling.protocols import LinearOperatorProtocol
+from score_qmri.sampling import DAPSConfig, DAPSSampler
+
+from .test_dps_sampler import GaussianPrior, MatrixOperator, assert_gaussian_posterior
 
 
-class IdentityOperator:
-    def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
-        return (x,)
+class BimodalPrior:
+    device = torch.device("cpu")
+    sigma_min = 0.001
+    sigma_max = 20.0
+    sigma_data = 0.2
+
+    def denoise(self, x, sigma, kind):
+        sigma = sigma.expand(len(x))
+        variance = 0.01 + sigma[:, None].square()
+        centers = x.new_tensor([[-0.15, -0.3], [0.15, 0.3]])
+        real = x[:, 0, 0]
+        weights = (-0.5 * (real[:, None] - centers).square().sum(-1) / variance).softmax(-1)
+        gain = 0.01 / variance
+        return torch.stack([gain * real + (1 - gain) * (weights @ centers), gain * x[:, 1, 0]], dim=1).unsqueeze(2)
+
+    def score(self, x, sigma, kind):
+        sigma = sigma.expand(len(x))
+        return (self.denoise(x, sigma, kind) - x) / sigma[:, None, None, None].square()
+
+
+class HeterogeneousGaussianPrior(GaussianPrior):
+    def __init__(self):
+        super().__init__(torch.diag(torch.tensor([0.04] * 8 + [1e-6] * 8, dtype=torch.float64)))
+        self.variance = self.covariance.diag().reshape(1, 1, 1, 16)
+
+    def denoise(self, x, sigma, kind):
+        variance = self.variance + sigma.expand(len(x))[:, None, None, None].square()
+        return x * self.variance / variance
+
+    def score(self, x, sigma, kind):
+        return -x / (self.variance + sigma.expand(len(x))[:, None, None, None].square())
+
+
+class UninformativeOperator:
+    def __call__(self, x):
+        return (torch.zeros_like(x),)
 
     @property
-    def H(self) -> "IdentityOperator":
+    def H(self):
         return self
 
 
-class MaskingOperator:
-    def __init__(self, mask: torch.Tensor) -> None:
-        self.mask = mask
-
-    def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
-        k = torch.fft.fft2(x, norm="ortho")
-        return (k * self.mask,)
-
-    @property
-    def H(self) -> "MaskingOperatorAdjoint":
-        return MaskingOperatorAdjoint(self.mask)
-
-
-class MaskingOperatorAdjoint:
-    def __init__(self, mask: torch.Tensor) -> None:
-        self.mask = mask
-
-    def __call__(self, y: torch.Tensor) -> tuple[torch.Tensor, ...]:
-        return (torch.fft.ifft2(y * self.mask.conj(), norm="ortho"),)
-
-    @property
-    def H(self) -> MaskingOperator:
-        return MaskingOperator(self.mask)
+def test_stiff_background_does_not_freeze_foreground_mixing():
+    model = HeterogeneousGaussianPrior()
+    initial = torch.zeros(2048, 1, 1, 1, 16, dtype=torch.complex128)
+    cfg = DAPSConfig(tau=0.01, num_steps=3, reverse_steps=2)
+    # An uninformative likelihood leaves the exact smoothed prior as posterior.
+    # Starting at its mean requires generating the missing foreground variance.
+    draws = DAPSSampler(model, cfg).sample(
+        UninformativeOperator(), initial, 1, initial=initial, generator=torch.Generator().manual_seed(71)
+    )[:, 0, 0, 0]
+    target_variance = model.variance.flatten() + model.sigma_min**2
+    for part in [draws.real, draws.imag]:
+        assert torch.max((part.var(0) / target_variance - 1).abs()) < 5 * (2 / (len(part) - 1)) ** 0.5
+        assert torch.max(part.mean(0).abs() / (target_variance / len(part)).sqrt()) < 5
 
 
-def test_identity_operator_protocol():
-    op = IdentityOperator()
-    assert isinstance(op, LinearOperatorProtocol)
-    assert isinstance(op.H, LinearOperatorProtocol)
+def test_rotated_stiff_prior_preserves_posterior_variance():
+    # Too few Rademacher probes can miss a stiff direction after rotation,
+    # even for an exact Gaussian score. The resulting step can be unstable.
+    rotation = torch.tensor([[1.0, -1.0], [1.0, 1.0]], dtype=torch.float64) / 2**0.5
+    variance = torch.tensor([0.04, 1e-6], dtype=torch.float64)
+    model = GaussianPrior(rotation @ variance.diag() @ rotation.mT)
+    target_variance = variance + model.sigma_min**2
+    generator = torch.Generator().manual_seed(71)
+    noise = torch.complex(
+        torch.randn(2048, 2, generator=generator, dtype=torch.float64),
+        torch.randn(2048, 2, generator=generator, dtype=torch.float64),
+    )
+    initial = ((noise * target_variance.sqrt()) @ rotation.to(noise).mT).reshape(2048, 1, 1, 1, 2)
+    draws = DAPSSampler(model, DAPSConfig(tau=0.01, num_steps=3, reverse_steps=2)).sample(
+        UninformativeOperator(), torch.zeros_like(initial), 1, initial=initial, generator=generator
+    )[:, 0, 0, 0] @ rotation.to(noise)
+    for part in [draws.real, draws.imag]:
+        assert torch.max((part.var(0) / target_variance - 1).abs()) < 5 * (2 / (len(part) - 1)) ** 0.5
+        assert torch.max(part.mean(0).abs() / (target_variance / len(part)).sqrt()) < 5
 
 
-def test_masking_operator_has_required_methods():
-    mask = torch.ones(1, 1, 1, 32, 32)
-    op = MaskingOperator(mask)
-    assert callable(op)
-    assert hasattr(op, "H")
-    assert callable(op.H)
+def test_daps_corrects_biased_bimodal_initialization():
+    # The measurement changes mode probabilities; checking Gaussian moments
+    # alone cannot detect a sampler that keeps the prior's equal mode weights.
+    model = BimodalPrior()
+    operator = MatrixOperator(torch.diag(torch.tensor([1.0, 0.0], dtype=torch.float64)))
+    y = torch.tensor([0.1 + 0j, 0j], dtype=torch.complex128).reshape(1, 1, 1, 1, 2)
+    cfg = DAPSConfig(tau=0.1, num_steps=16, reverse_steps=8)
+    measurement = y.expand(2048, -1, -1, -1, -1)
+    initial = torch.full_like(measurement, 0.15 + 0j)
+    initial[..., 1] = 0.3
+    draws = (
+        DAPSSampler(model, cfg)
+        .sample(operator, measurement, 1, initial=initial, generator=torch.Generator().manual_seed(62))[:, 0, 0, 0]
+        .real
+    )
+    variance = 0.01 + model.sigma_min**2
+    means = torch.tensor([[-0.15, -0.3], [0.15, 0.3]], dtype=torch.float64)
+    weights = (-0.5 * (0.1 - means[:, 0]).square() / (variance + cfg.tau**2)).softmax(0)
+    means[:, 0] = (means[:, 0] * cfg.tau**2 + 0.1 * variance) / (variance + cfg.tau**2)
+    component_variance = torch.tensor([variance * cfg.tau**2 / (variance + cfg.tau**2), variance], dtype=torch.float64)
+    mean = (weights[:, None] * means).sum(0)
+    centered = means - mean
+    covariance = component_variance.diag() + (weights[:, None, None] * centered[:, :, None] * centered[:, None, :]).sum(0)
+    normal = torch.distributions.Normal(means[:, 1], variance**0.5)
+    positive_probability = (weights * (1 - normal.cdf(torch.tensor(0.0)))).sum()
+    standard_error = (positive_probability * (1 - positive_probability) / len(draws)).sqrt()
+    assert abs((initial[:, 0, 0, 0, 1].real > 0).double().mean() - positive_probability) > 5 * standard_error
+    assert abs((draws[:, 1] > 0).double().mean() - positive_probability) < 5 * standard_error
+    assert torch.max((draws.mean(0) - mean).abs() / (covariance.diag() / len(draws)).sqrt()) < 5
+    scale = covariance.diag().sqrt()
+    assert torch.max((torch.cov(draws.mT) - covariance).abs() / (scale[:, None] * scale[None, :])) < 0.1
 
 
-def test_daps_sampler_output_shape():
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    config = DAPSConfig(anneal_steps=3, reverse_steps=1, langevin_steps=2, tau=1.0)
-    sampler = DAPSSampler(model, config)
-
-    B, H, W = 2, 32, 32
-    op = IdentityOperator()
-    y = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
-
-    result = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE)
-
-    assert result.shape == (B, 1, 1, H, W)
-    assert result.dtype == torch.complex64
+def test_daps_recovers_gaussian_posterior_and_cross_covariance():
+    covariance = torch.tensor([[0.04, 0.012], [0.012, 0.07]], dtype=torch.float64)
+    model = GaussianPrior(covariance)
+    op = MatrixOperator(torch.tensor([[1.0, 0.4], [0.0, 0.0]], dtype=torch.float64))
+    y = torch.tensor([0.15 + 0.05j, 0j], dtype=torch.complex128).reshape(1, 1, 1, 1, 2)
+    cfg = DAPSConfig(tau=0.05, num_steps=8, reverse_steps=4, cg_rtol=1e-10)
+    draws = DAPSSampler(model, cfg).sample(op, y.expand(2048, -1, -1, -1, -1), 1, generator=torch.Generator().manual_seed(73))
+    prior_sigma = model.sigma_min
+    prior_covariance = model.covariance + prior_sigma**2 * torch.eye(2, dtype=torch.float64)
+    assert_gaussian_posterior(draws, prior_covariance, op, y, cfg.tau)
 
 
-def test_daps_sampler_with_masking_operator():
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    config = DAPSConfig(anneal_steps=2, reverse_steps=1, langevin_steps=2, tau=1.0)
-    sampler = DAPSSampler(model, config)
-
-    B, H, W = 1, 32, 32
-    mask = (torch.rand(1, 1, 1, H, W) > 0.5).float()
-    op = cast(LinearOperatorProtocol, MaskingOperator(mask))
-    y = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
-
-    result = sampler.sample(op, y, DatasetKind.COMPLEX_T2W_COILWISE)
-
-    assert result.shape == (B, 1, 1, H, W)
-    assert result.dtype == torch.complex64
-
-
-def test_daps_sampler_rejects_real_kinds():
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    sampler = DAPSSampler(model)
-
-    op = IdentityOperator()
-    y = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
-
-    with pytest.raises(NotImplementedError, match="only supports complex kinds"):
-        sampler.sample(op, y, DatasetKind.T1MAP)
+def test_warm_started_finite_gibbs_chain_preserves_posterior_draws():
+    model = GaussianPrior(torch.tensor([[0.04, 0.012], [0.012, 0.07]], dtype=torch.float64))
+    op = MatrixOperator(torch.tensor([[1.0, 0.4], [0.0, 0.0]], dtype=torch.float64))
+    y = torch.tensor([0.15 + 0.05j, 0j], dtype=torch.complex128).reshape(1, 1, 1, 1, 2)
+    cfg = DAPSConfig(tau=0.05, num_steps=3, langevin_steps=2, langevin_step=0.05, cg_rtol=1e-10)
+    prior_sigma = model.sigma_min
+    prior_covariance = model.covariance + prior_sigma**2 * torch.eye(2, dtype=torch.float64)
+    covariance = torch.linalg.inv(torch.linalg.inv(prior_covariance) + op.matrix.mT @ op.matrix / cfg.tau**2)
+    mean = covariance.to(y) @ op.matrix.mT.to(y) @ y.flatten() / cfg.tau**2
+    generator = torch.Generator().manual_seed(91)
+    noise = torch.complex(
+        torch.randn(2048, 2, generator=generator, dtype=torch.float64), torch.randn(2048, 2, generator=generator, dtype=torch.float64)
+    )
+    initial = (noise @ torch.linalg.cholesky(covariance).to(y).mT + mean).reshape(2048, 1, 1, 1, 2)
+    draws = DAPSSampler(model, cfg).sample(
+        op,
+        y.expand(2048, -1, -1, -1, -1),
+        1,
+        generator=generator,
+        initial=initial,
+    )
+    assert_gaussian_posterior(draws, prior_covariance, op, y, cfg.tau)
 
 
-def test_daps_sampler_with_noise():
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    config = DAPSConfig(anneal_steps=2, reverse_steps=1, langevin_steps=2)
-    sampler = DAPSSampler(model, config)
-
-    B, H, W = 1, 32, 32
-    op = IdentityOperator()
-    y = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
-
-    noise = torch.randn(B, 1, 1, H, W, dtype=torch.complex64)
-    result = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COIL_COMBINED, noise=noise)
-
-    assert result.shape == (B, 1, 1, H, W)
-
-
-def test_daps_gradient_flows():
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    config = DAPSConfig(anneal_steps=2, reverse_steps=1, langevin_steps=2, tau=1.0)
-    sampler = DAPSSampler(model, config)
-
-    op = IdentityOperator()
-    y = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
-
-    result = sampler.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE)
-    assert result is not None
+def test_daps_is_invariant_to_measurement_units_and_retains_randomness():
+    model = GaussianPrior()
+    matrix = torch.tensor([[1.0, 0.4], [0.0, 0.2]], dtype=torch.float64)
+    y = torch.full((2, 1, 1, 1, 2), 0.15 + 0.05j, dtype=torch.complex128)
+    cfg = DAPSConfig(tau=0.05, num_steps=3, langevin_steps=3, cg_rtol=1e-10)
+    first = DAPSSampler(model, cfg).sample(MatrixOperator(matrix), y, 1, generator=torch.Generator().manual_seed(8))
+    scaled = DAPSSampler(model, replace(cfg, tau=cfg.tau * 10)).sample(
+        MatrixOperator(matrix * 10), y * 10, 1, generator=torch.Generator().manual_seed(8)
+    )
+    repeated = DAPSSampler(model, cfg).sample(MatrixOperator(matrix), y, 1, generator=torch.Generator().manual_seed(8))
+    other = DAPSSampler(model, cfg).sample(MatrixOperator(matrix), y, 1, generator=torch.Generator().manual_seed(9))
+    torch.testing.assert_close(first, scaled, rtol=1e-9, atol=1e-10)
+    torch.testing.assert_close(first, repeated, rtol=0, atol=0)
+    assert not torch.equal(first, other)
 
 
-def test_daps_lr_decays():
-    """_lr_at decays from langevin_lr to langevin_lr * lr_min_ratio."""
-    cfg = DAPSConfig(langevin_lr=1e-3, lr_min_ratio=0.1)
-    sampler = DAPSSampler.__new__(DAPSSampler)
-    sampler.cfg = cfg
-
-    lr_early = sampler._lr_at(0.0)
-    lr_late = sampler._lr_at(1.0)
-
-    assert lr_early == pytest.approx(cfg.langevin_lr)
-    assert lr_late == pytest.approx(cfg.langevin_lr * cfg.lr_min_ratio)
-    assert lr_early > lr_late > 0
-
-
-def test_daps_sampler_runs_langevin_steps():
-    unet = UNet(base_channels=16, num_res_blocks=1, channel_mult=(1, 2), attention_levels=())
-    model = DiffusionModel(unet=unet, diffusion=DiffusionConfig())
-    config_1 = DAPSConfig(anneal_steps=2, reverse_steps=1, langevin_steps=1, tau=1.0)
-    config_5 = DAPSConfig(anneal_steps=2, reverse_steps=1, langevin_steps=5, tau=1.0)
-
-    sampler_1 = DAPSSampler(model, config_1)
-    sampler_5 = DAPSSampler(model, config_5)
-
-    op = IdentityOperator()
-    y = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
-    noise = torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64)
-
-    result_1 = sampler_1.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE, noise=noise.clone())
-    result_5 = sampler_5.sample(op, y, DatasetKind.COMPLEX_T1W_COILWISE, noise=noise.clone())
-
-    assert result_1.shape == result_5.shape
-    assert not torch.allclose(result_1, result_5)
+def test_daps_requires_physical_measurement_noise():
+    tau = 0.0
+    with pytest.raises(ValueError):
+        DAPSConfig(tau=tau)

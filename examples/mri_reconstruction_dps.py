@@ -23,7 +23,7 @@ from mrpro.phantoms.fastmri import FastMRIKDataDataset
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import DPSConfig, DPSSampler, DPSStepInfo, GuidanceWeighting
+from score_qmri.sampling import DPSConfig, DPSSampler
 
 # %% Configuration
 CHECKPOINT_PATH = Path("checkpoints/last.converted.ckpt")
@@ -55,42 +55,25 @@ op = fourier_op @ csm.as_operator()
 model = cast(DiffusionModel, torch.compile(DiffusionModel.from_checkpoint(CHECKPOINT_PATH).cuda().eval()))
 
 # %% DPS config and sampler
-cfg = DPSConfig(
-    num_steps=1000,
-    guidance_scale=0.1,
-    weighting=GuidanceWeighting.SIGMA_SCALED,
-    sigma_start=5.0,
-    sigma_floor=0.05,
-    normalize_gradient=True,
-    clamp_x0_prior=False,
-    clamp_x0_dc=False,
-)
-
-
-def log_progress(info: DPSStepInfo) -> None:
-    if info.step % 100 == 0:
-        print(f"step={info.step:04d} σ={info.sigma:.3e} ||r||={info.residual_norm:.3e} |x0|={info.x0_absmax:.3e}")
-
-
-sampler = DPSSampler(model, cfg, callback=log_progress)
+# Set tau from the measured noise after applying the k-space scaling above.
+cfg = DPSConfig(tau=0.03, num_steps=1000)
+sampler = DPSSampler(model, cfg)
 
 # Direct (zero-filled) reconstruction for reference.
 (x_zf,) = op.H(k_us.data)
 
-# CG reconstruction for reference and warm start.
+# CG reconstruction for reference.
 (x_cg,) = mrpro.algorithms.optimizers.cg(op.gram + 0.01, x_zf)
 
 
 # %%
 y = k_us.data.repeat_interleave(BATCH, dim=0)
-x0_init = x_cg.repeat_interleave(BATCH, dim=0)
 
 with torch.no_grad():
     recon = sampler.sample(
         op,
         y,
         DatasetKind.COMPLEX_T1W_COIL_COMBINED,
-        x0_init=x0_init,
         noise=None,
     )
 

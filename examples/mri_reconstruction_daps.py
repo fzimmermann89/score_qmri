@@ -57,39 +57,23 @@ model = cast(DiffusionModel, torch.compile(DiffusionModel.from_checkpoint(CHECKP
 # Direct (zero-filled) reconstruction for reference.
 (x_zf,) = op.H(k_us.data)
 
-# CG reconstruction for reference and warm start.
+# CG reconstruction for reference.
 (x_cg,) = mrpro.algorithms.optimizers.cg(op.gram + 0.01, x_zf)
 
 
-cfg = DAPSConfig(
-    anneal_steps=100,
-    sigma_start=5.0,
-    sigma_min=0.01,
-    rho=7.0,
-    reverse_steps=5,
-    sigma_x0=0.001,
-    # SPEED & STRENGTH FIX:
-    # Fewer steps, but much larger, constant learning rate.
-    langevin_steps=15,
-    langevin_lr=1e-4,
-    lr_min_ratio=0.5,  # Don't decay LR; keep pushing data consistency at the end
-    tau=0.03,  # Your measured noise floor
-    clamp_x0hat=False,
-    debug_every=25,
-)
+# Set tau from the measured noise after applying the k-space scaling above.
+cfg = DAPSConfig(tau=0.03)
 
 # %%
 sampler = DAPSSampler(model, cfg)
 
 y = k_us.data.repeat_interleave(BATCH, dim=0)
-x0_init = x_cg.repeat_interleave(BATCH, dim=0)
 
 with torch.no_grad():
     recon = sampler.sample(
         op,
         y,
         DatasetKind.COMPLEX_T1W_COIL_COMBINED,
-        x0_init=x0_init,
         noise=None,
     )
 # %%

@@ -1,216 +1,177 @@
-"""DAPS (Decoupled Annealing Posterior Sampling) for MRI reconstruction.
-
-Implements the sampling procedure from Zhang et al., "Improving Diffusion Inverse
-Problem Solving with Decoupled Noise Annealing" (arXiv:2407.01521).
-
-Adapted for VE/EDM diffusion framework.
-
-Algorithm 1 alternates:
-1) Reverse diffusion: compute an estimator x0_hat(x_t).
-   - "pf_ode": integrate PF-ODE from sigma_t to 0 (or sigma_min).
-   - "one_step": use model's direct prediction D(x, sigma).
-
-2) MCMC update: sample x0|y ~ p(x0 | x_t, y).
-   Prior p(x0|x_t) is approximated as N(x0_hat, sigma_t^2 I).
-
-3) Forward diffusion (re-noising): sample x_{t_next} ~ q(x_{t_next} | x0).
-   x_{t_next} = x0 + sigma_{t_next} * eps
-"""
-
-from __future__ import annotations
+"""DAPS with the conditional prior score and preconditioned Langevin sampling."""
 
 from dataclasses import dataclass
-from math import sqrt
+from math import isfinite, sqrt
 
 import torch
 from torch import Tensor
 
 from score_qmri.datasets.kind import DatasetKind, is_complex_kind
-from score_qmri.models.diffusion import DiffusionModel, _apply_kind_constraints, _create_noise
-from score_qmri.sampling.edm_sampler import karras_sigmas
+from score_qmri.models.diffusion import DiffusionModel
 
+from ._utils import conjugate_gradient, normal_like, to_2ch, to_complex
+from .edm_sampler import EDMSampler, karras_sigmas
 from .protocols import LinearOperatorProtocol
-
-
-def to_complex(x_2ch: Tensor) -> Tensor:
-    """Convert (B, 2, H, W) real to (B, 1, 1, H, W) complex."""
-    return torch.view_as_complex(torch.moveaxis(x_2ch, 1, -1).contiguous()).unsqueeze(1).unsqueeze(1)
-
-
-def to_2ch(x_complex: Tensor) -> Tensor:
-    """Convert (B, 1, 1, H, W) complex to (B, 2, H, W) real."""
-    z = x_complex.squeeze(1).squeeze(1)
-    return torch.view_as_real(z).moveaxis(-1, 1).contiguous()
 
 
 @dataclass
 class DAPSConfig:
-    anneal_steps: int = 200
-    sigma_start: float = 5.0
-    sigma_min: float = 0.1
+    """Likelihood tau is per real coordinate; Langevin step is dimensionless.
+
+    A fixed, positive spatial preconditioner removes stiffness from the data likelihood
+    and the x_sigma|x0 Gaussian. It changes mixing, not the conditional target.
+    The target uses the prior smoothed at prior_sigma (default: model.sigma_min).
+    Finite Langevin integration adds numerical approximation.
+    """
+
+    tau: float
+    num_steps: int = 32
+    sigma_start: float | None = None
+    sigma_min: float = 0.01
+    prior_sigma: float | None = None
+    reverse_steps: int = 50
+    langevin_steps: int = 200
+    langevin_step: float = 0.1
     rho: float = 7.0
+    cg_max_iter: int = 50
+    cg_rtol: float = 1e-4
 
-    reverse_steps: int = 5
-    sigma_x0: float = 0.01
-
-    langevin_steps: int = 100
-    langevin_lr: float = 1.5e-5
-    lr_min_ratio: float = 0.01
-
-    tau: float = 0.0349
-
-    clamp_x0hat: bool = False
-    clamp_limit: float | None = 1.5
-
-    debug_every: int = 25
+    def __post_init__(self) -> None:
+        values: tuple[float, ...] = (self.tau, self.sigma_min, self.langevin_step, self.rho, self.cg_rtol)
+        if self.prior_sigma is not None:
+            values += (self.prior_sigma,)
+        if not all(isfinite(x) and x > 0 for x in values):
+            raise ValueError("Noise levels, step size, rho and CG tolerance must be finite and positive")
+        if self.num_steps < 2 or self.langevin_steps < 1 or self.reverse_steps < 1 or self.cg_max_iter < 1:
+            raise ValueError("Require >=2 outer steps and positive Langevin/CG iterations")
 
 
 class DAPSSampler:
-    def __init__(self, model: DiffusionModel, cfg: DAPSConfig | None = None) -> None:
-        self.model = model
-        self.cfg = cfg or DAPSConfig()
+    """Sample x0|x_sigma,y using the prior score, then independently re-noise.
 
-    def _lr_at(self, ratio: float) -> float:
-        cfg = self.cfg
-        return cfg.langevin_lr * (1.0 + ratio * (cfg.lr_min_ratio - 1.0))
+    The conditional score is score_prior(x0)+(x_sigma-x0)/sigma² minus the
+    Gaussian likelihood gradient. The driving noise has covariance
+    2*step*preconditioner; the same increment is reused in the Heun corrector.
+    The first chain starts at a supplied image or a probability-flow endpoint;
+    subsequent chains retain x0 for Gibbs updates. The conditional prior score
+    is evaluated at every update.
+    """
+
+    def __init__(self, model: DiffusionModel, cfg: DAPSConfig) -> None:
+        self.model, self.cfg = model, cfg
+        self.prior_sigma = model.sigma_min if cfg.prior_sigma is None else cfg.prior_sigma
 
     @torch.no_grad()
-    def _x0hat_pf_ode(self, x_t: Tensor, sigma: float, kind: Tensor) -> Tensor:
-        cfg = self.cfg
-        bsz = x_t.shape[0]
-
-        if sigma <= cfg.sigma_x0:
-            sigma_t = torch.full((bsz,), float(sigma), device=x_t.device)
-            x0 = self.model.denoise(x_t, sigma_t, kind)
-            if cfg.clamp_x0hat and cfg.clamp_limit is not None:
-                x0 = self.model.clamp_x0(x0, kind, limit=cfg.clamp_limit)
-            return x0
-
-        sigmas = karras_sigmas(
-            cfg.reverse_steps + 1,
-            sigma_min=cfg.sigma_x0,
-            sigma_max=float(sigma),
-            rho=self.model.rho,
-            device=x_t.device,
-        )
-
-        x = x_t
-        for i in range(cfg.reverse_steps):
-            s = float(sigmas[i].item())
-            s_next = float(sigmas[i + 1].item())
-            sigma_t = torch.full((bsz,), s, device=x_t.device)
-            x0 = self.model.denoise(x, sigma_t, kind)
-            d = (x - x0) / max(s, 1e-12)
-            x = x + (s_next - s) * d
-
-        if cfg.clamp_x0hat and cfg.clamp_limit is not None:
-            x = self.model.clamp_x0(x, kind, limit=cfg.clamp_limit)
-        return x
-
-    @torch.enable_grad()
-    def _langevin(
+    def _conditional(
         self,
-        x0hat: Tensor,
-        sigma: float,
-        ratio: float,
+        xt: Tensor,
         kind: Tensor,
-        forward_op: LinearOperatorProtocol,
+        operator: LinearOperatorProtocol,
         measurement: Tensor,
+        sigma: float,
+        generator: torch.Generator | None,
+        initial: Tensor | None = None,
     ) -> Tensor:
         cfg = self.cfg
-        lr = self._lr_at(ratio)
-        tau2 = float(cfg.tau**2)
-        sig2 = float(sigma**2)
+        sigmas = xt.real.new_full((xt.shape[0],), sigma)
+        noisy = to_2ch(xt)
+        if sigma > self.model.sigma_min:
+            flow = EDMSampler(
+                self.model,
+                num_steps=cfg.reverse_steps,
+                sigma_max=sigma,
+                sigma_min=self.model.sigma_min,
+                rho=cfg.rho,
+                clamp_denoised=False,
+            )
+            center = to_complex(flow.sample(noisy.shape, kind=kind, initial_noise=noisy / sigma))
+        else:
+            center = to_complex(self.model.denoise(noisy, sigmas, kind))
+        prior_sigmas = sigmas.new_full(sigmas.shape, self.prior_sigma)
+        # Estimate local score stiffness once at the PF endpoint, then freeze Q
+        # for the entire conditional chain. A global RMS lets stiff background
+        # pixels freeze the foreground. Too few probes can all miss a rotated
+        # stiff direction; use enough to stabilize the local RMS estimate.
+        with torch.enable_grad():
+            point = to_2ch(center).detach().requires_grad_(True)
+            score = self.model.score(point, prior_sigmas, kind)
+            squared = torch.zeros_like(point)
+            probes = 32
+            for i in range(probes):
+                probe = torch.empty_like(point).bernoulli_(0.5, generator=generator).mul_(2).sub_(1)
+                (response,) = torch.autograd.grad(score, point, probe, retain_graph=i < probes - 1)
+                squared += response.square()
+            curvature = (squared.mean(1) / probes).sqrt().clamp_min(self.model.sigma_data**-2)
+        precision = (sigma**-2 + curvature).unsqueeze(1).unsqueeze(1)
+        scale = precision.rsqrt()
 
-        x = x0hat.detach().clone().requires_grad_(True)
+        def preconditioner_precision(v: Tensor) -> Tensor:
+            # Whiten the diagonal before CG: heterogeneous prior stiffness
+            # must not make the linear solve ill-conditioned too.
+            return v + scale * operator.H(operator(scale * v)[0])[0] / cfg.tau**2
 
+        def conditional_score(x: Tensor) -> Tensor:
+            residual = operator(x)[0] - measurement
+            prior = to_complex(self.model.score(to_2ch(x), prior_sigmas, kind))
+            return prior + (xt - x) / sigma**2 - operator.H(residual)[0] / cfg.tau**2
+
+        x = center if initial is None else initial
         for _ in range(cfg.langevin_steps):
-            y_pred = forward_op(to_complex(x))[0]
-            resid = y_pred - measurement
-            data_energy = 0.5 * resid.abs().square().sum()
-            (grad_data,) = torch.autograd.grad(data_energy, x, create_graph=False)
+            score = conditional_score(x)
+            # B = scale Q scale. Cov(innovation)=B, giving Q^-1 driving noise
+            # after the whitened solve and the final multiplication by scale.
+            innovation = normal_like(x, generator)
+            innovation += scale * operator.H(normal_like(measurement, generator))[0] / cfg.tau
+            rhs = cfg.langevin_step * scale * score + sqrt(2 * cfg.langevin_step) * innovation
+            proposal = x + scale * conjugate_gradient(preconditioner_precision, rhs, cfg.cg_max_iter, cfg.cg_rtol)
+            # Stochastic Heun reuses the same noise; fresh noise here would
+            # change the temperature. The correction reduces finite-step bias.
+            correction = 0.5 * cfg.langevin_step * scale * (conditional_score(proposal) - score)
+            x = proposal + scale * conjugate_gradient(preconditioner_precision, correction, cfg.cg_max_iter, cfg.cg_rtol)
+            if not x.isfinite().all():
+                raise RuntimeError("Nonfinite DAPS trajectory; reduce langevin_step and increase langevin_steps")
+        return x
 
-            grad_prior = (x - x0hat) / max(sig2, 1e-12)
-            grad = grad_data / (2.0 * tau2) + grad_prior
-
-            with torch.no_grad():
-                eps = torch.randn_like(x)
-                eps = _apply_kind_constraints(eps, kind)
-                x = x - lr * grad + sqrt(2.0 * lr) * eps
-
-            x = x.detach().requires_grad_(True)
-
-            if torch.isnan(x).any():
-                return torch.zeros_like(x0hat)
-
-        return x.detach()
-
-    @torch.enable_grad()
+    @torch.no_grad()
     def sample(
         self,
         forward_op: LinearOperatorProtocol,
         measurement: Tensor,
         kind: DatasetKind | int,
         *,
-        x0_init: Tensor | None = None,
         noise: Tensor | None = None,
+        initial: Tensor | None = None,
+        generator: torch.Generator | None = None,
     ) -> Tensor:
+        """Draw a complex image; optionally warm-start x0 from an existing draw.
+
+        An initial image changes the starting distribution, not the conditional
+        target. It is independently re-noised before the first Gibbs update.
+        Finite chains still require mixing checks, including across initializations.
+        """
+        if not is_complex_kind(int(kind)):
+            raise NotImplementedError("DAPS currently supports complex image kinds")
         cfg = self.cfg
-        device = self.model.device
-        kind_idx = int(kind)
-
-        if not is_complex_kind(kind_idx):
-            raise NotImplementedError(f"DAPS only supports complex kinds, got {DatasetKind(kind_idx).name}")
-
+        start = self.model.sigma_max if cfg.sigma_start is None else cfg.sigma_start
+        if not isfinite(start) or not self.model.sigma_min <= cfg.sigma_min < start <= self.model.sigma_max:
+            raise ValueError("DAPS schedule must stay within the model's supported sigma range")
+        if not self.model.sigma_min <= self.prior_sigma <= self.model.sigma_max:
+            raise ValueError("Prior score sigma must be within the model's supported range")
+        measurement = measurement.to(self.model.device)
         template = forward_op.H(measurement)[0]
-        bsz, _, _, h, w = template.shape
-        kind_t = torch.full((bsz,), kind_idx, dtype=torch.long, device=device)
-
-        sigmas = karras_sigmas(
-            cfg.anneal_steps,
-            sigma_min=cfg.sigma_min,
-            sigma_max=cfg.sigma_start,
-            rho=cfg.rho,
-            device=device,
-        )
-        sigmas = torch.cat([sigmas, torch.zeros_like(sigmas[:1])], dim=0)
-
-        x0_init_2ch = None if x0_init is None else to_2ch(x0_init.to(device))
-        eps0 = _create_noise((bsz, 2, h, w), kind_t, device, torch.float32) if noise is None else to_2ch(noise.to(device))
-
-        x_t = eps0 * float(cfg.sigma_start) if x0_init_2ch is None else x0_init_2ch + eps0 * float(cfg.sigma_start)
-        x_t = _apply_kind_constraints(x_t, kind_t)
-
-        if cfg.debug_every > 0:
-            print(f"{'i':>4} {'sigma':>9} {'lr':>10} {'||r(x0hat)||':>12} {'||r(x0)||':>10}")
-
-        x0_last = x_t
-        for i in range(cfg.anneal_steps):
-            sigma = float(sigmas[i].item())
-            sigma_next = float(sigmas[i + 1].item())
-            ratio = i / max(cfg.anneal_steps - 1, 1)
-
-            x0hat = self._x0hat_pf_ode(x_t, sigma, kind_t)
-            x0 = self._langevin(x0hat, sigma, ratio, kind_t, forward_op, measurement)
-
-            if cfg.debug_every > 0 and (i % cfg.debug_every == 0 or i == cfg.anneal_steps - 1):
-                with torch.no_grad():
-                    r_hat = forward_op(to_complex(x0hat))[0] - measurement
-                    r_x0 = forward_op(to_complex(x0))[0] - measurement
-                    print(
-                        f"{i:4d} {sigma:9.4g} {self._lr_at(ratio):10.3g} "
-                        f"{float(r_hat.abs().square().mean().sqrt().item()):12.4g} "
-                        f"{float(r_x0.abs().square().mean().sqrt().item()):10.4g}"
-                    )
-
-            with torch.no_grad():
-                if sigma_next == 0.0:
-                    x_t = x0
-                else:
-                    eps = torch.randn_like(x0)
-                    eps = _apply_kind_constraints(eps, kind_t)
-                    x_t = x0 + float(sigma_next) * eps
-
-            x0_last = x0
-
-        return to_complex(x0_last)
+        kinds = torch.full((template.shape[0],), int(kind), device=template.device, dtype=torch.long)
+        epsilon = normal_like(template, generator) if noise is None else noise.to(template.device)
+        if epsilon.shape != template.shape:
+            raise ValueError("Initial noise must match the image shape")
+        x = None if initial is None else initial.to(device=template.device, dtype=template.dtype).detach()
+        if x is not None and (x.shape != template.shape or not x.isfinite().all()):
+            raise ValueError("Initial image must be finite and match the image shape")
+        xt = start * epsilon if x is None else x + start * epsilon
+        grid = karras_sigmas(cfg.num_steps, sigma_min=cfg.sigma_min, sigma_max=start, rho=cfg.rho, device=xt.device)
+        grid = torch.cat([grid, grid.new_zeros(1)])
+        for sigma, following in zip(grid[:-1], grid[1:], strict=True):
+            # Re-noising and a conditional invariant kernel form a Gibbs step.
+            # Retain x0 so a finite inner chain preserves its conditioning.
+            x = self._conditional(xt, kinds, forward_op, measurement, float(sigma), generator, initial=x)
+            xt = x + float(following) * normal_like(x, generator)
+        return xt
