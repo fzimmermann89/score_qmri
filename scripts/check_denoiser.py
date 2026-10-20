@@ -106,7 +106,8 @@ def main() -> None:
         data_parser.add_subclass_arguments(MRIDataModule, "data", required=True)
         data_parser.add_argument("--trainer", type=dict, default={})
         datamodule = data_parser.instantiate_classes(data_parser.parse_path(args.data_config)).data
-        datamodule.setup("validate")
+        datamodule.dataset_configs = [config for config in datamodule.dataset_configs if config.validation_samples]
+        datamodule.setup("fit")
         if datamodule.validation_batch is None:
             raise ValueError("data.yaml must configure fixed validation_samples")
         for index in range(len(datamodule.validation_batch["image"])):

@@ -289,18 +289,13 @@ def test_cli_parses_default_config() -> None:
         sys.argv = original_argv
 
 
-def test_fixed_subject_validation_logs_raw_and_ema_without_changing_training_mode(sample_h5_file_magnitude, tmp_path, monkeypatch):
-    from score_qmri.datasets.lightning import ValidationSampleConfig
-
-    config = MagnitudeDatasetConfig(h5_path=sample_h5_file_magnitude, subject_namespace="example")
-    fixed = ValidationSampleConfig(dataset=config, subject="subject_001", slice_index=2)
-    dm = MRIDataModule(dataset_configs=[config], validation_samples=[fixed], num_workers=0, sample_size=(64, 64), batch_size=1)
+def test_fixed_validation_logs_raw_ema_and_preserves_rng_and_model_mode(sample_h5_file_magnitude, tmp_path, monkeypatch):
+    config = MagnitudeDatasetConfig(h5_path=sample_h5_file_magnitude, validation_samples=[2])
+    data = MRIDataModule(dataset_configs=[config], batch_size=1, sample_size=(64, 64), num_workers=0)
     model = DiffusionLightningModule(
         unet=UNet(base_channels=8, num_res_blocks=1, channel_mult=(1,), attention_levels=(), cond_dim=16),
         diffusion=DiffusionConfig(cond_dim=16),
-        compile_model=False,
         validation_interval=1,
-        cond_dropout_rate=0,
     )
     trainer = pl.Trainer(
         accelerator="cpu",
@@ -312,17 +307,15 @@ def test_fixed_subject_validation_logs_raw_and_ema_without_changing_training_mod
         enable_progress_bar=False,
         default_root_dir=tmp_path,
     )
-    trainer.fit(model, dm)
+    trainer.fit(model, data)
     key = "val/raw/T1W_MAGNITUDE/sigma_0.001/main_edm_mse"
     assert key in trainer.logged_metrics
     assert "val/ema/T1W_MAGNITUDE/sigma_0.001/main_edm_mse" in trainer.logged_metrics
     assert model.model.training and not model.ema.shadow.training
-    before = torch.get_rng_state().clone()
-    first = trainer.logged_metrics[key].clone()
+    assert data.dataset_lengths == [7]
+    rng = torch.get_rng_state().clone()
     captured = {}
     monkeypatch.setattr(model, "log_dict", lambda metrics, **kwargs: captured.update(metrics))
     model._log_validation()
-    assert torch.equal(before, torch.get_rng_state())
-    torch.testing.assert_close(first, captured[key], rtol=0, atol=0)
-    assert model._validation_sha256 is not None
-    assert dm.dataset_lengths == [3]
+    assert torch.equal(rng, torch.get_rng_state())
+    torch.testing.assert_close(captured[key], trainer.logged_metrics[key], rtol=0, atol=0)

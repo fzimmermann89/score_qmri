@@ -2,8 +2,7 @@
 
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
-from pathlib import Path
+from dataclasses import dataclass, field, replace
 from typing import Any, ClassVar, Literal
 
 import torch
@@ -67,15 +66,17 @@ ScheduleType = ConstantSchedule | PhaseInSchedule | PhaseOutSchedule
 
 @dataclass(kw_only=True)
 class BaseDatasetConfig(ABC):
-    """Base configuration for MRI datasets."""
+    """MRI dataset settings; validation_samples are zero-based indices before augmentation."""
 
     h5_path: str
     augmentation_config: AugmentationConfig | None = None
     schedule: ScheduleType | None = None
     penumbra_width: int = 30
-    subject_namespace: str | None = None
+    validation_samples: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if any(index < 0 for index in self.validation_samples) or len(set(self.validation_samples)) != len(self.validation_samples):
+            raise ValueError("validation_samples must contain unique nonnegative sample numbers")
         if self.schedule is None:
             self.schedule = ConstantSchedule()
 
@@ -276,16 +277,6 @@ DatasetConfig = (
 )
 
 
-@dataclass(kw_only=True)
-class ValidationSampleConfig:
-    """One fixed subject/slice/coil, loaded without random augmentation."""
-
-    dataset: ComplexDatasetConfig | MagnitudeDatasetConfig | MappingDatasetConfig
-    subject: str
-    slice_index: int
-    coil_index: int | None = None
-
-
 @dataclass
 class MRIDataModuleHparams:
     """Type-safe hyperparameter definitions for MRIDataModule."""
@@ -296,6 +287,12 @@ class MRIDataModuleHparams:
     num_workers: int
     base_seed: int
     kind_normalization: float
+
+
+def _validation_key(dataset: MRIDataset, index: int) -> tuple[str, str, int]:
+    """Identify a source slice across combined and coilwise entries of the same H5."""
+    entries = getattr(dataset, "_slice_index", None)
+    return (dataset.h5_path, str(entries[index][0]), int(entries[index][1])) if entries is not None else (dataset.h5_path, "", index)
 
 
 def _to_2ch(image: torch.Tensor) -> torch.Tensor:
@@ -350,8 +347,6 @@ class MRIDataModule(LightningDataModule):
         num_workers: int = 8,
         base_seed: int = 42,
         kind_normalization: float = 0.5,
-        validation_samples: list[ValidationSampleConfig] | None = None,
-        held_out_subjects: dict[str, list[str]] | None = None,
     ) -> None:
         """
         Parameters
@@ -368,11 +363,6 @@ class MRIDataModule(LightningDataModule):
             Random seed for reproducibility.
         kind_normalization
             Interpolation between size-proportional (0.0) and kind-uniform (1.0) sampling.
-        validation_samples
-            Explicit H5/subject/slice/coil references, evaluated without augmentation.
-        held_out_subjects
-            Subjects excluded across all training configs in the same namespace.
-            Fixed validation subjects are added automatically.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -383,24 +373,10 @@ class MRIDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.base_seed = base_seed
         self.kind_normalization = kind_normalization
-        self.validation_samples = validation_samples or []
-        self.held_out_subjects = {name: set(subjects) for name, subjects in (held_out_subjects or {}).items()}
-        for sample in self.validation_samples:
-            if not sample.dataset.subject_namespace:
-                raise ValueError("Fixed validation samples require a subject_namespace shared across contrasts/coils")
-            if sample.slice_index < 0 or (sample.coil_index is not None and sample.coil_index < 0):
-                raise ValueError("Validation slice and coil indices must be nonnegative")
-            self.held_out_subjects.setdefault(sample.dataset.subject_namespace, set()).add(sample.subject)
-        validation_paths = {Path(sample.dataset.h5_path).resolve(): sample.dataset.subject_namespace for sample in self.validation_samples}
-        if any(
-            Path(cfg.h5_path).resolve() in validation_paths and cfg.subject_namespace != validation_paths[Path(cfg.h5_path).resolve()]
-            for cfg in self.dataset_configs
-        ):
-            raise ValueError("Training configs sharing validation files must use the same subject_namespace")
-        self.validation_batch: dict[str, torch.Tensor] | None = None
 
         self.concat_ds: ConcatDataset | None = None
         self.dataset_lengths: list[int] | None = None
+        self.validation_batch: dict[str, torch.Tensor] | None = None
 
     def get_config_summary(self) -> dict[str, object]:
         summary: dict[str, object] = {
@@ -420,7 +396,7 @@ class MRIDataModule(LightningDataModule):
             summary[f"{prefix}/kind"] = cfg.kind.name
             summary[f"{prefix}/h5_path"] = cfg.h5_path
             summary[f"{prefix}/type"] = cfg.type
-            summary[f"{prefix}/subject_namespace"] = cfg.subject_namespace
+            summary[f"{prefix}/validation_samples"] = cfg.validation_samples
             schedule: ScheduleType = cfg.schedule if cfg.schedule is not None else ConstantSchedule()
             summary[f"{prefix}/schedule_type"] = schedule.type
             summary[f"{prefix}/schedule_weight"] = schedule.weight
@@ -445,59 +421,41 @@ class MRIDataModule(LightningDataModule):
                 summary[f"{aug_prefix}/contrast_strength"] = aug.contrast_strength
                 summary[f"{aug_prefix}/poly_coeff_range"] = list(aug.poly_coeff_range)
 
-        summary["data/held_out_subjects"] = {name: sorted(subjects) for name, subjects in self.held_out_subjects.items()}
-        summary["data/validation_samples"] = [
-            {
-                "h5_path": sample.dataset.h5_path,
-                "kind": sample.dataset.kind.name,
-                "subject": sample.subject,
-                "slice_index": sample.slice_index,
-                "coil_index": sample.coil_index,
-            }
-            for sample in self.validation_samples
-        ]
         return summary
 
     def setup(self, stage: str) -> None:
-        if stage in ("fit", "validate", None) and self.validation_samples:
-            samples = []
-            for config in self.validation_samples:
-                dataset = replace(config.dataset, augmentation_config=None).create()
-                coilwise = isinstance(config.dataset, ComplexDatasetConfig) and config.dataset.mode == "coilwise"
-                if coilwise != (config.coil_index is not None):
-                    raise ValueError("Only coilwise validation requires an explicit coil_index")
-                try:
-                    if isinstance(dataset, ComplexImageDataset):
-                        index = dataset._slice_index.index((config.subject, config.slice_index, config.coil_index or 0))
-                    else:
-                        index = dataset._slice_index.index((config.subject, config.slice_index))
-                except ValueError as error:
-                    raise ValueError(
-                        f"Missing validation sample {config.subject}/{config.slice_index} in {config.dataset.h5_path}"
-                    ) from error
-                samples.append(dataset[index])
-            collated = Collate(*self.sample_size)(samples)
-            if not torch.isfinite(collated["image"]).all() or ((~collated["background_mask"]).sum(dim=(-2, -1)) < 1000).any():
-                raise ValueError("Fixed validation images must be finite with at least 1000 signal pixels after cropping")
-            self.validation_batch = {key: value for key, value in collated.items() if isinstance(value, torch.Tensor)}
         if stage == "fit" or stage is None:
             if not self.dataset_configs:
                 raise ValueError("No datasets configured.")
-            datasets: list[MRIDataset | Subset] = []
-            for training_config in self.dataset_configs:
-                training_dataset = training_config.create()
-                excluded = self.held_out_subjects.get(training_config.subject_namespace or "", set())
-                if excluded:
-                    if not hasattr(training_dataset, "_slice_index"):
-                        raise ValueError("Subject exclusions require a dataset with explicit subject/slice indexing")
-                    indices = [i for i, entry in enumerate(training_dataset._slice_index) if entry[0] not in excluded]
+            datasets = [cfg.create() for cfg in self.dataset_configs]
+            self.validation_batch = None
+            reserved: dict[str, set[tuple[str, str, int]]] = {}
+            validation = []
+            for config, dataset in zip(self.dataset_configs, datasets, strict=True):
+                if not config.validation_samples:
+                    continue
+                if max(config.validation_samples) >= len(dataset):
+                    raise ValueError(f"validation_samples outside dataset of length {len(dataset)}: {config.h5_path}")
+                fixed = replace(config, augmentation_config=None).create()
+                for index in config.validation_samples:
+                    validation.append(fixed[index])
+                    reserved.setdefault(dataset.h5_path, set()).add(_validation_key(dataset, index))
+            if validation:
+                batch = Collate(*self.sample_size)(validation)
+                self.validation_batch = {key: value for key, value in batch.items() if isinstance(value, torch.Tensor)}
+            training: list[MRIDataset | Subset] = []
+            for dataset in datasets:
+                if dataset.h5_path in reserved:
+                    # Withhold the selected source slice from every coil/mode
+                    # entry, preventing its combined image from leaking back in.
+                    indices = [i for i in range(len(dataset)) if _validation_key(dataset, i) not in reserved[dataset.h5_path]]
                     if not indices:
-                        raise ValueError(f"Subject exclusions leave no training data in {training_config.h5_path}")
-                    datasets.append(Subset(training_dataset, indices))
+                        raise ValueError(f"validation_samples leave no training samples in {dataset.h5_path}")
+                    training.append(Subset(dataset, indices))
                 else:
-                    datasets.append(training_dataset)
-            self.concat_ds = ConcatDataset(datasets)
-            self.dataset_lengths = [len(ds) for ds in datasets]
+                    training.append(dataset)
+            self.concat_ds = ConcatDataset(training)
+            self.dataset_lengths = [len(ds) for ds in training]
 
     def train_dataloader(self) -> DataLoader:
         if self.concat_ds is None or self.dataset_lengths is None:
