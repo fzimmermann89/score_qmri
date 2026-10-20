@@ -1,13 +1,11 @@
 """Build delics_{t1map,t2map,complexm0}.h5 from qmaps NPZ files.
 Get datasets/Deli-CS/qmaps from https://github.com/p-mayo/mrf-diph
-and pass that directory as --input-root. Keep delics_order.json next to this
-script to retain the checked 360-plane order.
+and pass that directory as --input-root.
 Run: python delics_maps.py --input-root QMAPS --output-dir NEW."""
 
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import h5py
@@ -60,7 +58,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
-    paths = [args.input_root / name for name in json.loads(Path(__file__).with_name("delics_order.json").read_text())]
+    paths = [path for path in args.input_root.rglob("qmap*") if path.is_file()]
     if args.limit is not None:
         if args.limit <= 0:
             parser.error("limit must be positive")
