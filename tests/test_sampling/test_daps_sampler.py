@@ -18,7 +18,9 @@ def test_daps_recovers_gaussian_posterior_and_cross_covariance(correlated):
     y = torch.tensor([0.15 + 0.05j, 0j], dtype=torch.complex128).reshape(1, 1, 1, 1, 2)
     cfg = DAPSConfig(tau=0.05, cg_rtol=1e-10)
     draws = DAPSSampler(model, cfg).sample(op, y.expand(8192, -1, -1, -1, -1), 1, generator=torch.Generator().manual_seed(73))
-    assert_gaussian_posterior(draws, model.covariance, op, y, cfg.tau)
+    prior_sigma = model.sigma_min if cfg.prior_sigma is None else cfg.prior_sigma
+    prior_covariance = model.covariance + prior_sigma**2 * torch.eye(2, dtype=torch.float64)
+    assert_gaussian_posterior(draws, prior_covariance, op, y, cfg.tau)
 
 
 def test_finite_conditional_kernel_preserves_posterior_draws():
@@ -26,7 +28,9 @@ def test_finite_conditional_kernel_preserves_posterior_draws():
     op = MatrixOperator(torch.tensor([[1.0, 0.4], [0.0, 0.0]], dtype=torch.float64))
     y = torch.tensor([0.15 + 0.05j, 0j], dtype=torch.complex128).reshape(1, 1, 1, 1, 2)
     cfg = DAPSConfig(tau=0.05, langevin_steps=2, langevin_step=0.05, cg_rtol=1e-10)
-    covariance = torch.linalg.inv(torch.linalg.inv(model.covariance) + op.matrix.mT @ op.matrix / cfg.tau**2)
+    prior_sigma = model.sigma_min if cfg.prior_sigma is None else cfg.prior_sigma
+    prior_covariance = model.covariance + prior_sigma**2 * torch.eye(2, dtype=torch.float64)
+    covariance = torch.linalg.inv(torch.linalg.inv(prior_covariance) + op.matrix.mT @ op.matrix / cfg.tau**2)
     mean = covariance.to(y) @ op.matrix.mT.to(y) @ y.flatten() / cfg.tau**2
     generator = torch.Generator().manual_seed(91)
     noise = torch.complex(
@@ -47,7 +51,7 @@ def test_finite_conditional_kernel_preserves_posterior_draws():
         generator,
         initial=initial,
     )
-    assert_gaussian_posterior(draws, model.covariance, op, y, cfg.tau)
+    assert_gaussian_posterior(draws, prior_covariance, op, y, cfg.tau)
 
 
 def test_daps_is_invariant_to_measurement_units_and_retains_randomness():

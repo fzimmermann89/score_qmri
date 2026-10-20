@@ -156,3 +156,27 @@ def test_training_step_no_skip_on_partial_invalid(module):
     for _ in range(5):
         loss = module.training_step(batch, 0)
         assert loss is not None
+
+
+def test_main_score_loss_is_independent_of_foreground_weights(module):
+    """Clean-target coordinate weights must not bias the denoising conditional mean."""
+    background = torch.zeros(1, 64, 64, dtype=torch.bool)
+    background[:, :16] = True
+    penumbra = torch.zeros_like(background)
+    penumbra[:, 16:32] = True
+    batch = {
+        "image": 0.1 * torch.randn(1, 2, 64, 64),
+        "background_mask": background,
+        "penumbra_mask": penumbra,
+        "kind": torch.tensor([1]),
+    }
+    module.hparams.aux_weight = 0.0
+    module.hparams.background_weight = 0.05
+    module.hparams.penumbra_weight = 0.01
+    torch.manual_seed(123)
+    weighted_aux = module.training_step(batch, 0)
+    module.hparams.background_weight = 1.0
+    module.hparams.penumbra_weight = 1.0
+    torch.manual_seed(123)
+    uniform_aux = module.training_step(batch, 0)
+    torch.testing.assert_close(weighted_aux, uniform_aux, rtol=1e-6, atol=1e-8)

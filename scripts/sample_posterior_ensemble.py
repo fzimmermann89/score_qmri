@@ -56,7 +56,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20261020)
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--tau", type=float, default=0.01)
-    parser.add_argument("--prior-sigma", type=float, default=0.01)
+    parser.add_argument("--prior-sigma", type=float, default=None)
     parser.add_argument("--langevin-step", type=float, default=0.1)
     parser.add_argument("--langevin-steps", type=int, default=200)
     parser.add_argument("--device", type=str, default="cuda")
@@ -91,6 +91,7 @@ def main() -> None:
         "scope": "retrospective same-measurement ensemble; training-store overlap; no calibration claim",
         "arguments": vars(args),
         "configuration": asdict(cfg),
+        "resolved_prior_sigma": sampler.prior_sigma if isinstance(sampler, DAPSSampler) else None,
         "model": model.checkpoint_info,
         "case_file_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
         "source_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(source.glob("*.py"))},

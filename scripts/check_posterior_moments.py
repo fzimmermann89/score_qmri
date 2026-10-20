@@ -62,14 +62,18 @@ def main() -> None:
     sample = sampler.sample(Mask(), y, DatasetKind.COMPLEX_T1W_COIL_COMBINED, generator=torch.Generator().manual_seed(args.seed))[
         :, 0, 0, 0
     ]
-    variance = torch.tensor([0.04 * 0.0001 / 0.0401, 0.04], dtype=torch.float64)
+    prior_variance = 0.04
+    if isinstance(cfg, DAPSConfig):
+        prior_sigma = model.sigma_min if cfg.prior_sigma is None else cfg.prior_sigma
+        prior_variance += prior_sigma**2
+    variance = torch.tensor([prior_variance * 0.0001 / (prior_variance + 0.0001), prior_variance], dtype=torch.float64)
     report = {
         "scope": "analytic Gaussian posterior control, no learned prior or dataset",
         "draws": args.draws,
         "seed": args.seed,
         "configuration": asdict(cfg),
-        "target_mean_real": [0.15 * 0.04 / 0.0401, 0.0],
-        "target_mean_imag": [0.05 * 0.04 / 0.0401, 0.0],
+        "target_mean_real": [0.15 * prior_variance / (prior_variance + 0.0001), 0.0],
+        "target_mean_imag": [0.05 * prior_variance / (prior_variance + 0.0001), 0.0],
         "target_variance": variance.tolist(),
         "mean_real": sample.real.mean(0).tolist(),
         "mean_imag": sample.imag.mean(0).tolist(),

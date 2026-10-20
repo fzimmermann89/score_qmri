@@ -236,12 +236,13 @@ class DiffusionLightningModule(LightningModule):
 
         channel_mask = create_channel_mask(kind_v)
 
-        # EDM main loss (weighted L2 on x0_main)
+        # EDM weighting depends on sigma only. Clean-target spatial weights
+        # would change the conditional mean required for a prior score.
         sigma_data = torch.tensor(self.model.sigma_data, device=self.device, dtype=torch.float32)
         sigma_f = sigma_v.float()
         w = (sigma_f.square() + sigma_data.square()) / (sigma_f * sigma_data).square().clamp(min=1e-8)
 
-        main_mse = noise_loss(x0_main_v, x0_v, loss_weight, channel_mask, reduction="none")
+        main_mse = noise_loss(x0_main_v, x0_v, None, channel_mask, reduction="none")
         loss_main = (main_mse * w).mean()
 
         # Auxiliary SSIM+L1 (weighted towards low sigma)

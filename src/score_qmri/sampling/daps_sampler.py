@@ -20,15 +20,15 @@ class DAPSConfig:
 
     A fixed, positive preconditioner removes stiffness from the data likelihood
     and the x_sigma|x0 Gaussian. It changes mixing, not the conditional target.
-    The target uses the prior smoothed at prior_sigma, rather than the exact
-    clean-image prior. Finite Langevin integration adds numerical approximation.
+    The target uses the prior smoothed at prior_sigma (default: model.sigma_min).
+    Finite Langevin integration adds numerical approximation.
     """
 
     tau: float
     num_steps: int = 32
     sigma_start: float | None = None
     sigma_min: float = 0.01
-    prior_sigma: float = 0.01
+    prior_sigma: float | None = None
     reverse_steps: int = 50
     langevin_steps: int = 200
     langevin_step: float = 0.1
@@ -37,7 +37,9 @@ class DAPSConfig:
     cg_rtol: float = 1e-4
 
     def __post_init__(self) -> None:
-        values = (self.tau, self.sigma_min, self.prior_sigma, self.langevin_step, self.rho, self.cg_rtol)
+        values: tuple[float, ...] = (self.tau, self.sigma_min, self.langevin_step, self.rho, self.cg_rtol)
+        if self.prior_sigma is not None:
+            values += (self.prior_sigma,)
         if not all(isfinite(x) and x > 0 for x in values):
             raise ValueError("Noise levels, step size, rho and CG tolerance must be finite and positive")
         if self.num_steps < 2 or self.langevin_steps < 1 or self.reverse_steps < 1 or self.cg_max_iter < 1:
@@ -57,6 +59,7 @@ class DAPSSampler:
 
     def __init__(self, model: DiffusionModel, cfg: DAPSConfig) -> None:
         self.model, self.cfg = model, cfg
+        self.prior_sigma = model.sigma_min if cfg.prior_sigma is None else cfg.prior_sigma
 
     @torch.no_grad()
     def _conditional(
@@ -84,7 +87,7 @@ class DAPSSampler:
             center = to_complex(flow.sample(noisy.shape, kind=kind, initial_noise=noisy / sigma))
         else:
             center = to_complex(self.model.denoise(noisy, sigmas, kind))
-        prior_sigmas = sigmas.new_full(sigmas.shape, cfg.prior_sigma)
+        prior_sigmas = sigmas.new_full(sigmas.shape, self.prior_sigma)
         # Estimate score stiffness once at the PF endpoint, then freeze Q for
         # the entire conditional chain. Using prior_sigma^-2 everywhere makes
         # even a smooth Gaussian prior mix thousands of times too slowly.
@@ -137,7 +140,7 @@ class DAPSSampler:
         start = self.model.sigma_max if cfg.sigma_start is None else cfg.sigma_start
         if not isfinite(start) or not self.model.sigma_min <= cfg.sigma_min < start <= self.model.sigma_max:
             raise ValueError("DAPS schedule must stay within the model's supported sigma range")
-        if not self.model.sigma_min <= cfg.prior_sigma <= self.model.sigma_max:
+        if not self.model.sigma_min <= self.prior_sigma <= self.model.sigma_max:
             raise ValueError("Prior score sigma must be within the model's supported range")
         measurement = measurement.to(self.model.device)
         template = forward_op.H(measurement)[0]
