@@ -60,3 +60,18 @@ def test_zero_initialized_heads_report_undefined_backbone_ratio():
     result = backbone_gradient_diagnostics(model, batch, 0.01, torch.ones_like(batch["image"]))
     assert result["ratio_defined"] == 0
     assert result["main_backbone_norm"] == result["aux_backbone_norm"] == 0
+
+
+def test_normalized_map_reference_is_not_normalized_twice():
+    model, batch = model_and_batch()
+    batch["kind"] = torch.tensor([6])
+    batch["image"][:, 1] = 0
+    clean = validation_reference(model, batch)
+    noise = torch.ones_like(clean)
+    with torch.no_grad():
+        model.unet.main_head.weight.normal_(std=0.01)
+        model.unet.aux_head.weight.normal_(std=0.01)
+    expected = backbone_gradient_diagnostics(model, batch, 0.01, noise)
+    normalized_batch = {**batch, "image": clean}
+    actual = backbone_gradient_diagnostics(model, normalized_batch, 0.01, noise, normalized_clean=clean)
+    assert actual == pytest.approx(expected)

@@ -1,6 +1,7 @@
 """Fixed-case denoiser validation and auxiliary/main backbone gradient checks."""
 
-import numpy as np
+from math import isfinite
+
 import torch
 from torch import Tensor
 
@@ -46,6 +47,7 @@ def backbone_gradient_diagnostics(
     l1_weight: float = 0.3,
     background_weight: float = 0.5,
     penumbra_weight: float = 0.01,
+    normalized_clean: Tensor | None = None,
 ) -> dict[str, float]:
     """Measure separate loss gradients on shared parameters, without changing .grad.
 
@@ -56,7 +58,7 @@ def backbone_gradient_diagnostics(
         raise ValueError("Backbone diagnostics evaluate one case at a time")
     if not model.sigma_min <= sigma <= model.sigma_max:
         raise ValueError("Diagnostic sigma outside model support")
-    clean = validation_reference(model, batch)
+    clean = validation_reference(model, batch) if normalized_clean is None else normalized_clean
     kind = batch["kind"]
     channel = create_channel_mask(kind).to(clean)
     output = model(clean + sigma * noise * channel, clean.new_full((len(clean),), sigma), kind)
@@ -85,6 +87,6 @@ def backbone_gradient_diagnostics(
         "aux_over_main_backbone_norm": float((aux_sq / main_sq.clamp_min(1e-30)).sqrt()),
         "backbone_gradient_cosine": float(dot / (main_sq * aux_sq).sqrt().clamp_min(1e-30)),
     }
-    if not all(np.isfinite(value) for value in result.values()):
+    if not all(isfinite(value) for value in result.values()):
         raise FloatingPointError("Nonfinite backbone gradient diagnostic")
     return result

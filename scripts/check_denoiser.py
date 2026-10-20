@@ -145,17 +145,23 @@ def main() -> None:
                         "sigma": sigma,
                         **score_diagnostics(model, clean, kind, sigma, noise, probe, roi=roi),
                         **(
-                            backbone_gradient_diagnostics(model, batch, sigma, noise, aux_weight=args.aux_weight)
+                            backbone_gradient_diagnostics(model, batch, sigma, noise, aux_weight=args.aux_weight, normalized_clean=clean)
                             if args.backbone_gradients and probe_index == 0
                             else {}
                         ),
                     }
                 )
+    case_digest = hashlib.sha256()
+    for batch in batches:
+        for key, value in sorted(batch.items()):
+            case_digest.update(key.encode())
+            case_digest.update(value.detach().cpu().contiguous().numpy().tobytes())
     report = {
         "scope": "Local diagnostics; verify subject-held-out provenance separately. Passing probes is not a posterior calibration certificate.",
         "arguments": vars(args),
         "checkpoint": model.checkpoint_info,
-        "case_sha256": hashlib.sha256((args.data_config or args.cases).read_bytes()).hexdigest(),
+        "source_file_sha256": hashlib.sha256((args.data_config or args.cases).read_bytes()).hexdigest(),
+        "case_sha256": case_digest.hexdigest(),
         "diagnostic_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "rows": rows,
     }

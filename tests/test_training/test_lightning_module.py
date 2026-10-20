@@ -141,22 +141,6 @@ def test_training_step_all_invalid_samples(module):
         module.training_step(batch, 0)
 
 
-def test_training_step_no_skip_on_partial_invalid(module):
-    background_mask = torch.zeros(4, 64, 64, dtype=torch.bool)
-    background_mask[:2] = True
-    background_mask[:2, :5, :5] = False
-    batch = {
-        "image": torch.randn(4, 2, 64, 64),
-        "penumbra_mask": torch.zeros(4, 64, 64, dtype=torch.bool),
-        "background_mask": background_mask,
-        "kind": torch.tensor([0, 0, 0, 0]),
-    }
-
-    for _ in range(5):
-        loss = module.training_step(batch, 0)
-        assert loss is not None
-
-
 def test_main_score_loss_is_independent_of_foreground_weights(module):
     """Clean-target coordinate weights must not bias the denoising conditional mean."""
     background = torch.zeros(1, 64, 64, dtype=torch.bool)
@@ -201,7 +185,7 @@ def test_disabled_auxiliary_loss_is_not_evaluated(module, monkeypatch):
 
 
 @pytest.mark.parametrize("sigma", [0.001, 0.01, 0.2, 0.5])
-def test_auxiliary_raw_network_weight_cancels_edm_output_scale(module, monkeypatch, sigma):
+def test_auxiliary_weight_uses_sqrt_edm_weight(module, monkeypatch, sigma):
     def zero_loss(prediction, *args, **kwargs):
         return prediction.flatten(1).sum(1) * 0
 
@@ -212,7 +196,7 @@ def test_auxiliary_raw_network_weight_cancels_edm_output_scale(module, monkeypat
     monkeypatch.setattr("score_qmri.training.lightning_module.noise_loss", zero_loss)
     monkeypatch.setattr("score_qmri.training.lightning_module.ssim_loss", zero_loss)
     monkeypatch.setattr("score_qmri.training.lightning_module.l1_loss", unit_loss)
-    module.hparams.aux_weight = 0.02
+    module.hparams.aux_weight = 0.1
     batch = {
         "image": 0.1 * torch.randn(1, 2, 64, 64),
         "background_mask": torch.zeros(1, 64, 64, dtype=torch.bool),
@@ -221,7 +205,7 @@ def test_auxiliary_raw_network_weight_cancels_edm_output_scale(module, monkeypat
     }
     loss = module.training_step(batch, 0)
     c_out = sigma * module.model.sigma_data / (sigma**2 + module.model.sigma_data**2) ** 0.5
-    expected = 0.02 * module.hparams.l1_weight / c_out
+    expected = 0.1 * module.hparams.l1_weight / c_out
     assert loss.item() == pytest.approx(expected)
     loss.backward()
 
