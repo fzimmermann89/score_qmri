@@ -5,8 +5,7 @@ Prepare the datasets used by `data.yaml`. Each script's header lists the require
 | Script | Output |
 | --- | --- |
 | [brainweb.py](brainweb.py) | `brainweb.h5` |
-| [cc.py](cc.py) | `cc.h5`; `--raw` creates unverified `cc_reconstructed.h5` |
-| [clean_h5.py](clean_h5.py) | Filtered copy of an existing H5 (`--output`) |
+| [cc.py](cc.py) | `cc.h5` |
 | [delics_maps.py](delics_maps.py) | `delics_{t1map,t2map,complexm0}.h5` |
 | [download.py](download.py) | OpenNeuro or NKI-Rockland source files |
 | [ds000221.py](ds000221.py) | `ds000221_{gre,t1w,t1map,mprage,t2w,flair}.h5` |
@@ -41,4 +40,6 @@ python dataset_preparation/ds000221.py --input-root RAW --output-dir NEW
 
 Commands process all matching inputs. Run a script with `--help` for its options. Scripts refuse existing output files.
 
-`clean_h5.py` removes slices with fewer than 1,000 pixels above magnitude `1e-6` from existing H5 files. The `--prepared` option in fastMRI/M4Raw runs this cleanup instead of reconstructing raw k-space; CC uses a prepared H5 by default and reconstructs with `--raw`. Raw CC remains unverified; raw M4Raw differs from the historical H5 files. WAND M0 and IBC fits retain numerical differences. Reuse saved synthetic samples to reproduce the historical synthetic T1 data.
+CC, fastMRI and M4Raw reconstruct raw k-space and apply the final slice filter in the same run. For complex data, the combined image selects slices for every coil. Quiero, Zenodo MRF and ds002785 also include their final slice filters.
+
+Raw CC remains unverified against the historical H5 files; raw M4Raw differs from them. WAND M0 and IBC fits retain numerical differences. Reuse saved synthetic samples to reproduce the historical synthetic T1 data.

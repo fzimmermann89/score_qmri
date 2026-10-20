@@ -1,8 +1,7 @@
 """Build m4raw_{t1w,t2w,flair,gre}.h5 from M4Raw V1.5 multicoil repeats.
 Download the original V1.5 archives via https://zenodo.org/records/8056074
 (version history); extract beneath --input-root, retaining repeat filenames.
-Raw reconstruction still differs from the training H5. --prepared instead
-filters archived m4raw_*.h5 intermediates and matched the checked subjects exactly.
+Reconstruct the repeated k-space acquisitions, then remove empty slices.
 Run: python m4raw.py --input-root INPUT --output-dir NEW.
 """
 
@@ -31,41 +30,6 @@ def exclusive_h5(path: str | Path) -> h5py.File:
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     return h5py.File(str(path), "w-")
-
-
-def retained_indices(dataset: h5py.Dataset | np.ndarray) -> list[int]:
-    return [index for index in range(dataset.shape[0]) if (np.abs(dataset[index]) > 1e-6).sum() >= 1000]
-
-
-def _copy_selected(source: h5py.Dataset, target: h5py.Group, name: str, indices: list[int]) -> None:
-    shape = (len(indices), *source.shape[1:])
-    chunks = (1, *shape[1:])
-    output = target.create_dataset(name, shape=shape, dtype=source.dtype, chunks=chunks, compression="lzf", shuffle=True)
-    for destination, original in enumerate(indices):
-        output[destination] = source[original]
-
-
-def clean_file(
-    input_path: str | Path,
-    output_path: str | Path,
-    subjects: list[str] | None = None,
-) -> None:
-    with h5py.File(str(input_path), "r") as source:
-        reference = source
-        names = sorted(name for name in reference if isinstance(reference[name], h5py.Dataset))
-        if subjects is not None:
-            missing = set(subjects) - set(names)
-            if missing:
-                raise ValueError(f"Unknown subjects: {sorted(missing)}")
-            names = [name for name in names if name in subjects]
-        if not names:
-            raise ValueError("No subjects selected")
-        with exclusive_h5(output_path) as target:
-            for name in names:
-                indices = retained_indices(reference[name])
-                if not indices:
-                    continue
-                _copy_selected(source[name], target, name, indices)
 
 
 def pad_or_crop(data: Tensor, new_shape: Sequence[int]) -> Tensor:
@@ -245,10 +209,10 @@ def prepare(
                     with h5py.File(str(path), "r") as source:
                         repeats.append(torch.tensor(np.array(source["kspace"]), device=device))
                 image = m4raw_image(repeats, gre=modality == "gre")
-                indices = retained_indices(image.numpy())
-                if not indices:
+                keep = (image.abs() > 1e-6).sum((-2, -1)) >= 1000
+                if not keep.any():
                     continue
-                image = image[indices]
+                image = image[keep]
                 _write(target, name, image)
 
 
@@ -258,17 +222,11 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--prepared", action="store_true", help="Filter archived prepared H5 files instead of reconstructing k-space")
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args()
     torch.set_num_threads(1)
-    if args.prepared:
-        for modality in args.modalities:
-            filename = f"m4raw_{modality}.h5"
-            clean_file(args.input_root / filename, args.output_dir / filename, args.subjects)
-    else:
-        with torch.inference_mode():
-            prepare(args.input_root, args.output_dir, args.modalities, args.subjects, args.device)
+    with torch.inference_mode():
+        prepare(args.input_root, args.output_dir, args.modalities, args.subjects, args.device)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,8 @@
-"""Build cc.h5 by slice-filtering the archived prepared CC H5 (--input-root).
-For fresh raw data, download 12-channel Train/Val H5 files from
-https://www.ccdataset.com/mr-reconstruction-challenge and pass their root
-with --raw. Raw reconstruction writes cc_reconstructed.h5 and is not yet
-verified against the training collection; the prepared-input path is exact.
-Run: python cc.py --input-root INPUT --output-dir NEW.
+"""Build cc.h5 from CC 12-channel k-space H5 files.
+Download the Train/Val archives from
+https://www.ccdataset.com/mr-reconstruction-challenge and extract beneath --input-root.
+Reconstruct combined and coilwise images, then remove empty slices.
+Run: python cc.py --input-root RAW --output-dir NEW.
 """
 
 from __future__ import annotations
@@ -28,44 +27,6 @@ def exclusive_h5(path: str | Path) -> h5py.File:
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     return h5py.File(str(path), "w-")
-
-
-def retained_indices(dataset: h5py.Dataset | np.ndarray) -> list[int]:
-    return [index for index in range(dataset.shape[0]) if (np.abs(dataset[index]) > 1e-6).sum() >= 1000]
-
-
-def _copy_selected(source: h5py.Dataset, target: h5py.Group, name: str, indices: list[int]) -> None:
-    shape = (len(indices), *source.shape[1:])
-    chunks = (1, 1, *shape[2:]) if len(shape) == 4 else (1, *shape[1:])
-    output = target.create_dataset(name, shape=shape, dtype=source.dtype, chunks=chunks, compression="lzf", shuffle=True)
-    for destination, original in enumerate(indices):
-        output[destination] = source[original]
-
-
-def clean_file(
-    input_path: str | Path,
-    output_path: str | Path,
-    subjects: list[str] | None = None,
-) -> None:
-    with h5py.File(str(input_path), "r") as source:
-        reference = source["combined"]
-        names = sorted(name for name in reference if isinstance(reference[name], h5py.Dataset))
-        if subjects is not None:
-            missing = set(subjects) - set(names)
-            if missing:
-                raise ValueError(f"Unknown subjects: {sorted(missing)}")
-            names = [name for name in names if name in subjects]
-        if not names:
-            raise ValueError("No subjects selected")
-        with exclusive_h5(output_path) as target:
-            for group in ("combined", "coilwise"):
-                target.create_group(group)
-            for name in names:
-                indices = retained_indices(reference[name])
-                if not indices:
-                    continue
-                for group in ("combined", "coilwise"):
-                    _copy_selected(source[group][name], target[group], name, indices)
 
 
 def pad_or_crop(data: Tensor, new_shape: Sequence[int]) -> Tensor:
@@ -209,30 +170,30 @@ def reconstruct(
         raise ValueError("No matching raw inputs found; no output files created.")
     if len({path.stem for path in files}) != len(files):
         raise ValueError("Multiple raw files have the same output subject key; select an unambiguous input root.")
-    with exclusive_h5(output_dir / "cc_reconstructed.h5") as target:
+    with exclusive_h5(output_dir / "cc.h5") as target:
         combined_group = target.create_group("combined")
         coilwise_group = target.create_group("coilwise")
         for path in files:
             with h5py.File(str(path), "r") as source:
                 raw = torch.tensor(np.array(source["kspace"]), device=device)
             combined, coilwise = cc_images(raw)
+            keep = (combined.abs() > 1e-6).sum((-2, -1)) >= 1000
+            if not keep.any():
+                continue
+            combined, coilwise = combined[keep], coilwise[keep]
             _write(combined_group, path.stem, combined)
             _write(coilwise_group, path.stem, coilwise, coil_chunks=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-root", type=Path, required=True, help="Archived prepared cc.h5; a raw H5 directory with --raw")
+    parser.add_argument("--input-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--raw", action="store_true")
     args = parser.parse_args()
     torch.set_num_threads(1)
-    if args.raw:
-        with torch.inference_mode():
-            reconstruct(args.input_root, args.output_dir, subjects=args.subjects)
-    else:
-        clean_file(args.input_root, args.output_dir / "cc.h5", args.subjects)
+    with torch.inference_mode():
+        reconstruct(args.input_root, args.output_dir, subjects=args.subjects)
 
 
 if __name__ == "__main__":
