@@ -55,3 +55,10 @@ def test_no_selection_preserves_original_training_dataset(sample_h5_file_magnitu
     assert module.validation_batch is None
     assert module.dataset_lengths == [8]
     assert not isinstance(module.concat_ds.datasets[0], Subset)
+
+
+def test_randomized_brainweb_cannot_claim_fixed_validation():
+    from score_qmri.datasets.lightning import BrainwebDatasetConfig
+
+    with pytest.raises(ValueError, match="randomized Brainweb"):
+        BrainwebDatasetConfig(h5_path="unused.h5", validation_samples=[0])

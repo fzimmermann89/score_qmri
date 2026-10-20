@@ -75,6 +75,10 @@ class BaseDatasetConfig(ABC):
     validation_samples: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if self.validation_samples and isinstance(
+            self, (BrainwebDatasetConfig, BrainwebMagnitudeQualitativeDatasetConfig, BrainwebComplexQualitativeDatasetConfig)
+        ):
+            raise ValueError("validation_samples currently supports stored MRI images, not randomized Brainweb samples")
         if any(index < 0 for index in self.validation_samples) or len(set(self.validation_samples)) != len(self.validation_samples):
             raise ValueError("validation_samples must contain unique nonnegative sample numbers")
         if self.schedule is None:
