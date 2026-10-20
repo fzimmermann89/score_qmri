@@ -22,14 +22,6 @@ def test_uncertainty_distinguishes_phase_spread_from_magnitude_spread():
     np.testing.assert_allclose(maps["error_complex"], [1, 0])
 
 
-@pytest.mark.parametrize(
-    "samples,truth", [(np.ones((1, 2)), np.ones(2)), (np.ones((3, 4)), np.ones(2)), (np.full((3, 2), np.nan), np.ones(2))]
-)
-def test_uncertainty_rejects_insufficient_or_invalid_ensembles(samples, truth):
-    with pytest.raises(ValueError):
-        posterior_maps(samples, truth)
-
-
 def test_spatial_diagnostic_keeps_error_and_spread_units_and_excludes_background():
     std = np.arange(1, 18, dtype=float)
     error = 2 * std

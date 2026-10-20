@@ -242,13 +242,13 @@ def test_full_compiled_training_resume_preserves_optimizer_scheduler_and_ema(tmp
         checked = False
 
         def on_train_start(self, resumed_trainer, module):
-            from score_qmri.utils.checkpoint import remap_compiled_state
-
             assert resumed_trainer.global_step == 1
-            for name, tensor in remap_compiled_state(saved["state_dict"], module.state_dict()).items():
-                torch.testing.assert_close(module.state_dict()[name], tensor, rtol=0, atol=0)
-            for name, tensor in remap_compiled_state(saved["ema"]["shadow"], module.ema.shadow.state_dict()).items():
-                torch.testing.assert_close(module.ema.shadow.state_dict()[name], tensor, rtol=0, atol=0)
+            weights = {name.replace("_orig_mod.", ""): tensor for name, tensor in module.state_dict().items()}
+            for name, tensor in saved["state_dict"].items():
+                torch.testing.assert_close(weights[name.replace("_orig_mod.", "")], tensor, rtol=0, atol=0)
+            ema = {name.replace("_orig_mod.", ""): tensor for name, tensor in module.ema.shadow.state_dict().items()}
+            for name, tensor in saved["ema"]["shadow"].items():
+                torch.testing.assert_close(ema[name.replace("_orig_mod.", "")], tensor, rtol=0, atol=0)
             actual = resumed_trainer.optimizers[0].state_dict()
             assert actual["param_groups"] == saved["optimizer_states"][0]["param_groups"]
             for index, state in saved["optimizer_states"][0]["state"].items():

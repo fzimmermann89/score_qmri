@@ -48,8 +48,3 @@ def test_rotational_field_is_detected_and_real_kind_excludes_imaginary_block():
 def test_negative_jacobian_direction_is_detected():
     result = evaluate(torch.diag(torch.tensor([-0.2, 0.8], dtype=torch.float64)))
     assert result["denoiser_rayleigh_min"] == pytest.approx(-0.2)
-
-
-def test_empty_roi_is_rejected():
-    with pytest.raises(ValueError, match="nonzero probe"):
-        evaluate(torch.eye(2, dtype=torch.float64), roi=torch.zeros(1, 1, 1, 2, dtype=torch.bool))

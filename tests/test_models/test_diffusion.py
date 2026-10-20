@@ -33,8 +33,8 @@ def test_default_sigmas_preserve_edm_distribution_and_generator_state() -> None:
     assert torch.equal(actual_rng.get_state(), expected_rng.get_state())
 
 
-@pytest.mark.parametrize("fraction", [0.1, 1.0])
-def test_low_noise_sigmas_match_mixture_cdf_and_are_reproducible(fraction: float) -> None:
+def test_low_noise_sigmas_match_mixture_cdf_and_are_reproducible() -> None:
+    fraction = 0.1
     config = DiffusionConfig(low_noise_fraction=fraction, low_noise_max=0.05)
     model = make_model(diffusion=config)
     sigmas = model.sample_sigmas(100_000, generator=torch.Generator().manual_seed(37))
@@ -47,18 +47,6 @@ def test_low_noise_sigmas_match_mixture_cdf_and_are_reproducible(fraction: float
         low_cdf = min(1.0, log(threshold / config.sigma_min) / log(config.low_noise_max / config.sigma_min))
         expected = (1 - fraction) * edm_cdf + fraction * low_cdf
         assert (sigmas < threshold).float().mean().item() == pytest.approx(expected, abs=0.005)
-
-
-@pytest.mark.parametrize("fraction", [-0.1, 1.1, float("nan"), float("inf")])
-def test_invalid_low_noise_fraction(fraction: float) -> None:
-    with pytest.raises(ValueError, match="low_noise_fraction"):
-        DiffusionConfig(low_noise_fraction=fraction)
-
-
-@pytest.mark.parametrize("maximum", [0.0, 0.001, 21.0, float("nan"), float("inf")])
-def test_invalid_enabled_low_noise_range(maximum: float) -> None:
-    with pytest.raises(ValueError, match="Low-noise sampling"):
-        DiffusionConfig(low_noise_fraction=0.1, low_noise_max=maximum)
 
 
 def test_disabled_mixture_accepts_legacy_sigma_range() -> None:

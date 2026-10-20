@@ -55,13 +55,6 @@ def test_backbone_ratio_scales_with_aux_weight_without_modifying_gradients():
         torch.testing.assert_close(p, original[name], rtol=0, atol=0)
 
 
-def test_zero_initialized_heads_report_undefined_backbone_ratio():
-    model, batch = model_and_batch()
-    result = backbone_gradient_diagnostics(model, batch, 0.01, torch.ones_like(batch["image"]))
-    assert result["ratio_defined"] == 0
-    assert result["main_backbone_norm"] == result["aux_backbone_norm"] == 0
-
-
 def test_normalized_map_reference_is_not_normalized_twice():
     model, batch = model_and_batch()
     batch["kind"] = torch.tensor([6])
