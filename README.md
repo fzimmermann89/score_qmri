@@ -80,3 +80,14 @@ pre-commit run --all-files
 - Song et al., ICLR 2021 (Score-Based SDEs)
 - Chung et al., ICLR 2023 (DPS)
 - Perez et al., AAAI 2018 (FiLM)
+
+## Dataset viewer
+
+Install the optional viewer dependencies with `uv sync --extra viewer`, then run:
+
+```bash
+source .venv/bin/activate
+score-qmri-viewer --config data.yaml
+```
+
+Open the printed local URL to inspect configured samples and augmentations. Paths follow the training working-directory convention. The viewer falls back to labelled mock samples when configured files cannot be loaded. Frontend sources live in `viewer/`; `npm ci && npm run build` there updates the packaged static assets.
