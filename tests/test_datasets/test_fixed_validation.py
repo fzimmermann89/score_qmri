@@ -19,9 +19,11 @@ def test_fixed_samples_are_withheld_and_loaded_without_augmentation(sample_h5_fi
     assert training.indices == [0, 2, 3, 4, 5, 7]
     fixed = replace(config, augmentation_config=None).create()
     expected = Collate(64, 64)([fixed[1], fixed[6]])
+    assert module.validation_batch is not None
     assert torch.equal(module.validation_batch["image"], expected["image"])
     first = module.validation_batch["image"].clone()
     module.setup("fit")
+    assert module.validation_batch is not None
     assert torch.equal(first, module.validation_batch["image"])
     assert config.augmentation_config is not None
 
