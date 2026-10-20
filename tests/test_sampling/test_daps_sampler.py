@@ -67,6 +67,27 @@ def test_stiff_background_does_not_freeze_foreground_mixing():
         assert torch.max(part.mean(0).abs() / (target_variance / len(part)).sqrt()) < 5
 
 
+def test_rotated_stiff_prior_preserves_posterior_variance():
+    # Four Rademacher probes can all miss a stiff direction after rotation,
+    # even for an exact Gaussian score. The resulting step can be unstable.
+    rotation = torch.tensor([[1.0, -1.0], [1.0, 1.0]], dtype=torch.float64) / 2**0.5
+    variance = torch.tensor([0.04, 1e-6], dtype=torch.float64)
+    model = GaussianPrior(rotation @ variance.diag() @ rotation.mT)
+    target_variance = variance + model.sigma_min**2
+    generator = torch.Generator().manual_seed(71)
+    noise = torch.complex(
+        torch.randn(4096, 2, generator=generator, dtype=torch.float64),
+        torch.randn(4096, 2, generator=generator, dtype=torch.float64),
+    )
+    initial = ((noise * target_variance.sqrt()) @ rotation.to(noise).mT).reshape(4096, 1, 1, 1, 2)
+    draws = DAPSSampler(model, DAPSConfig(tau=0.01, num_steps=3, reverse_steps=2)).sample(
+        UninformativeOperator(), torch.zeros_like(initial), 1, initial=initial, generator=generator
+    )[:, 0, 0, 0] @ rotation.to(noise)
+    for part in [draws.real, draws.imag]:
+        assert torch.max((part.var(0) / target_variance - 1).abs()) < 0.1
+        assert torch.max(part.mean(0).abs() / (target_variance / len(part)).sqrt()) < 5
+
+
 def test_daps_corrects_bimodal_dps_initialization():
     # The measurement changes mode probabilities; checking Gaussian moments
     # alone cannot detect a sampler that keeps the prior's equal mode weights.

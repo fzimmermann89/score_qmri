@@ -90,16 +90,18 @@ class DAPSSampler:
         prior_sigmas = sigmas.new_full(sigmas.shape, self.prior_sigma)
         # Estimate local score stiffness once at the PF endpoint, then freeze Q
         # for the entire conditional chain. A global RMS lets stiff background
-        # pixels freeze the foreground. Multiple probes stabilize the local RMS.
+        # pixels freeze the foreground. Too few probes can all miss a rotated
+        # stiff direction; use enough to stabilize the local RMS estimate.
         with torch.enable_grad():
             point = to_2ch(center).detach().requires_grad_(True)
             score = self.model.score(point, prior_sigmas, kind)
             squared = torch.zeros_like(point)
-            for i in range(4):
+            probes = 32
+            for i in range(probes):
                 probe = torch.empty_like(point).bernoulli_(0.5, generator=generator).mul_(2).sub_(1)
-                (response,) = torch.autograd.grad(score, point, probe, retain_graph=i < 3)
+                (response,) = torch.autograd.grad(score, point, probe, retain_graph=i < probes - 1)
                 squared += response.square()
-            curvature = (squared.mean(1) / 4).sqrt().clamp_min(self.model.sigma_data**-2)
+            curvature = (squared.mean(1) / probes).sqrt().clamp_min(self.model.sigma_data**-2)
         precision = (sigma**-2 + curvature).unsqueeze(1).unsqueeze(1)
         scale = precision.rsqrt()
 
