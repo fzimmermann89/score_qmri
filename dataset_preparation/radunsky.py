@@ -1,8 +1,10 @@
-"""Convert the original Radunsky MATLAB parameter maps to training HDF5.
-
-Source: datacheck/radunsky.py. T1 is in seconds; T2/T2* are converted from ms.
-Use clean_h5 afterwards for the final curated slice filter.
-"""
+"""Build radunsky_{t1,m0mag,t2,t2star}.h5 from the subject MATLAB maps.
+Get the Session1/Session2 maps via the data links in
+https://doi.org/10.1371/journal.pone.0297244 and extract beneath --input-root;
+each subject needs mrQ_maps.mat, T2map_EMC.mat and T2_star_map.mat.
+The paper’s repository link returned 404; reuse the saved session archives
+or request the maps from the authors if that link is still unavailable.
+Run: python radunsky.py --input-root RAW --output-dir NEW --limit 1."""
 
 from __future__ import annotations
 
@@ -10,12 +12,50 @@ import argparse
 from contextlib import ExitStack
 from pathlib import Path
 
+import h5py
 import numpy as np
+import scipy.ndimage as ndi
 import torch
 from scipy.io import loadmat
 
-from .common import exclusive_h5, write_dataset
-from .nifti import clean_mask_2d, select
+
+def exclusive_h5(path: str | Path) -> h5py.File:
+    path = Path(path)
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return h5py.File(path, "x")
+
+
+def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Dataset:
+    return handle.create_dataset(name, data=array, chunks=(1, *array.shape[1:]), compression="lzf", shuffle=True)
+
+
+def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
+    """Original opening, closing, dilation, hole fill and largest component."""
+    structure = ndi.generate_binary_structure(2, 1)
+    result = ndi.binary_opening(np.asarray(mask).astype(bool), structure=structure)
+    result = ndi.binary_closing(result, structure=structure, iterations=1)
+    result = ndi.binary_dilation(result, structure=structure, iterations=2)
+    result = ndi.binary_fill_holes(result)
+    labels, n_labels = ndi.label(result, structure=structure)
+    if n_labels:
+        result = labels == (np.bincount(labels.ravel())[1:].argmax() + 1)
+    return torch.tensor(result, dtype=torch.bool)
+
+
+def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
+    """Filter by BIDS ancestor or filename without changing volume contents."""
+    paths = sorted(set(paths))
+    if subjects:
+        paths = [p for p in paths if any(s in p.parts or p.name.startswith(s + "_") or p.stem == s for s in subjects)]
+    if limit is not None:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        paths = paths[:limit]
+    if not paths:
+        raise ValueError("No matching input files; check input root, subjects and downloaded annex content")
+    return paths
 
 
 def volumes(folder: Path, modalities: list[str]) -> dict[str, np.ndarray]:

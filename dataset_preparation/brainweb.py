@@ -1,6 +1,9 @@
-"""Newer Brainweb recipe from mr2/phantoms/brainweb.py. Decode raw shorts as
-little-endian; preserve the original uint16 baseline subtraction, including
-rare underflow. Stream slices to limit memory use."""
+"""Build brainweb.h5 using the selected newer little-endian recipe.
+Use pack with the original newer sXX.h5 files, or raw with cached
+sXX/CLASS.gz raw-short tissue files from https://brainweb.bic.mni.mcgill.ca/.
+raw --download fetches missing gzip classes. Keep the original uint16 baseline
+subtraction, including its rare underflow, to match the selected H5.
+Run: python brainweb.py pack --input-root SUBJECTS --output NEW.h5 --limit 1."""
 
 from __future__ import annotations
 
@@ -16,8 +19,6 @@ from typing import BinaryIO, cast
 import h5py
 import numpy as np
 
-from .common import exclusive_h5
-
 CLASSES = ("bck", "skl", "gry", "wht", "csf", "mrw", "dura", "fat", "fat2", "mus", "m-s", "ves")
 SUBJECTS = ("04", "05", "06", "18", "20", "38", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54")
 SHAPE = (362, 434, 362)
@@ -26,6 +27,14 @@ URL = (
     "do_download_alias=subject{subject}_{tissue}&format_value=raw_short"
     "&zip_value=gnuzip&download_for_real=%5BStart+download%21%5D"
 )
+
+
+def exclusive_h5(path: str | Path) -> h5py.File:
+    path = Path(path)
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return h5py.File(path, "x")
 
 
 def normalize_slab(values: Sequence[np.ndarray], baselines: Sequence[int]) -> np.ndarray:

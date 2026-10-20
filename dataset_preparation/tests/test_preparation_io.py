@@ -6,8 +6,7 @@ import h5py
 import numpy as np
 import pytest
 
-from dataset_preparation.clean_h5 import clean_file
-from dataset_preparation.common import exclusive_h5
+from dataset_preparation.clean_h5 import clean_file, exclusive_h5
 
 
 def test_exclusive_output_refuses_files_and_dangling_symlinks(tmp_path: Path) -> None:

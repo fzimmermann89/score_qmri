@@ -9,7 +9,9 @@ import torch
 
 pytest.importorskip("nilearn")
 
-from dataset_preparation.ibc_relaxo import fit_t1_linear, fit_t2, fit_t2star
+from dataset_preparation.ibc_t1 import fit_t1_linear
+from dataset_preparation.ibc_t2 import fit_t2
+from dataset_preparation.ibc_t2star import fit_t2star
 from dataset_preparation.normalize_h5 import normalize_file, pad_or_crop_centered
 
 

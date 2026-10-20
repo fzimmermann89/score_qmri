@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from dataset_preparation.download import download_file, rockland_plan
-from dataset_preparation.nifti import pad_or_crop
+from dataset_preparation.ibc_t2 import pad_or_crop
 from dataset_preparation.wand import compute_psir_mp2rage, fit_t1_m0
 
 

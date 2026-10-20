@@ -8,8 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from dataset_preparation.raw_mri import clean_mask_2d
-from dataset_preparation.ulf import prepare, prepare_volume
+from dataset_preparation.ulf import clean_mask_2d, prepare, prepare_volume
 
 
 def test_processing_matches_original_cell() -> None:

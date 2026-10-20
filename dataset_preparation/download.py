@@ -1,4 +1,8 @@
-"""Download OpenNeuro annex contents or Rockland anatomy from aws_links.csv."""
+"""Download selected OpenNeuro annex contents or NKI-Rockland anatomy.
+OpenNeuro requires separately installed DataLad/git-annex. Rockland requires
+the original aws_links.csv from the NKI-Rockland download instructions at
+https://fcon_1000.projects.nitrc.org/indi/enhanced/. Use a new --output path.
+Run: python download.py --help."""
 
 import argparse
 import csv

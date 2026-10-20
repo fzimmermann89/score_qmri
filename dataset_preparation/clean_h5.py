@@ -1,4 +1,7 @@
-"""Slice filter from scripts/cleanup_h5.py; stream to a new file, dropping attributes."""
+"""Filter an existing prepared H5 into a new H5 using the original
+>=1000 active-pixel slice rule. No downloads; provide the archived prepared
+file. Grouped complex data uses combined images to select slices for all coils.
+Run: python clean_h5.py --input PREPARED.h5 --output NEW.h5."""
 
 import argparse
 from pathlib import Path
@@ -6,10 +9,25 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from dataset_preparation.common import axial_chunks, exclusive_h5
-
 ACTIVE_THRESHOLD = 1e-6
 MIN_ACTIVE_PIXELS = 1000
+
+
+def exclusive_h5(path: str | Path) -> h5py.File:
+    path = Path(path)
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return h5py.File(path, "x")
+
+
+def axial_chunks(shape: tuple[int, ...]) -> tuple[int, ...]:
+    """Use the historical cleanup layout for image volumes."""
+    if not shape or any(size <= 0 for size in shape):
+        raise ValueError(f"Expected a nonempty array, got shape {shape}")
+    if len(shape) == 4:
+        return (1, 1, *shape[2:])
+    return (1, *shape[1:])
 
 
 def retained_indices(

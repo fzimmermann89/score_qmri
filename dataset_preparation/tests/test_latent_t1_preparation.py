@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from dataset_preparation import latent_t1
-from dataset_preparation.raw_mri import clean_mask_2d
+from dataset_preparation.ulf import clean_mask_2d
 
 
 def test_repack_preserves_samples_attributes_and_inputs(tmp_path: Path) -> None:

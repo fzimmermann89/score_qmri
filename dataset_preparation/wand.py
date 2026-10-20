@@ -1,5 +1,9 @@
-"""WAND MP2RAGE and magnitude preparation from datacheck/wand2.py.
-Preserve the last numerical definitions, masks and non-inplace T1 clamp."""
+"""Build wand_{t1map,t1w,m0_complex,m0_mag,t2w,t1w_neu}.h5.
+Follow https://git.cardiff.ac.uk/cubric/wand to download the required NIfTIs
+from https://gin.g-node.org/CUBRIC/WAND; pass the downloaded root as --input-root.
+MP2RAGE also needs a complete four-table LUT (--lut); use the original
+LUT_UK7T.pkl with --trust-pickle-lut or generate an NPZ with wand_lut.py.
+Run: python wand.py --input-root WAND --output-dir NEW --modalities t2w --limit 1."""
 
 from __future__ import annotations
 
@@ -9,12 +13,50 @@ from collections import defaultdict
 from contextlib import ExitStack
 from pathlib import Path
 
+import h5py
 import nibabel as nib
 import numpy as np
+import scipy.ndimage as ndi
 import torch
 
-from .common import exclusive_h5, write_dataset
-from .nifti import clean_mask_2d, select
+
+def exclusive_h5(path: str | Path) -> h5py.File:
+    path = Path(path)
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return h5py.File(path, "x")
+
+
+def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Dataset:
+    return handle.create_dataset(name, data=array, chunks=(1, *array.shape[1:]), compression="lzf", shuffle=True)
+
+
+def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
+    """Original opening, closing, dilation, hole fill and largest component."""
+    structure = ndi.generate_binary_structure(2, 1)
+    result = ndi.binary_opening(np.asarray(mask).astype(bool), structure=structure)
+    result = ndi.binary_closing(result, structure=structure, iterations=1)
+    result = ndi.binary_dilation(result, structure=structure, iterations=2)
+    result = ndi.binary_fill_holes(result)
+    labels, n_labels = ndi.label(result, structure=structure)
+    if n_labels:
+        result = labels == (np.bincount(labels.ravel())[1:].argmax() + 1)
+    return torch.tensor(result, dtype=torch.bool)
+
+
+def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
+    """Filter by BIDS ancestor or filename without changing volume contents."""
+    paths = sorted(set(paths))
+    if subjects:
+        paths = [p for p in paths if any(s in p.parts or p.name.startswith(s + "_") or p.stem == s for s in subjects)]
+    if limit is not None:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        paths = paths[:limit]
+    if not paths:
+        raise ValueError("No matching input files; check input root, subjects and downloaded annex content")
+    return paths
 
 
 def load_lut(path: str | Path) -> tuple[np.ndarray, ...]:

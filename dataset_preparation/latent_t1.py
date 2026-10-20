@@ -1,6 +1,9 @@
-"""Synthetic T1 preparation from datacheck/monai/run.py. Use the local MONAI
-brain_image_synthesis_latent_diffusion_model bundle at revision
-55d88321e08930ba3a71d084ed94afaab0b29320. The historical RNG seed is unknown."""
+"""Build ldm_t1w.h5 by repacking the original samples_500.h5.
+To generate new samples, manually download the bundle and model weights from
+https://huggingface.co/MONAI/brain_image_synthesis_latent_diffusion_model
+at revision 55d88321e08930ba3a71d084ed94afaab0b29320; pass --bundle-root.
+The historical seed is unknown, so new draws will not match the training H5.
+Run: python latent_t1.py repack --input-root samples_500.h5 --output NEW.h5."""
 
 from __future__ import annotations
 
@@ -12,9 +15,24 @@ from typing import TYPE_CHECKING
 
 import h5py
 import numpy as np
+import scipy.ndimage as ndi
+import torch
 
 if TYPE_CHECKING:
     import torch
+
+
+def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
+    """Original opening, closing, dilation, hole fill and largest component."""
+    structure = ndi.generate_binary_structure(2, 1)
+    result = ndi.binary_opening(np.asarray(mask).astype(bool), structure=structure)
+    result = ndi.binary_closing(result, structure=structure, iterations=1)
+    result = ndi.binary_dilation(result, structure=structure, iterations=2)
+    result = ndi.binary_fill_holes(result)
+    labels, n_labels = ndi.label(result, structure=structure)
+    if n_labels:
+        result = labels == (np.bincount(labels.ravel())[1:].argmax() + 1)
+    return torch.tensor(result, dtype=torch.bool)
 
 
 def repack_samples(source: Path, output: Path, subjects: Sequence[str] | None = None, limit: int | None = None) -> None:
@@ -54,8 +72,6 @@ def repack_samples(source: Path, output: Path, subjects: Sequence[str] | None = 
 def prepare_generated_sample(volume: torch.Tensor) -> torch.Tensor:
     """Apply the original generated-volume orientation, slices, mask and scaling."""
     import torch
-
-    from dataset_preparation.nifti import clean_mask_2d
 
     x = volume.transpose(0, 2).flip(-2)[40:-40:4].cpu().float().detach()
     x = torch.nn.functional.pad(x[None], (16, 16, 16, 16))[0]

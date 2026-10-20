@@ -1,5 +1,7 @@
-"""UK7T LUT from datacheck/mprage_wand.py:create_LUT, based on Olivier Mougin
-and Ian Driver’s 2021/2022 simulation. The full grid takes about one CPU hour."""
+"""Build the four-table UK7T lookup NPZ for WAND MP2RAGE fitting.
+No download is needed; the sequence simulation is included here, from Olivier
+Mougin and Ian Driver’s UK7T code. Full generation takes about one CPU hour.
+Run: python wand_lut.py --output NEW_LUT.npz."""
 
 import argparse
 from pathlib import Path

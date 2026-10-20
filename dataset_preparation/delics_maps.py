@@ -1,5 +1,8 @@
-"""Deli-CS qmaps NPZ conversion from datacheck/v15.py. The bundled manifest
-preserves the historical plane order; sorting changes the training arrays."""
+"""Build delics_{t1map,t2map,complexm0}.h5 from qmaps NPZ files.
+Get datasets/Deli-CS/qmaps from https://github.com/p-mayo/mrf-diph
+and pass that directory as --input-root. Keep delics_order.json next to this
+script to retain the checked 360-plane order.
+Run: python delics_maps.py --input-root QMAPS --output-dir NEW."""
 
 from __future__ import annotations
 
@@ -7,11 +10,35 @@ import argparse
 import json
 from pathlib import Path
 
+import h5py
 import numpy as np
+import scipy.ndimage as ndi
 import torch
 
-from .common import exclusive_h5, write_dataset
-from .nifti import clean_mask_2d
+
+def exclusive_h5(path: str | Path) -> h5py.File:
+    path = Path(path)
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return h5py.File(path, "x")
+
+
+def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Dataset:
+    return handle.create_dataset(name, data=array, chunks=(1, *array.shape[1:]), compression="lzf", shuffle=True)
+
+
+def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
+    """Original opening, closing, dilation, hole fill and largest component."""
+    structure = ndi.generate_binary_structure(2, 1)
+    result = ndi.binary_opening(np.asarray(mask).astype(bool), structure=structure)
+    result = ndi.binary_closing(result, structure=structure, iterations=1)
+    result = ndi.binary_dilation(result, structure=structure, iterations=2)
+    result = ndi.binary_fill_holes(result)
+    labels, n_labels = ndi.label(result, structure=structure)
+    if n_labels:
+        result = labels == (np.bincount(labels.ravel())[1:].argmax() + 1)
+    return torch.tensor(result, dtype=torch.bool)
 
 
 def plane(path: Path) -> dict[str, np.ndarray]:

@@ -1,5 +1,8 @@
-"""ULF-labelled 3T reference anatomy, from HPC IPython49:60/61/62.
-Inputs are ulfenc/train3/subject/3T, not the enhanced low-field predictions."""
+"""Build ulf_{t1,t2,flair}.h5 from the ULF-EnC 3T reference scans.
+Request/download the training data through
+https://github.com/khtohidulislam/ULF-EnC-Challenge and extract it;
+--input-root must contain subject/3T folders (not enhanced 64mT predictions).
+Run: python ulf.py --input-root TRAIN3 --output-dir NEW --limit 1."""
 
 from __future__ import annotations
 
@@ -9,14 +12,28 @@ from contextlib import ExitStack
 from pathlib import Path
 
 import h5py
+import nibabel as nib
 import numpy as np
+import scipy.ndimage as ndi
+import torch
+
+
+def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
+    """Original opening, closing, dilation, hole fill and largest component."""
+    structure = ndi.generate_binary_structure(2, 1)
+    result = ndi.binary_opening(np.asarray(mask).astype(bool), structure=structure)
+    result = ndi.binary_closing(result, structure=structure, iterations=1)
+    result = ndi.binary_dilation(result, structure=structure, iterations=2)
+    result = ndi.binary_fill_holes(result)
+    labels, n_labels = ndi.label(result, structure=structure)
+    if n_labels:
+        result = labels == (np.bincount(labels.ravel())[1:].argmax() + 1)
+    return torch.tensor(result, dtype=torch.bool)
 
 
 def prepare_volume(volume: np.ndarray) -> np.ndarray:
     """Reproduce the original orientation, 16-pixel padding and mask selection."""
     import torch
-
-    from dataset_preparation.nifti import clean_mask_2d
 
     data = np.transpose(volume, (2, 1, 0))
     data = np.flip(data, axis=1)
@@ -38,7 +55,6 @@ def prepare(
     limit: int | None = None,
 ) -> None:
     """Prepare subjects from local 3T references into new exclusive H5 files."""
-    import nibabel as nib
 
     if not modalities or not set(modalities) <= {"t1", "t2", "flair"} or len(set(modalities)) != len(modalities):
         raise ValueError("Select distinct modalities from t1, t2, flair.")

@@ -1,4 +1,7 @@
-"""Shapes and subject exclusions from scripts/preprocess_h5.py; write a new file."""
+"""Pad/crop an existing prepared H5 using the original preprocess_h5.py
+shapes and subject exclusions. No download; provide that preprocessing stage,
+not an already curated training file. This stage is not needed for every dataset.
+Run: python normalize_h5.py --input PREPARED.h5 --output NEW.h5."""
 
 import argparse
 from dataclasses import dataclass
@@ -8,7 +11,22 @@ import h5py
 import numpy as np
 import torch
 
-from dataset_preparation.common import axial_chunks, exclusive_h5
+
+def exclusive_h5(path: str | Path) -> h5py.File:
+    path = Path(path)
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return h5py.File(path, "x")
+
+
+def axial_chunks(shape: tuple[int, ...]) -> tuple[int, ...]:
+    """Use the historical cleanup layout for image volumes."""
+    if not shape or any(size <= 0 for size in shape):
+        raise ValueError(f"Expected a nonempty array, got shape {shape}")
+    if len(shape) == 4:
+        return (1, 1, *shape[2:])
+    return (1, *shape[1:])
 
 
 @dataclass
