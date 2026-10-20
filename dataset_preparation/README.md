@@ -98,9 +98,20 @@ python dataset_preparation/clean_h5.py --input /path/to/prepared/cc.h5 \
 
 ## Reproduction checks
 
-Representative full subjects matched exactly across OpenNeuro/MRF, IXI, Quiero, ds005851, Radunsky, Rockland, ULF and WAND T1/magnitude outputs. All 360 Deli-CS planes matched; Brainweb packing was checked across all 20 subjects, with fresh raw checks on nine planes. These are bounded checks, not a fresh full-corpus rebuild.
+Fresh comparisons against `score_qmri_consistent_2026-10-19_le` cover all 69 filenames: 63 have exact arrays, shapes and dtypes in the checked scope. Most checks use one complete representative subject per file, including every coil for grouped complex data. Deli-CS covers all 360 planes; Brainweb covers all 362 raw planes of subject04 (625,604,056 values), alongside the earlier 20-subject packing check. Synthetic T1 covers one complete saved sample. These checks do not constitute a full-corpus rebuild.
 
-Remaining differences: WAND M0 is within 7.75e-7; IBC T2/S0 within 5.96e-8 seconds / 1.67e-6. IBC T1/M0 matches execution of the recovered functions but differs from historical H5 by up to 0.001164 seconds / 0.02322. fastMRI T1 raw combined/coilwise maxima are 1.36e-5 / 7.07e-4; other raw contrasts are unchecked. M4Raw GRE still has a meaningful raw mismatch (MAE about 0.0041, maximum 0.488), despite matching execution of the recovered producer. Raw CC is unverified. Those discrepancies remain unresolved; archived-intermediate cleanup is a separate verified path.
+Six outputs retain numerical differences in the checked subjects; maximum absolute differences are:
+
+- `wand_m0_complex.h5`: 7.75e-7.
+- `wand_m0_mag.h5`: 4.77e-7.
+- `ibc_relaxo_t1map.h5`: 0.001164 seconds.
+- `ibc_relaxo_m0map.h5`: 0.02322.
+- `ibc_relaxo_t2map.h5`: 5.96e-8 seconds.
+- `ibc_relaxo_s0map_t2.h5`: 1.67e-6.
+
+The recovered IBC T1/M0 functions reproduce execution of the original functions exactly; their drift from historical H5 is unresolved. WAND T1/T1w and IBC T2*/S0 match their checked subjects exactly.
+
+The exact CC/fastMRI/M4Raw comparisons use archived prepared H5 inputs followed by the original slice filter. Raw fastMRI T1 has combined/coilwise maximum differences of 1.36e-5 / 7.07e-4; other raw contrasts are unchecked. Raw M4Raw GRE retains a meaningful mismatch (MAE about 0.0041, maximum 0.488), despite matching execution of the recovered producer. Raw CC is unverified. The missing original RNG seed prevents regeneration of the historical synthetic draws. No tolerances or reference-derived corrections conceal these limits.
 
 ```bash
 python -m pytest --noconftest dataset_preparation/tests -q
