@@ -1,7 +1,7 @@
 [project]
 name = "score-qmri"
 description = "Score-based posterior sampling for quantitative MRI"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dynamic = ["version"]
 authors = [
     { name = "Felix Zimmermann", email = "fzimmermann89@gmail.com" },
@@ -77,7 +77,7 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 exclude = ["\\.venv/", "debug_.*\\.py$"]
 warn_return_any = true
 warn_unused_configs = true

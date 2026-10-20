@@ -289,7 +289,7 @@ def ssim_loss(
 
     if channel_mask is not None:
         ch_weights = channel_mask[:, :, 0, 0]
-        loss = (loss_ch0 * ch_weights[:, 0:1] + loss_ch1 * ch_weights[:, 1:2]) / ch_weights.sum(dim=1, keepdim=True).clamp(min=1)
+        loss = (loss_ch0 * ch_weights[:, 0] + loss_ch1 * ch_weights[:, 1]) / ch_weights.sum(dim=1).clamp(min=1)
     else:
         loss = (loss_ch0 + loss_ch1) / 2
 

@@ -5,6 +5,8 @@ Handles H5 files with structure:
 - <subject_002>: (N_z, H, W) float32
 """
 
+from typing import cast
+
 import h5py
 import numpy as np
 import torch
@@ -54,18 +56,20 @@ class FlatH5Dataset(BaseMRIDataset):
         if not self._subject_keys:
             raise ValueError(f"No datasets found in {self.h5_path}")
 
-        self._slice_index = [(subject_key, z_idx) for subject_key in self._subject_keys for z_idx in range(h5_file[subject_key].shape[0])]
+        self._slice_index = [
+            (subject_key, z_idx) for subject_key in self._subject_keys for z_idx in range(cast(h5py.Dataset, h5_file[subject_key]).shape[0])
+        ]
         return len(self._slice_index)
 
     def _get_slice_shape(self, h5_file: h5py.File) -> tuple[int, ...]:
         """Get spatial dimensions (H, W) from first subject."""
-        data = h5_file[self._subject_keys[0]]
+        data = cast(h5py.Dataset, h5_file[self._subject_keys[0]])
         return (data.shape[1], data.shape[2])
 
     def _load_slice(self, h5_file: h5py.File, idx: int) -> Tensor:
         """Load a single 2D slice."""
         subject_key, z_idx = self._slice_index[idx]
-        data = h5_file[subject_key][z_idx, :, :]
+        data = cast(h5py.Dataset, h5_file[subject_key])[z_idx, :, :]
         arr = np.array(data)
         return self._process_slice(torch.from_numpy(arr).float())
 
