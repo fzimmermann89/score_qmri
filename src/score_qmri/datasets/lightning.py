@@ -2,12 +2,12 @@
 
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any, ClassVar, Literal
 
 import torch
 from lightning import LightningDataModule
-from torch.utils.data import ConcatDataset, DataLoader
+from torch.utils.data import ConcatDataset, DataLoader, Subset
 
 from .batch_sampler import ScheduledBatchSampler
 from .brainweb import VALUES_3T_RANDOMIZED, BrainwebQualitativeDataset, BrainwebQuantitativeDataset, BrainwebTissue
@@ -66,14 +66,17 @@ ScheduleType = ConstantSchedule | PhaseInSchedule | PhaseOutSchedule
 
 @dataclass(kw_only=True)
 class BaseDatasetConfig(ABC):
-    """Base configuration for MRI datasets."""
+    """MRI dataset settings; validation_samples are zero-based indices before augmentation."""
 
     h5_path: str
     augmentation_config: AugmentationConfig | None = None
     schedule: ScheduleType | None = None
     penumbra_width: int = 30
+    validation_samples: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if any(index < 0 for index in self.validation_samples) or len(set(self.validation_samples)) != len(self.validation_samples):
+            raise ValueError("validation_samples must contain unique nonnegative sample numbers")
         if self.schedule is None:
             self.schedule = ConstantSchedule()
 
@@ -286,6 +289,12 @@ class MRIDataModuleHparams:
     kind_normalization: float
 
 
+def _validation_key(dataset: MRIDataset, index: int) -> tuple[str, str, int]:
+    """Identify a source slice across combined and coilwise entries of the same H5."""
+    entries = getattr(dataset, "_slice_index", None)
+    return (dataset.h5_path, str(entries[index][0]), int(entries[index][1])) if entries is not None else (dataset.h5_path, "", index)
+
+
 def _to_2ch(image: torch.Tensor) -> torch.Tensor:
     """Convert native (H, W) image to 2-channel (2, H, W) float tensor."""
     if image.is_complex():
@@ -367,6 +376,7 @@ class MRIDataModule(LightningDataModule):
 
         self.concat_ds: ConcatDataset | None = None
         self.dataset_lengths: list[int] | None = None
+        self.validation_batch: dict[str, torch.Tensor] | None = None
 
     def get_config_summary(self) -> dict[str, object]:
         summary: dict[str, object] = {
@@ -386,6 +396,7 @@ class MRIDataModule(LightningDataModule):
             summary[f"{prefix}/kind"] = cfg.kind.name
             summary[f"{prefix}/h5_path"] = cfg.h5_path
             summary[f"{prefix}/type"] = cfg.type
+            summary[f"{prefix}/validation_samples"] = cfg.validation_samples
             schedule: ScheduleType = cfg.schedule if cfg.schedule is not None else ConstantSchedule()
             summary[f"{prefix}/schedule_type"] = schedule.type
             summary[f"{prefix}/schedule_weight"] = schedule.weight
@@ -417,8 +428,34 @@ class MRIDataModule(LightningDataModule):
             if not self.dataset_configs:
                 raise ValueError("No datasets configured.")
             datasets = [cfg.create() for cfg in self.dataset_configs]
-            self.concat_ds = ConcatDataset(datasets)
-            self.dataset_lengths = [len(ds) for ds in datasets]
+            self.validation_batch = None
+            reserved: dict[str, set[tuple[str, str, int]]] = {}
+            validation = []
+            for config, dataset in zip(self.dataset_configs, datasets, strict=True):
+                if not config.validation_samples:
+                    continue
+                if max(config.validation_samples) >= len(dataset):
+                    raise ValueError(f"validation_samples outside dataset of length {len(dataset)}: {config.h5_path}")
+                fixed = replace(config, augmentation_config=None).create()
+                for index in config.validation_samples:
+                    validation.append(fixed[index])
+                    reserved.setdefault(dataset.h5_path, set()).add(_validation_key(dataset, index))
+            if validation:
+                batch = Collate(*self.sample_size)(validation)
+                self.validation_batch = {key: value for key, value in batch.items() if isinstance(value, torch.Tensor)}
+            training: list[MRIDataset | Subset] = []
+            for dataset in datasets:
+                if dataset.h5_path in reserved:
+                    # Withhold the selected source slice from every coil/mode
+                    # entry, preventing its combined image from leaking back in.
+                    indices = [i for i in range(len(dataset)) if _validation_key(dataset, i) not in reserved[dataset.h5_path]]
+                    if not indices:
+                        raise ValueError(f"validation_samples leave no training samples in {dataset.h5_path}")
+                    training.append(Subset(dataset, indices))
+                else:
+                    training.append(dataset)
+            self.concat_ds = ConcatDataset(training)
+            self.dataset_lengths = [len(ds) for ds in training]
 
     def train_dataloader(self) -> DataLoader:
         if self.concat_ds is None or self.dataset_lengths is None:
