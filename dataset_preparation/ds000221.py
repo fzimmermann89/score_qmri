@@ -42,13 +42,13 @@ def selected_paths(paths: Iterable[Path], subjects: list[str] | None = None, lim
     return result[:limit] if limit is not None else result
 
 
-def load_nifti(path: Path, *, oriented: bool = True) -> tuple[torch.Tensor, nib.Nifti1Header]:
+def load_nifti(path: Path, *, oriented: bool = True) -> torch.Tensor:
     """Load with original float64 get_fdata precision and optional ZYX flip."""
     image = nib.load(path)
     data = torch.as_tensor(image.get_fdata())
     if oriented:
         data = rearrange(data, "x y z -> z y x").flip(1)
-    return data, image.header
+    return data
 
 
 def first(root: Path, pattern: str) -> Path:
@@ -61,14 +61,12 @@ def first(root: Path, pattern: str) -> Path:
     return matches[0]
 
 
-def clean_mask_3d(mask: torch.Tensor | np.ndarray, *, large: bool = True) -> torch.Tensor:
-    """Original v3-v7 radius2 mask or v8-v9 radius1 mask."""
+def clean_mask_3d(mask: torch.Tensor | np.ndarray) -> torch.Tensor:
     st = ndi.generate_binary_structure(3, 1)
-    if large:
-        st = ndi.iterate_structure(st, 2)
+    st = ndi.iterate_structure(st, 2)
     result = ndi.binary_opening(np.asarray(mask, dtype=bool), structure=st)
-    result = ndi.binary_closing(result, structure=st, iterations=5 if large else 3)
-    result = ndi.binary_dilation(result, structure=st, iterations=3 if large else 1)
+    result = ndi.binary_closing(result, structure=st, iterations=5)
+    result = ndi.binary_dilation(result, structure=st, iterations=3)
     result = np.array([ndi.binary_fill_holes(s) for s in result])
     labels, n = ndi.label(result, structure=ndi.generate_binary_structure(3, 1))
     if n:
@@ -89,45 +87,45 @@ def clean_mask_221_t1(mask: torch.Tensor | np.ndarray) -> torch.Tensor:
     return torch.tensor(result, dtype=torch.bool)
 
 
-def subject_221(root: Path, modalities: set[str]) -> Iterator[tuple[str, str, torch.Tensor]]:
+def subject_221(root: Path, modality: str) -> Iterator[tuple[str, torch.Tensor]]:
     name = root.stem
-    if "gre" in modalities:
-        mag, _ = load_nifti(first(root, "*mag_GRE*.nii.gz"), oriented=False)
-        phase, _ = load_nifti(first(root, "*phase_GRE*.nii.gz"), oriented=False)
+    if modality == "gre":
+        mag = load_nifti(first(root, "*mag_GRE*.nii.gz"), oriented=False)
+        phase = load_nifti(first(root, "*phase_GRE*.nii.gz"), oriented=False)
         phase -= phase.min()
         phase /= phase.max()
         phase *= 2 * np.pi
         phase -= np.pi
         image = torch.polar(mag, phase)
         image /= image.abs().max()
-        yield "gre", name, rearrange(image, "x y z -> z y x").flip(1).to(torch.complex64)
-    if modalities & {"t1w", "t1map", "mprage"}:
-        inv1, _ = load_nifti(first(root, "*inv-1_mp2*.nii.gz"))
-        inv2, _ = load_nifti(first(root, "*inv-2_mp2*.nii.gz"))
+        yield name, rearrange(image, "x y z -> z y x").flip(1).to(torch.complex64)
+    if modality in ("t1w", "t1map", "mprage"):
+        inv1 = load_nifti(first(root, "*inv-1_mp2*.nii.gz"))
+        inv2 = load_nifti(first(root, "*inv-2_mp2*.nii.gz"))
         mask = clean_mask_221_t1(inv1 + inv2 > 40).float()
-        if "t1w" in modalities:
-            image, _ = load_nifti(first(root, "*T1w*.nii.gz"))
-            yield "t1w", name, ((image / image.max()) * mask).float()[70:220]
-        if "t1map" in modalities:
-            image, _ = load_nifti(first(root, "*T1map*.nii.gz"))
-            yield "t1map", name, ((image / 1000) * mask).float()[70:220]
-        if "mprage" in modalities:
+        if modality == "t1w":
+            image = load_nifti(first(root, "*T1w*.nii.gz"))
+            yield name, ((image / image.max()) * mask).float()[70:220]
+        if modality == "t1map":
+            image = load_nifti(first(root, "*T1map*.nii.gz"))
+            yield name, ((image / 1000) * mask).float()[70:220]
+        if modality == "mprage":
             for i, image in enumerate((inv1, inv2), 1):
                 image -= image.min()
                 image /= image.max()
-                yield "mprage", f"{name}_{i}", (image * mask).float()[70:220]
-    if "t2w" in modalities:
-        image, _ = load_nifti(first(root, "*T2w*.nii.gz"))
-        yield "t2w", name, (clean_mask_3d(image > 10).float() * image / image.max())[70:210]
-    if "flair" in modalities:
+                yield f"{name}_{i}", (image * mask).float()[70:220]
+    if modality == "t2w":
+        image = load_nifti(first(root, "*T2w*.nii.gz"))
+        yield name, (clean_mask_3d(image > 10).float() * image / image.max())[70:210]
+    if modality == "flair":
         path = first(root, "*FLAIR*.nii.gz")
-        image, _ = load_nifti(path)
+        image = load_nifti(path)
         if "highres" in path.name:
             image = reduce(image, "(h ph) (w pw) d -> h w d", "mean", ph=2, pw=2)
         else:
             image = reduce(image, "h (w pw) (d pd) -> h w d", "mean", pd=2, pw=2)
         image = image / image.max() * clean_mask_3d(image > 20).float()
-        yield "flair", name, image[100:200:5] if "highres" in path.name else image[4:-4]
+        yield name, image[100:200:5] if "highres" in path.name else image[4:-4]
 
 
 def prepare(
@@ -149,7 +147,7 @@ def prepare(
             raise ValueError(f"No {modality} inputs for selected subjects")
         with exclusive_h5(output_dir / f"ds000221_{modality}.h5") as output:
             for root in selected:
-                for _, name, image in subject_221(root, {modality}):
+                for name, image in subject_221(root, modality):
                     write_dataset(output, name, image.numpy())
 
 

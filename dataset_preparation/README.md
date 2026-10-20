@@ -14,7 +14,7 @@ python dataset_preparation/ixi.py --modalities t1w \
   --input-root /path/to/IXI --output-dir /path/to/new/ixi --limit 1
 ```
 
-Most scripts take `--input-root`, `--output-dir`, `--subjects` and `--limit`. `--modalities` selects outputs where a dataset has several contrasts (required for WAND). Run `python dataset_preparation/SCRIPT.py --help` for arguments. A limit selects eligible subjects/sessions per output; Deli-CS counts planes and raw MRI counts subject/modality pairs. CC, fastMRI, M4Raw and IBC default to one; use `--all` for a full build. Other scripts process all selected inputs when the limit is omitted. Computation uses CPU by default.
+Most scripts take `--input-root`, `--output-dir`, `--subjects` and `--limit`. `--modalities` selects outputs where a dataset has several contrasts (required for WAND). Run `python dataset_preparation/SCRIPT.py --help` for arguments. A limit selects eligible subjects/sessions per output; Deli-CS counts planes. CC, fastMRI, M4Raw and IBC default to one; use `--all` for a full build. Other scripts process all selected inputs when the limit is omitted. Computation uses CPU by default.
 
 ## Outputs and original sources
 
@@ -48,7 +48,7 @@ The filename patterns below cover all 69 outputs after the WAND T1-map fix in #2
 | `brainweb.py pack` / `brainweb.py raw` | `brainweb.h5` | `mr2/phantoms/brainweb.py`; newer `sXX.h5` files or raw-short gzip classes |
 | `latent_t1.py repack` / `latent_t1.py generate` | `ldm_t1w.h5` | `monai/run.py`; saved samples or the local MONAI bundle |
 
-OpenNeuro inputs need the actual git-annex contents, not just a Git clone. Retain the clone layout for ds002785, ds002790 and ds003967: the historical H5 keys include annex object filenames. NIST retains the original first five files before sorting by slice location; filesystem order may differ after extraction. `--dicom-order-manifest` can supply the original filenames. Deli-CS uses the included `delics_order.json` for the verified 360-plane order; omit `--limit` to build all planes.
+OpenNeuro inputs need the actual git-annex contents, not just a Git clone. Retain the clone layout for ds002785, ds002790 and ds003967: the historical H5 keys include annex object filenames. NIST retains the original first five files before sorting by slice location; filesystem order may differ after extraction. Deli-CS uses the included `delics_order.json` for the verified 360-plane order; omit `--limit` to build all planes.
 
 IBC fits take sourcedata and output directories:
 
@@ -57,7 +57,7 @@ python dataset_preparation/ibc_t1.py \
   --input-root /path/to/ibc/sourcedata --output-dir /path/to/new/ibc --limit 1
 ```
 
-WAND MP2RAGE needs all four lookup tables. The older three-key `lut_uk7t.npz` is incomplete for M0 fitting. Reuse a complete NPZ or your original `LUT_UK7T.pkl` (with `--trust-pickle-lut`). Generating a full table takes about one CPU hour:
+WAND MP2RAGE needs all four lookup tables. The older three-key `lut_uk7t.npz` is incomplete for M0 fitting. Reuse a complete NPZ or your original `LUT_UK7T.pkl`. Generating a full table takes about one CPU hour:
 
 ```bash
 python dataset_preparation/wand_lut.py --output /path/to/new/uk7t_complete.npz
@@ -90,7 +90,7 @@ python dataset_preparation/clean_h5.py --input /path/to/prepared/cc.h5 \
   --output /path/to/new/cc.h5 --limit 1
 ```
 
-`normalize_h5.py` retains the eleven original shape/subject-exclusion recipes from `scripts/preprocess_h5.py`. `cc.py --legacy` retains the separate legacy `fix_cc.py` axis correction; use it only with that old CC layout. Do not apply either shape normalization or cleanup indiscriminately: ds004889 FLAIR keeps 90 padded slices, and ds002685 FLAIR/ds004611 retain their native widths. Quiero, Zenodo and ds002785 already include their selected final slice filter.
+The final historical exclusions are included in their producers: ds002685 T2w omits the two TSE scans and IBC T2* omits `sub-12_ses-17`. Native widths are retained: ds002685 FLAIR varies between 160, 176 and 192; ds004611 varies between 220, 252 and 300. The old blanket shape-normalization recipes do not match the active files. Quiero, Zenodo and ds002785 include their final slice filter. ds004889 FLAIR keeps 90 padded slices.
 
 ## Downloads
 
@@ -116,3 +116,5 @@ The exact CC/fastMRI/M4Raw comparisons use archived prepared H5 inputs followed 
 ```bash
 python -m pytest dataset_preparation/tests -q
 ```
+
+The existing CI test matrix installs the preparation test dependencies and runs these tests on Python 3.10, 3.11 and 3.12.

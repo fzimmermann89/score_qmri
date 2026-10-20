@@ -1,7 +1,8 @@
 """Build ibc_relaxo_{t2starmap,s0map}.h5 from IBC relaxometry sourcedata.
 Download the relaxometry NIfTIs and JSON sidecars using the IBC data access
 instructions at https://individual-brain-charting.github.io/docs/ibc_api.html;
-pass the sourcedata root as --input-root. The recovered fit matched the checked historical subject exactly.
+pass the sourcedata root as --input-root. Skip sub-09, sub-19 and sub-12_ses-17
+as in the training H5. The recovered fit matched the checked historical subject exactly.
 Run: python ibc_t2star.py --input-root RAW --output-dir NEW --limit 1.
 """
 
@@ -120,7 +121,7 @@ def compute_t2star_map(base_path: Path, sub: str, ses: str) -> tuple[torch.Tenso
     return t2star, s0
 
 
-def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = None, limit: int | None = None) -> list[str]:
+def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = None, limit: int | None = None) -> None:
     """Write the paired parameter/S0 files for selected subject/session keys."""
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
@@ -129,7 +130,7 @@ def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = Non
         parts = path.name.split("_")
         sub, ses = (parts[0].split("-")[1], parts[1].split("-")[1])
         name = f"sub-{sub}_ses-{ses}"
-        if sub in ("09", "19"):
+        if sub in ("09", "19") or name == "sub-12_ses-17":
             continue
         if name in entries:
             raise ValueError(f"Ambiguous duplicate source for {name}")
@@ -156,7 +157,6 @@ def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = Non
             arrays = compute_t2star_map(input_path, sub, ses)
             for handle, array in zip(handles, arrays, strict=True):
                 write_dataset(handle, name, np.asarray(array))
-    return names
 
 
 def main() -> None:

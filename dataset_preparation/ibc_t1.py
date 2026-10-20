@@ -151,7 +151,7 @@ def t1_map(sub: str, ses: str, base_path: Path) -> tuple[torch.Tensor, torch.Ten
     return t1.float(), m0.float()
 
 
-def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = None, limit: int | None = None) -> list[str]:
+def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = None, limit: int | None = None) -> None:
     """Write the paired parameter/S0 files for selected subject/session keys."""
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
@@ -185,7 +185,6 @@ def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = Non
             arrays = t1_map(sub, ses, input_path)
             for handle, array in zip(handles, arrays, strict=True):
                 write_dataset(handle, name, np.asarray(array))
-    return names
 
 
 def main() -> None:

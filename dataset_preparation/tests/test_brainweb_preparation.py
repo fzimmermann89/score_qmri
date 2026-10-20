@@ -38,7 +38,7 @@ def test_streaming_matches_original_including_underflow(tmp_path: Path) -> None:
             file.write(array.astype("<u2").tobytes())
         paths.append(path)
     expected = source_normalize([x.copy() for x in values])
-    actual = np.concatenate([slab for _, slab in brainweb.iter_raw_slabs(paths, shape, slab_size=3)])
+    actual = np.concatenate([slab for _, slab in brainweb.iter_raw_slabs(paths, shape)])
     np.testing.assert_array_equal(actual, expected)
     assert actual[0, 0, 0, -1] > 0
 
@@ -55,7 +55,7 @@ def test_pack_copies_values_and_attributes_and_refuses_overwrite(tmp_path: Path,
         data.attrs["test"] = "preserve"
     before = source.read_bytes()
     output = tmp_path / "packed.h5"
-    brainweb.pack_subjects(tmp_path, output, ["04"], slab_size=2)
+    brainweb.pack_subjects(tmp_path, output, ["04"])
     with h5py.File(str(output), "r") as file:
         group = file["subject_04"]
         np.testing.assert_array_equal(group["classes"][:], values)
@@ -103,3 +103,15 @@ def test_cli_help_and_invalid_pack_options(tmp_path: Path, capsys: pytest.Captur
         brainweb.main(["pack", "--input-root", str(tmp_path), "--output", str(tmp_path / "out.h5"), "--download"])
     assert result.value.code == 2
     assert not (tmp_path / "out.h5").exists()
+
+
+@pytest.mark.parametrize(("size", "message"), [(1, "Truncated"), (3, "more voxels")])
+def test_raw_rejects_incorrect_length(tmp_path: Path, size: int, message: str) -> None:
+    paths = []
+    for tissue in brainweb.CLASSES:
+        path = tmp_path / f"{tissue}.gz"
+        with gzip.open(path, "wb") as file:
+            file.write(np.ones(size, dtype="<u2").tobytes())
+        paths.append(path)
+    with pytest.raises(ValueError, match=message):
+        list(brainweb.iter_raw_slabs(paths, shape=(2, 1, 1), baseline_slice=0))

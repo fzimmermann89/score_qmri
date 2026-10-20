@@ -33,8 +33,6 @@ def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
 
 def prepare_volume(volume: np.ndarray) -> np.ndarray:
     """Reproduce the original orientation, 16-pixel padding and mask selection."""
-    import torch
-
     data = np.transpose(volume, (2, 1, 0))
     data = np.flip(data, axis=1)
     data = np.pad(data, ((0, 0), (16, 16), (16, 16)))
@@ -56,8 +54,8 @@ def prepare(
 ) -> None:
     """Prepare subjects from local 3T references into new exclusive H5 files."""
 
-    if not modalities or not set(modalities) <= {"t1", "t2", "flair"} or len(set(modalities)) != len(modalities):
-        raise ValueError("Select distinct modalities from t1, t2, flair.")
+    if len(set(modalities)) != len(modalities):
+        raise ValueError("Select distinct modalities.")
     if limit is not None and limit < 1:
         raise ValueError("Limit must be positive.")
     folders = sorted(input_root.rglob("3T"))
@@ -95,13 +93,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--modalities", nargs="+", default=["t1", "t2", "flair"], choices=("t1", "t2", "flair"))
     parser.add_argument("--subjects", nargs="+")
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--threads", type=int, default=1)
     args = parser.parse_args(argv)
-    if args.threads < 1 or args.limit is not None and args.limit < 1:
-        parser.error("--threads and --limit must be positive.")
-    import torch
-
-    torch.set_num_threads(args.threads)
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be positive.")
+    torch.set_num_threads(1)
     prepare(args.input_root, args.output_dir, args.modalities, args.subjects, args.limit)
 
 

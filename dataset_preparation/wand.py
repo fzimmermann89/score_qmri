@@ -2,7 +2,7 @@
 Follow https://git.cardiff.ac.uk/cubric/wand to download the required NIfTIs
 from https://gin.g-node.org/CUBRIC/WAND; pass the downloaded root as --input-root.
 MP2RAGE also needs a complete four-table LUT (--lut); use the original
-LUT_UK7T.pkl with --trust-pickle-lut or generate an NPZ with wand_lut.py.
+trusted LUT_UK7T.pkl or generate an NPZ with wand_lut.py.
 Run: python wand.py --input-root WAND --output-dir NEW --modalities t2w --limit 1."""
 
 from __future__ import annotations
@@ -65,7 +65,6 @@ def load_lut(path: str | Path) -> tuple[np.ndarray, ...]:
     if path.suffix == ".npz":
         with np.load(path, allow_pickle=False) as data:
             return tuple(data[k] for k in ("inv1", "inv2", "psir", "mp2rage"))
-    # The CLI requires explicit opt-in for a trusted historical pickle.
     with path.open("rb") as handle:
         return tuple(pickle.load(handle)[:4])
 
@@ -106,7 +105,6 @@ def fit_t1_m0(
     B1map: torch.Tensor,
     lut_path: str = "LUT_UK7T.pkl",
     device: str | None = None,
-    chunk_size: int = 256,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Match contrasts and B1 percent to the complete LUT; return T1 milliseconds, complex M0 and PSIR."""
     device = device or "cpu"
@@ -128,8 +126,8 @@ def fit_t1_m0(
     b1 = B1map.flatten().to(device).clamp(1, luts["psir"].shape[0] - 1).round().long()
     T1 = torch.zeros(psir.shape[0], device=device)
     M0 = torch.zeros(psir.shape[0], dtype=torch.complex64, device=device)
-    for i in range(0, psir.shape[0], chunk_size):
-        sl = slice(i, min(i + chunk_size, psir.shape[0]))
+    for i in range(0, psir.shape[0], 256):
+        sl = slice(i, min(i + 256, psir.shape[0]))
         b1_sl = b1[sl]
         n = b1_sl.shape[0]
         diff = (psir[sl, None] - luts["psir"][b1_sl]).abs() + (mp2[sl, None] - luts["mp2"][b1_sl]).abs()
@@ -146,15 +144,15 @@ def fit_t1_m0(
     return (T1.reshape(shape).cpu(), M0.reshape(shape).cpu(), PSIR)
 
 
-def mp2rage_volumes(folder: Path, lut: Path, chunk_size: int = 256) -> dict[str, np.ndarray]:
+def mp2rage_volumes(folder: Path, lut: Path) -> dict[str, np.ndarray]:
     """Original WAND mask and intensity pipeline after LUT matching."""
     patterns = ["*inv-1_part-mag*.nii.gz", "*inv-1_part-phase*.nii.gz", "*inv-2_part-mag*.nii.gz", "*inv-2_part-phase*.nii.gz"]
     s1, s2, _ = load_complex_mp2rage(*(str(next(folder.glob(p))) for p in patterns))
     psir, mp2 = compute_psir_mp2rage(s1, s2)
-    results = fit_t1_m0(psir, mp2, s1, s2, torch.full(psir.shape, 100.0), str(lut), "cpu", chunk_size)
+    results = fit_t1_m0(psir, mp2, s1, s2, torch.full(psir.shape, 100.0), str(lut), "cpu")
     t1, m0, t1w = (m.moveaxis((0, 1, 2), (2, 1, 0)).flip(1)[100:] for m in results)
     m0 /= m0.abs().max()
-    m0 /= np.percentile(torch.view_as_real(m0[m0.abs() > 0.1]), 99)
+    m0 /= float(np.percentile(torch.view_as_real(m0[m0.abs() > 0.1]), 99))
     m0 = torch.complex(m0.real.clamp(-1.3, 1.3), m0.imag.clamp(-1.3, 1.3))
     mask = torch.stack([clean_mask_2d(m > 0.05) for m in m0.abs()])
     m0[~mask] = 0
@@ -181,14 +179,14 @@ def magnitude_volume(path: Path, modality: str) -> np.ndarray:
         data = data.moveaxis((0, 1, 2), (1, 0, 2))
         data /= data.max()
         data.clamp_max_(1.4)
-        data /= np.percentile(data[data > 0.01], 99)
+        data /= float(np.percentile(data[data > 0.01], 99))
         data = data[20:-10]
     else:
         data /= data.max()
         if (torch.tensor(spacing) - 1).abs().max() > 0.1:
             data = torch.nn.functional.interpolate(data[None, None], scale_factor=spacing.tolist(), mode="trilinear")[0, 0]
         data = data.moveaxis((0, 1, 2), (2, 1, 0)).flip(1)
-        data /= np.percentile(data[data > 0.01], 99)
+        data /= float(np.percentile(data[data > 0.01], 99))
         data.clamp_max_(1.4)
         data = data[40:-10]
     mask = torch.stack([clean_mask_2d(m > 0.05) for m in data.abs()])
@@ -203,18 +201,12 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--modalities", nargs="+", choices=["t1map", "m0_complex", "m0_mag", "t1w", "t2w", "t1w_neu"], required=True)
     parser.add_argument("--lut", type=Path)
-    parser.add_argument("--trust-pickle-lut", action="store_true", help="Allow the trusted historical LUT_UK7T.pkl")
     parser.add_argument("--subjects", nargs="+")
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--chunk-size", type=int, default=256)
     args = parser.parse_args()
     quantitative = set(args.modalities) & {"t1map", "m0_complex", "m0_mag", "t1w"}
-    if args.chunk_size < 1:
-        parser.error("chunk-size must be positive")
     if quantitative and (args.lut is None or not args.lut.is_file()):
         parser.error("MP2RAGE requires the original complete LUT via --lut")
-    if quantitative and args.lut.suffix != ".npz" and not args.trust_pickle_lut:
-        parser.error("Historical pickle LUT requires --trust-pickle-lut; use only your trusted original")
     torch.set_num_threads(1)
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(args.output_dir / f"wand_{m}.h5")) for m in args.modalities}
@@ -225,7 +217,7 @@ def main() -> None:
             folders = select([v[0].parent for v in groups.values() if len(v) == 4], args.subjects, args.limit)
             for folder in folders:
                 name = "_".join(folder.parts[-3:-1])
-                for modality, array in mp2rage_volumes(folder, args.lut, args.chunk_size).items():
+                for modality, array in mp2rage_volumes(folder, args.lut).items():
                     if modality in outputs:
                         write_dataset(outputs[modality], name, array)
         for modality, pattern in [("t2w", "*nlgradcorr_T2w*.nii.gz"), ("t1w_neu", "**/anat/**/*T1w*.nii.gz")]:

@@ -57,18 +57,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument(
-        "--order-manifest",
-        type=Path,
-        default=Path(__file__).with_name("delics_order.json"),
-        help="JSON list of paths relative to input-root",
-    )
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     torch.set_num_threads(1)
-    paths = [args.input_root / name for name in json.loads(args.order_manifest.read_text())]
-    if any(not path.resolve().is_relative_to(args.input_root.resolve()) for path in paths):
-        parser.error("Order manifest paths must stay within input-root")
+    paths = [args.input_root / name for name in json.loads(Path(__file__).with_name("delics_order.json").read_text())]
     if args.limit is not None:
         if args.limit <= 0:
             parser.error("limit must be positive")

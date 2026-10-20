@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 
-def create_lut(max_b1: int = 200, max_t1: int = 3000) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def create_lut() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     SSi = 3500
     TR = 6.3
     TFE = 224
@@ -43,9 +43,9 @@ def create_lut(max_b1: int = 200, max_t1: int = 3000) -> tuple[np.ndarray, np.nd
     FB = 180
     eff = 0.95
     cosFB = np.cos(np.deg2rad(eff * FB))
-    B1m = range(1, max_b1 + 1, 1)
-    T1m = range(1, max_t1 + 1, 1)
-    LUT_INV1 = np.zeros((max_b1 + 1, max_t1 + 1))
+    B1m = range(1, 201, 1)
+    T1m = range(1, 3001, 1)
+    LUT_INV1 = np.zeros((201, 3001))
     LUT_INV2 = np.zeros_like(LUT_INV1)
     for T1tmp in T1m:
         expmT1 = np.exp(-0.1 / T1tmp)
@@ -109,16 +109,12 @@ def create_lut(max_b1: int = 200, max_t1: int = 3000) -> tuple[np.ndarray, np.nd
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--max-b1", type=int, default=200)
-    parser.add_argument("--max-t1", type=int, default=3000)
     args = parser.parse_args()
-    if args.max_b1 < 1 or args.max_t1 < 1:
-        parser.error("grid limits must be positive")
     if args.output.exists() or args.output.is_symlink():
         raise FileExistsError(args.output)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("xb") as handle:
-        inv1, inv2, psir, mp2 = create_lut(args.max_b1, args.max_t1)
+        inv1, inv2, psir, mp2 = create_lut()
         np.savez(handle, inv1=inv1, inv2=inv2, psir=psir, mp2rage=mp2)
 
 

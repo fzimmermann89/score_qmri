@@ -8,3 +8,4 @@ nilearn==0.12.1
 pydicom==3.0.1
 einops==0.8.1
 ismrmrd==1.14.2
+threadpoolctl==3.6.0

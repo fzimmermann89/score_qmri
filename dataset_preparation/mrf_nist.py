@@ -1,14 +1,13 @@
 """Build mrf_nist_{t1map,t2map,m0map}.h5 from NIST MRF DICOM series.
 Download MRF_invivo_anon.zip from https://data.nist.gov/od/id/mds2-3379
 and extract it beneath --input-root. The historical first-five-file selection
-is filesystem-order dependent; --dicom-order-manifest records that order.
+uses the native filesystem order, as in the original script.
 Run: python mrf_nist.py --input-root RAW --output-dir NEW --limit 1.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import math
 from collections.abc import Iterator
 from contextlib import ExitStack
@@ -67,19 +66,11 @@ def select_roots(paths: Iterator[Path], subjects: list[str] | None, limit: int |
     return roots[:limit] if limit is not None else roots
 
 
-def nist_series(root: Path, modality: str, dicom_order: dict[str, list[str]] | None = None) -> torch.Tensor:
+def nist_series(root: Path, modality: str) -> torch.Tensor:
     """Read the original five DICOM candidates and sort by SliceLocation."""
     import pydicom
 
-    if dicom_order is None:
-        files = sorted(list(root.rglob("*.IMA"))[:5])
-    else:
-        name = "_".join(root.parts[-2:])
-        if name not in dicom_order:
-            raise ValueError(f"No DICOM filename order for {name}")
-        files = [root / filename for filename in dicom_order[name]]
-        if any(not file.is_relative_to(root) or ".." in file.parts for file in files):
-            raise ValueError("DICOM manifest paths must stay within the series root")
+    files = sorted(list(root.rglob("*.IMA"))[:5])
     images = []
     for path in files:
         dcm = pydicom.dcmread(path)
@@ -103,9 +94,7 @@ def prepare(
     modalities: list[str] | None = None,
     subjects: list[str] | None = None,
     limit: int | None = None,
-    dicom_order_manifest: Path | None = None,
 ) -> None:
-    order = json.loads(dicom_order_manifest.read_text()) if dicom_order_manifest else None
     with ExitStack() as stack:
         for modality in modalities or MODALITIES:
             output = stack.enter_context(exclusive_h5(output_dir / f"mrf_nist_{modality}.h5"))
@@ -114,7 +103,7 @@ def prepare(
             if not roots:
                 raise ValueError(f"No {tag} DICOM series found")
             for root in roots:
-                write_dataset(output, "_".join(root.parts[-2:]), nist_series(root, modality, order).numpy())
+                write_dataset(output, "_".join(root.parts[-2:]), nist_series(root, modality).numpy())
 
 
 def main() -> None:
@@ -124,7 +113,6 @@ def main() -> None:
     parser.add_argument("--modalities", nargs="+", choices=MODALITIES, default=list(MODALITIES))
     parser.add_argument("--subjects", nargs="+")
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--dicom-order-manifest", type=Path)
     args = parser.parse_args()
     torch.set_num_threads(1)
     prepare(**vars(args))

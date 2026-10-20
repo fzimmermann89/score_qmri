@@ -26,7 +26,7 @@ def test_signed_complex_mp2rage_and_lut_matching(tmp_path: Path) -> None:
     p[:, 1:] = [-1 / 3, 1 / 3]
     m[:, 1:] = [-0.4, 0.4]
     np.savez(lut, inv1=inv1, inv2=inv2, psir=p, mp2rage=m)
-    t1, m0, _ = fit_t1_m0(psir, mp2, s1, s2, torch.ones(2), str(lut), "cpu", 1)
+    t1, m0, _ = fit_t1_m0(psir, mp2, s1, s2, torch.ones(2), str(lut), "cpu")
     torch.testing.assert_close(t1, torch.tensor([1.0, 2.0]))
     torch.testing.assert_close(m0.abs(), torch.tensor([2.0, 2.0]))
 

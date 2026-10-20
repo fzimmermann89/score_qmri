@@ -1,6 +1,8 @@
 """Small CPU regressions; no real raw reconstruction or CUDA workload."""
 
+import sys
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import h5py
 import numpy as np
@@ -40,25 +42,53 @@ def test_calibration_and_pocs_run_on_cpu() -> None:
     torch.testing.assert_close(output, acquired)
 
 
-def test_legacy_cc_streaming_matches_original_axis_recipe(tmp_path: Path) -> None:
-    source = tmp_path / "legacy.h5"
-    values: np.ndarray = np.arange(72 * 4 * 5, dtype=np.float32).reshape(72, 4, 5).astype(np.complex64)
-    coils: np.ndarray = np.arange(5 * 2 * 72 * 4, dtype=np.float32).reshape(5, 2, 72, 4).astype(np.complex64)
-    with h5py.File(str(source), "w-") as file:
-        file.create_group("combined").create_dataset("subject", data=values)
-        file.create_group("coilwise").create_dataset("subject", data=coils)
-    before = source.read_bytes()
-    output = tmp_path / "fixed.h5"
-    cc.fix_legacy_cc(source, output)
-    with h5py.File(str(output), "r") as file:
-        np.testing.assert_array_equal(file["combined/subject"][:], values[50:-20])
-        expected = np.swapaxes(np.swapaxes(coils, 0, 2), -1, -2)[50:-20]
-        np.testing.assert_array_equal(file["coilwise/subject"][:], expected)
-    assert source.read_bytes() == before
-    fixed_before = output.read_bytes()
+def test_cc_raw_output_is_exclusive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    inputs = tmp_path / "raw"
+    inputs.mkdir()
+    with h5py.File(str(inputs / "subject.h5"), "w-") as source:
+        source.create_dataset("kspace", data=np.ones((1, 2), dtype=np.float32))
+    image = torch.ones((1, 32, 32), dtype=torch.complex64)
+    monkeypatch.setattr(cc, "cc_images", lambda raw: (image, image[:, None]))
+    output = tmp_path / "new"
+    cc.reconstruct(inputs, output)
+    path = output / "cc_reconstructed.h5"
+    with h5py.File(str(path), "r") as target:
+        np.testing.assert_array_equal(target["combined/subject"][:], image.numpy())
+        np.testing.assert_array_equal(target["coilwise/subject"][:], image[:, None].numpy())
+    before = path.read_bytes()
     with pytest.raises(FileExistsError):
-        cc.fix_legacy_cc(source, output)
-    assert output.read_bytes() == fixed_before
+        cc.reconstruct(inputs, output)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("dataset", ["fastmri", "m4raw"])
+def test_raw_limit_applies_to_each_modality(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dataset: str) -> None:
+    inputs = tmp_path / "raw"
+    inputs.mkdir()
+    for sequence in ("T1", "T2"):
+        for subject in ("001", "002"):
+            filename = f"{'x' * 13}{sequence}_{subject}_scan.h5" if dataset == "fastmri" else f"{subject}_{sequence}01.h5"
+            with h5py.File(str(inputs / filename), "w-") as source:
+                source.create_dataset("kspace", data=np.ones((1, 1, 32, 32), dtype=np.complex64))
+                source.create_dataset("ismrmrd_header", data=b"mock header")
+    image = torch.ones((1, 32, 32), dtype=torch.complex64)
+    module: ModuleType
+    if dataset == "fastmri":
+        header = SimpleNamespace(encoding=[SimpleNamespace(reconSpace=SimpleNamespace(matrixSize=SimpleNamespace(x=32, y=32)))])
+        monkeypatch.setitem(sys.modules, "ismrmrd", SimpleNamespace(xsd=SimpleNamespace(CreateFromDocument=lambda _: header)))
+        monkeypatch.setattr(fastmri, "fastmri_images", lambda raw, matrix: (image, image[:, None]))
+        module, modalities, subject = fastmri, ("t1", "t2"), "001_scan"
+    else:
+        monkeypatch.setattr(m4raw, "m4raw_image", lambda raw, gre: image)
+        module, modalities, subject = m4raw, ("t1w", "t2w"), "001"
+    output = tmp_path / "new"
+    module.prepare(inputs, output, limit=1)
+    assert sorted(path.name for path in output.iterdir()) == sorted(f"{dataset}_{modality}.h5" for modality in modalities)
+    for modality in modalities:
+        with h5py.File(str(output / f"{dataset}_{modality}.h5"), "r") as target:
+            group = target["combined"] if dataset == "fastmri" else target
+            assert list(group) == [subject]
+            np.testing.assert_array_equal(group[subject][:], image.numpy())
 
 
 def test_no_inputs_no_outputs_and_existing_destination_refused(tmp_path: Path) -> None:
@@ -75,6 +105,26 @@ def test_no_inputs_no_outputs_and_existing_destination_refused(tmp_path: Path) -
     existing.write_bytes(b"preserve")
     with pytest.raises(FileExistsError):
         m4raw.prepare(inputs, output)
+    assert existing.read_bytes() == b"preserve"
+
+
+@pytest.mark.parametrize("dataset", ["fastmri", "m4raw"])
+def test_all_raw_destinations_checked_before_writing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dataset: str) -> None:
+    inputs = tmp_path / "raw"
+    inputs.mkdir()
+    for sequence in ("T1", "T2"):
+        filename = f"{'x' * 13}{sequence}_001_scan.h5" if dataset == "fastmri" else f"001_{sequence}01.h5"
+        (inputs / filename).touch()
+    output = tmp_path / "new"
+    output.mkdir()
+    second = "t2" if dataset == "fastmri" else "t2w"
+    existing = output / f"{dataset}_{second}.h5"
+    existing.write_bytes(b"preserve")
+    monkeypatch.setitem(sys.modules, "ismrmrd", SimpleNamespace())
+    module: ModuleType = fastmri if dataset == "fastmri" else m4raw
+    with pytest.raises(FileExistsError):
+        module.prepare(inputs, output)
+    assert list(output.iterdir()) == [existing]
     assert existing.read_bytes() == b"preserve"
 
 

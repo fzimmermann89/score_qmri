@@ -41,14 +41,12 @@ def selected_paths(paths: Iterable[Path], subjects: list[str] | None = None, lim
     return result[:limit] if limit is not None else result
 
 
-def clean_mask_3d(mask: torch.Tensor | np.ndarray, *, large: bool = True) -> torch.Tensor:
-    """Original v3-v7 radius2 mask or v8-v9 radius1 mask."""
+def clean_mask_3d(mask: torch.Tensor | np.ndarray) -> torch.Tensor:
     st = ndi.generate_binary_structure(3, 1)
-    if large:
-        st = ndi.iterate_structure(st, 2)
+    st = ndi.iterate_structure(st, 2)
     result = ndi.binary_opening(np.asarray(mask, dtype=bool), structure=st)
-    result = ndi.binary_closing(result, structure=st, iterations=5 if large else 3)
-    result = ndi.binary_dilation(result, structure=st, iterations=3 if large else 1)
+    result = ndi.binary_closing(result, structure=st, iterations=5)
+    result = ndi.binary_dilation(result, structure=st, iterations=3)
     result = np.array([ndi.binary_fill_holes(s) for s in result])
     labels, n = ndi.label(result, structure=ndi.generate_binary_structure(3, 1))
     if n:

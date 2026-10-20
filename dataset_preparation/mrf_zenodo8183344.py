@@ -19,8 +19,6 @@ import torch
 from einops import rearrange
 
 MODALITIES = ("t1map", "t2map", "t1w", "t2w")
-ACTIVE_THRESHOLD = 1e-6
-MIN_ACTIVE_PIXELS = 1000
 
 
 def exclusive_h5(path: str | Path) -> h5py.File:
@@ -68,45 +66,25 @@ def first(root: Path, pattern: str) -> Path:
     return matches[0]
 
 
-def load_nifti(path: Path, *, oriented: bool = True) -> tuple[torch.Tensor, nib.Nifti1Header]:
-    """Load with original float64 get_fdata precision and optional ZYX flip."""
-    image = nib.load(path)
-    data = torch.as_tensor(image.get_fdata())
-    if oriented:
-        data = rearrange(data, "x y z -> z y x").flip(1)
-    return data, image.header
+def load_nifti(path: Path) -> torch.Tensor:
+    return rearrange(torch.as_tensor(nib.load(path).get_fdata()), "x y z -> z y x").flip(1)
 
 
 def zenodo_subject(root: Path, which: str, modalities: set[str]) -> Iterator[tuple[str, str, torch.Tensor]]:
     """Original v10 quantitative seconds and independent image masks/crops."""
     name = "_".join([*root.parts[-2:], which])
-    mprage, _ = load_nifti(first(root, f"*{which}*mprage.nii"))
+    mprage = load_nifti(first(root, f"*{which}*mprage.nii"))
     mask = torch.stack([clean_mask_2d(m > 10) for m in mprage])
     for modality in ("t1map", "t2map"):
         if modality in modalities:
-            image, _ = load_nifti(first(root, f"*{which}*{modality[:2]}.nii"))
+            image = load_nifti(first(root, f"*{which}*{modality[:2]}.nii"))
             yield modality, name, (image * mask.float() / 1000)[7:-5].float()
     if "t1w" in modalities:
         yield "t1w", name, (mprage * mask.float() / mprage.max())[3:-5].float()
     if "t2w" in modalities:
-        image, _ = load_nifti(first(root, f"*{which}*tse.nii"))
+        image = load_nifti(first(root, f"*{which}*tse.nii"))
         mask = torch.stack([clean_mask_2d(m > 50) for m in image])
         yield "t2w", name, (image * mask.float() / image.max())[3:-5].float()
-
-
-def retained_indices(
-    dataset: h5py.Dataset | np.ndarray, threshold: float = ACTIVE_THRESHOLD, min_pixels: int = MIN_ACTIVE_PIXELS
-) -> list[int]:
-    """Return the exact original >=1000 active-pixel selection."""
-    if dataset.ndim not in (3, 4):
-        raise ValueError(f"Expected (Z,H,W) or (Z,C,H,W): {dataset.shape}")
-    valid = []
-    for index in range(dataset.shape[0]):
-        active = np.abs(dataset[index]) > threshold
-        count = int(np.max(np.sum(active, axis=(-2, -1))) if active.ndim == 3 else np.sum(active))
-        if count >= min_pixels:
-            valid.append(index)
-    return valid
 
 
 def prepare(
@@ -122,7 +100,7 @@ def prepare(
             for which in ("original", "reposition"):
                 for modality, key, image in zenodo_subject(root, which, wanted):
                     array = image.numpy()
-                    write_dataset(outputs[modality], key, array[retained_indices(array)])
+                    write_dataset(outputs[modality], key, array[(np.abs(array) > 1e-6).sum((-2, -1)) >= 1000])
 
 
 def main() -> None:

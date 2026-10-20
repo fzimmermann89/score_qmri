@@ -39,12 +39,8 @@ def exclusive_h5(path: str | Path) -> h5py.File:
 
 def normalize_slab(values: Sequence[np.ndarray], baselines: Sequence[int]) -> np.ndarray:
     """Normalize one spatial slab using the original whole-volume baseline."""
-    if len(values) != len(CLASSES) or len(baselines) != len(CLASSES):
-        raise ValueError("Expected all 12 classes, including background.")
     corrected = []
     for values_i, baseline in zip(values, baselines, strict=True):
-        if values_i.dtype != np.dtype("<u2"):
-            raise ValueError("Expected explicitly little-endian uint16 input.")
         corrected.append(np.clip(values_i - np.asarray(baseline, dtype=values_i.dtype), 0, 4096))
     # Python sum preserves the original uint16 accumulation. 12*4096 < 65536.
     denominator = sum(corrected)
@@ -67,29 +63,18 @@ def _read_plane(stream: BinaryIO | gzip.GzipFile, shape: tuple[int, int, int], z
 def iter_raw_slabs(
     paths: Sequence[Path],
     shape: tuple[int, int, int] = SHAPE,
-    slab_size: int = 1,
     baseline_slice: int = 50,
 ) -> Iterator[tuple[int, np.ndarray]]:
     """Stream gzip classes with bounded memory and validate the raw lengths."""
-    if len(paths) != len(CLASSES) or slab_size < 1 or not 0 <= baseline_slice < shape[0]:
-        raise ValueError("Invalid class count, slab size, or baseline slice.")
+    if len(paths) != len(CLASSES) or not 0 <= baseline_slice < shape[0]:
+        raise ValueError("Invalid class count or baseline slice.")
     with ExitStack() as stack:
         streams = [stack.enter_context(gzip.open(path, "rb")) for path in paths]
         baselines = [int(_read_plane(stream, shape, baseline_slice).min()) for stream in streams]
         for stream in streams:
             stream.seek(0)
-        plane_bytes = shape[1] * shape[2] * 2
-        for start in range(0, shape[0], slab_size):
-            count = min(slab_size, shape[0] - start)
-            values = []
-            for stream in streams:
-                raw = stream.read(count * plane_bytes)
-                if len(raw) != count * plane_bytes:
-                    raise ValueError(f"Truncated raw gzip at slice {start}.")
-                array = np.frombuffer(raw, dtype="<u2").reshape(count, *shape[1:])
-                if array.max(initial=0) > 4095:
-                    raise ValueError("Raw values exceed 4095; check source and byte order.")
-                values.append(array)
+        for start in range(shape[0]):
+            values = [_read_plane(stream, shape, start)[None] for stream in streams]
             yield start, normalize_slab(values, baselines)
         if any(stream.read(1) for stream in streams):
             raise ValueError("Raw gzip has more voxels than the expected Brainweb shape.")
@@ -101,10 +86,10 @@ def _create_classes(group: h5py.Group, shape: tuple[int, ...]) -> h5py.Dataset:
     )
 
 
-def pack_subjects(input_root: Path, output: Path, subjects: Sequence[str], slab_size: int = 1) -> None:
+def pack_subjects(input_root: Path, output: Path, subjects: Sequence[str]) -> None:
     """Losslessly pack flat newer subject files into the training schema."""
-    if not subjects or len(set(subjects)) != len(subjects) or slab_size < 1:
-        raise ValueError("Select distinct subjects and a positive slab size.")
+    if not subjects or len(set(subjects)) != len(subjects):
+        raise ValueError("Select distinct subjects.")
     if output.exists() or output.is_symlink():
         raise FileExistsError(output)
     sources = [input_root / f"s{subject}.h5" for subject in subjects]
@@ -125,14 +110,12 @@ def pack_subjects(input_root: Path, output: Path, subjects: Sequence[str], slab_
                 dst = _create_classes(group, src.shape)
                 for name, value in src.attrs.items():
                     dst.attrs[name] = value
-                for start in range(0, src.shape[0], slab_size):
-                    dst[start : start + slab_size] = src[start : start + slab_size]
+                for start in range(src.shape[0]):
+                    dst[start] = src[start]
 
 
-def _cache_paths(root: Path, subject: str, single: bool, download: bool) -> list[Path]:
+def _cache_paths(root: Path, subject: str, download: bool) -> list[Path]:
     folder = root / f"s{subject}"
-    if single and not folder.exists() and all((root / f"{tissue}.gz").is_file() for tissue in CLASSES):
-        folder = root
     if download:
         folder.mkdir(parents=True, exist_ok=True)
     paths = [folder / f"{tissue}.gz" for tissue in CLASSES]
@@ -148,13 +131,13 @@ def _cache_paths(root: Path, subject: str, single: bool, download: bool) -> list
     return paths
 
 
-def prepare_raw(cache: Path, output: Path, subjects: Sequence[str], download: bool = False, slab_size: int = 1) -> None:
+def prepare_raw(cache: Path, output: Path, subjects: Sequence[str], download: bool = False) -> None:
     """Prepare a packed H5 from raw gzip inputs, downloading only when requested."""
-    if not subjects or len(set(subjects)) != len(subjects) or slab_size < 1:
-        raise ValueError("Select distinct subjects and a positive slab size.")
+    if not subjects or len(set(subjects)) != len(subjects):
+        raise ValueError("Select distinct subjects.")
     if output.exists() or output.is_symlink():
         raise FileExistsError(output)
-    paths = [_cache_paths(cache, subject, len(subjects) == 1, download) for subject in subjects]
+    paths = [_cache_paths(cache, subject, download) for subject in subjects]
     with exclusive_h5(output) as target:
         for subject, class_paths in zip(subjects, paths, strict=True):
             group = target.create_group(f"subject_{subject}")
@@ -162,7 +145,7 @@ def prepare_raw(cache: Path, output: Path, subjects: Sequence[str], download: bo
             group.attrs["subject"] = int(subject)
             group.attrs["version"] = 1
             data = _create_classes(group, (*SHAPE, len(CLASSES) - 1))
-            for start, values in iter_raw_slabs(class_paths, slab_size=slab_size):
+            for start, values in iter_raw_slabs(class_paths):
                 data[start : start + len(values)] = values
 
 
@@ -174,18 +157,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--output", type=Path, required=True, help="New H5 path; existing paths are refused.")
     parser.add_argument("--subjects", nargs="+", default=list(SUBJECTS), choices=SUBJECTS)
     parser.add_argument("--limit", type=int, help="Prepare the first N selected subjects, in canonical order.")
-    parser.add_argument("--slab-size", type=int, default=1, help="Slices in memory at once (default 1).")
     parser.add_argument("--download", action="store_true", help="Explicitly allow missing raw gzip downloads, sequentially.")
     args = parser.parse_args(argv)
-    if args.limit is not None and args.limit < 1 or args.slab_size < 1:
-        parser.error("--limit and --slab-size must be positive.")
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be positive.")
     subjects = [subject for subject in SUBJECTS if subject in args.subjects][: args.limit]
     if args.mode == "pack":
         if args.download:
             parser.error("pack accepts --input-root and preserves existing normalization; raw options are invalid.")
-        pack_subjects(args.input_root, args.output, subjects, args.slab_size)
+        pack_subjects(args.input_root, args.output, subjects)
     else:
-        prepare_raw(args.input_root, args.output, subjects, args.download, args.slab_size)
+        prepare_raw(args.input_root, args.output, subjects, args.download)
 
 
 if __name__ == "__main__":

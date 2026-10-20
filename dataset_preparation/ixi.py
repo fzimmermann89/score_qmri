@@ -32,7 +32,6 @@ def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Data
 
 
 def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
-    """Filter by BIDS ancestor or filename without changing volume contents."""
     paths = sorted(set(paths))
     if subjects:
         paths = [p for p in paths if any(s in p.parts or p.name.startswith(s + "_") or p.stem == s for s in subjects)]
@@ -41,7 +40,7 @@ def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> 
             raise ValueError("limit must be positive")
         paths = paths[:limit]
     if not paths:
-        raise ValueError("No matching input files; check input root, subjects and downloaded annex content")
+        raise ValueError("No matching input files")
     return paths
 
 

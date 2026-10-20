@@ -42,13 +42,8 @@ def selected_paths(paths: Iterable[Path], subjects: list[str] | None = None, lim
     return result[:limit] if limit is not None else result
 
 
-def load_nifti(path: Path, *, oriented: bool = True) -> tuple[torch.Tensor, nib.Nifti1Header]:
-    """Load with original float64 get_fdata precision and optional ZYX flip."""
-    image = nib.load(path)
-    data = torch.as_tensor(image.get_fdata())
-    if oriented:
-        data = rearrange(data, "x y z -> z y x").flip(1)
-    return data, image.header
+def load_nifti(path: Path) -> torch.Tensor:
+    return rearrange(torch.as_tensor(nib.load(path).get_fdata()), "x y z -> z y x").flip(1)
 
 
 def first(root: Path, pattern: str) -> Path:
@@ -74,28 +69,26 @@ def clean_mask_2d(mask: torch.Tensor | np.ndarray) -> torch.Tensor:
     return torch.tensor(result, dtype=torch.bool)
 
 
-def subject_4611(root: Path, modalities: set[str]) -> Iterator[tuple[str, str, torch.Tensor]]:
+def subject_4611(root: Path, modality: str) -> Iterator[tuple[str, torch.Tensor]]:
     t1_path = first(root, "*T1map*.nii.gz")
-    t1, _ = load_nifti(t1_path)
-    inv1, _ = load_nifti(first(root, "*inv-1*.nii.gz"))
-    inv2, _ = load_nifti(first(root, "*inv-2*.nii.gz"))
+    t1 = load_nifti(t1_path)
+    inv1 = load_nifti(first(root, "*inv-1*.nii.gz"))
+    inv2 = load_nifti(first(root, "*inv-2*.nii.gz"))
     mask = torch.stack([clean_mask_2d(m) for m in inv1 + inv2 > 40]).float()
     name = t1_path.stem.split("_run")[0]
-    if "t1map" in modalities:
-        yield "t1map", name, (t1 * mask)[5:-1].float() / 1000
-    if "t2map" in modalities:
-        paths = sorted(root.rglob("*T2map*.nii.gz"))
-        if paths:
-            t2, _ = load_nifti(first(root, "*T2map*.nii.gz"))
-            yield "t2map", name, (t2 * mask)[5:-1].float() / 1000
-    if "t1w" in modalities:
-        image, _ = load_nifti(first(root, "*UNIT*.nii.gz"))
+    if modality == "t1map":
+        yield name, (t1 * mask)[5:-1].float() / 1000
+    if modality == "t2map":
+        t2 = load_nifti(first(root, "*T2map*.nii.gz"))
+        yield name, (t2 * mask)[5:-1].float() / 1000
+    if modality == "t1w":
+        image = load_nifti(first(root, "*UNIT*.nii.gz"))
         image = (image * mask)[5:-1].float()
-        yield "t1w", name, image / image.max()
-    if "mprage" in modalities:
+        yield name, image / image.max()
+    if modality == "mprage":
         for i, image in enumerate((inv1, inv2), 1):
             image = (image * mask)[5:-1].float()
-            yield "mprage", f"{name}_{i}", image / image.max()
+            yield f"{name}_{i}", image / image.max()
 
 
 def prepare(
@@ -115,7 +108,7 @@ def prepare(
             raise ValueError(f"No {modality} inputs for selected subjects")
         with exclusive_h5(output_dir / f"ds004611_{modality}.h5") as output:
             for root in selected:
-                for _, name, image in subject_4611(root, {modality}):
+                for name, image in subject_4611(root, modality):
                     write_dataset(output, name, image.numpy())
 
 

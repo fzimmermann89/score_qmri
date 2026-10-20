@@ -44,23 +44,17 @@ def selected_paths(paths: Iterable[Path], subjects: list[str] | None = None, lim
     return result[:limit] if limit is not None else result
 
 
-def load_nifti(path: Path, *, oriented: bool = True) -> tuple[torch.Tensor, nib.Nifti1Header]:
-    """Load with original float64 get_fdata precision and optional ZYX flip."""
+def load_nifti(path: Path) -> tuple[torch.Tensor, nib.Nifti1Header]:
     image = nib.load(path)
     data = torch.as_tensor(image.get_fdata())
-    if oriented:
-        data = rearrange(data, "x y z -> z y x").flip(1)
     return data, image.header
 
 
-def clean_mask_3d(mask: torch.Tensor | np.ndarray, *, large: bool = True) -> torch.Tensor:
-    """Original v3-v7 radius2 mask or v8-v9 radius1 mask."""
+def clean_mask_3d(mask: torch.Tensor | np.ndarray) -> torch.Tensor:
     st = ndi.generate_binary_structure(3, 1)
-    if large:
-        st = ndi.iterate_structure(st, 2)
     result = ndi.binary_opening(np.asarray(mask, dtype=bool), structure=st)
-    result = ndi.binary_closing(result, structure=st, iterations=5 if large else 3)
-    result = ndi.binary_dilation(result, structure=st, iterations=3 if large else 1)
+    result = ndi.binary_closing(result, structure=st, iterations=3)
+    result = ndi.binary_dilation(result, structure=st, iterations=1)
     result = np.array([ndi.binary_fill_holes(s) for s in result])
     labels, n = ndi.label(result, structure=ndi.generate_binary_structure(3, 1))
     if n:
@@ -78,8 +72,12 @@ def centered(data: torch.Tensor, shape: tuple[int, ...]) -> torch.Tensor:
     return torch.nn.functional.pad(data, pads)
 
 
-def volume(modality: str, path: Path) -> torch.Tensor:
-    image, header = load_nifti(path, oriented=False)
+def volume(modality: str, path: Path) -> torch.Tensor | None:
+    try:
+        image, header = load_nifti(path)
+    except Exception as error:
+        print(f"Skipping {path}: {error}")
+        return None
     image = torch.nn.functional.interpolate(image[None, None], scale_factor=header["pixdim"][1:4].tolist(), mode="trilinear")[0, 0]
     quaternion = header.get_qform_quaternion()
     if modality == "flair":
@@ -92,8 +90,9 @@ def volume(modality: str, path: Path) -> torch.Tensor:
     elif quaternion[2] > 0.9:
         image = rearrange(image, "x y z -> z y x")
     else:
-        raise ValueError(f"Original v9 rejected quaternion {quaternion}: {path}")
-    mask = clean_mask_3d(image > 20, large=False)
+        print(f"Skipping {path}: unsupported quaternion {quaternion}")
+        return None
+    mask = clean_mask_3d(image > 20)
     image = image / np.percentile(image[mask].numpy(), 99.5)
     image[~mask] = 0
     keep = mask.float().mean((-1, -2)) > 0.3
@@ -105,15 +104,24 @@ def volume(modality: str, path: Path) -> torch.Tensor:
 def prepare(
     input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
 ) -> None:
+    if limit is not None and limit < 1:
+        raise ValueError("--limit must be positive")
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"ds004889_{m}.h5")) for m in modalities or MODALITIES}
         for modality, output in outputs.items():
             pattern = f"*{'T1' if modality == 't1w' else 'FLAIR'}*.nii.gz"
-            paths = selected_paths((p for p in input_root.rglob(pattern) if p.is_file()), subjects, limit)
+            paths = selected_paths((p for p in input_root.rglob(pattern) if p.is_file()), subjects)
             if not paths:
                 raise ValueError(f"No matching {pattern} inputs")
+            written = 0
             for path in paths:
-                write_dataset(output, path.stem, volume(modality, path).numpy())
+                image = volume(modality, path)
+                if image is None:
+                    continue
+                write_dataset(output, path.stem, image.numpy())
+                written += 1
+                if written == limit:
+                    break
 
 
 def main() -> None:

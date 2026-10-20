@@ -17,8 +17,6 @@ import scipy.ndimage as ndi
 import torch
 
 MODALITIES = ("t1map", "t2map", "m0map")
-ACTIVE_THRESHOLD = 1e-6
-MIN_ACTIVE_PIXELS = 1000
 
 
 def exclusive_h5(path: str | Path) -> h5py.File:
@@ -34,7 +32,6 @@ def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Data
 
 
 def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
-    """Filter by BIDS ancestor or filename without changing volume contents."""
     paths = sorted(set(paths))
     if subjects:
         paths = [p for p in paths if any(s in p.parts or p.name.startswith(s + "_") or p.stem == s for s in subjects)]
@@ -43,7 +40,7 @@ def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> 
             raise ValueError("limit must be positive")
         paths = paths[:limit]
     if not paths:
-        raise ValueError("No matching input files; check input root, subjects and downloaded annex content")
+        raise ValueError("No matching input files")
     return paths
 
 
@@ -59,26 +56,9 @@ def clean_mask_3d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
     return torch.tensor(result, dtype=torch.bool)
 
 
-def retained_indices(
-    dataset: h5py.Dataset | np.ndarray, threshold: float = ACTIVE_THRESHOLD, min_pixels: int = MIN_ACTIVE_PIXELS
-) -> list[int]:
-    """Return the exact original >=1000 active-pixel selection."""
-    if dataset.ndim not in (3, 4):
-        raise ValueError(f"Expected (Z,H,W) or (Z,C,H,W): {dataset.shape}")
-    valid = []
-    for index in range(dataset.shape[0]):
-        active = np.abs(dataset[index]) > threshold
-        count = int(np.max(np.sum(active, axis=(-2, -1))) if active.ndim == 3 else np.sum(active))
-        if count >= min_pixels:
-            valid.append(index)
-    return valid
-
-
 def quiero_volumes(path: Path) -> dict[str, np.ndarray]:
     """Original 4Pub T1/T2/M0 channels and corner-derived foreground mask."""
     data = torch.tensor(nib.load(path).get_fdata()).moveaxis((0, 1, 2, 3), (2, 3, 1, 0))
-    if data.shape[0] != 3:
-        raise ValueError(f"Expected three parameter channels: {path}")
     edge = torch.cat(
         [
             data[-1, 20:-20, :10, -10:].ravel(),
@@ -100,13 +80,12 @@ def prepare(
 ) -> None:
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"quiero_{m}.h5")) for m in modalities or MODALITIES}
-        for path in select(list(input_root.rglob("*test.nii")), subjects, limit):
-            if nib.load(path).shape[-1] != 3:
-                continue
+        paths = [path for path in input_root.rglob("*test.nii") if nib.load(path).shape[-1] == 3]
+        for path in select(paths, subjects, limit):
             name = path.parent.parent.stem + "_" + path.stem
             for modality, array in quiero_volumes(path).items():
                 if modality in outputs:
-                    write_dataset(outputs[modality], name, array[retained_indices(array)])
+                    write_dataset(outputs[modality], name, array[(np.abs(array) > 1e-6).sum((-2, -1)) >= 1000])
 
 
 def main() -> None:

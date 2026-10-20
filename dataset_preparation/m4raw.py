@@ -9,11 +9,9 @@ Run: python m4raw.py --input-root INPUT --output-dir NEW --limit 1.
 from __future__ import annotations
 
 import argparse
-import json
 import math
 from collections import defaultdict
 from collections.abc import Sequence
-from contextlib import ExitStack
 from pathlib import Path
 from typing import cast
 
@@ -46,17 +44,15 @@ def axial_chunks(shape: tuple[int, ...]) -> tuple[int, ...]:
     return (1, *shape[1:])
 
 
-def retained_indices(
-    dataset: h5py.Dataset | np.ndarray, threshold: float = ACTIVE_THRESHOLD, min_pixels: int = MIN_ACTIVE_PIXELS
-) -> list[int]:
+def retained_indices(dataset: h5py.Dataset | np.ndarray) -> list[int]:
     """Return the exact original >=1000 active-pixel selection."""
     if dataset.ndim not in (3, 4):
         raise ValueError(f"Expected (Z,H,W) or (Z,C,H,W): {dataset.shape}")
     valid = []
     for index in range(dataset.shape[0]):
-        active = np.abs(dataset[index]) > threshold
+        active = np.abs(dataset[index]) > ACTIVE_THRESHOLD
         count = int(np.max(np.sum(active, axis=(-2, -1))) if active.ndim == 3 else np.sum(active))
-        if count >= min_pixels:
+        if count >= MIN_ACTIVE_PIXELS:
             valid.append(index)
     return valid
 
@@ -73,16 +69,13 @@ def clean_file(
     output_path: str | Path,
     subjects: list[str] | None = None,
     limit: int | None = None,
-) -> dict[str, dict[str, int]]:
-    """Create a new filtered file, optionally selecting a bounded subject subset."""
+) -> None:
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
     with h5py.File(str(input_path), "r") as source:
         groups = [name for name in ("coilwise", "combined") if name in source and isinstance(source[name], h5py.Group)]
         reference = source["combined"] if "combined" in groups else source[groups[0]] if groups else source
         names = sorted(name for name in reference if isinstance(reference[name], h5py.Dataset))
-        if not groups and any(isinstance(source[name], h5py.Group) for name in source):
-            raise ValueError("Unsupported nested schema; use the Brainweb packing recipe for class volumes")
         if subjects is not None:
             missing = set(subjects) - set(names)
             if missing:
@@ -92,13 +85,11 @@ def clean_file(
             names = names[:limit]
         if not names:
             raise ValueError("No subjects selected")
-        report = {}
         with exclusive_h5(output_path) as target:
             for name in groups:
                 target.create_group(name)
             for name in names:
                 indices = retained_indices(reference[name])
-                report[name] = {"input_slices": reference[name].shape[0], "output_slices": len(indices)}
                 if not indices:
                     continue
                 if groups:
@@ -107,7 +98,6 @@ def clean_file(
                             _copy_selected(source[group][name], target[group], name, indices)
                 else:
                     _copy_selected(source[name], target, name, indices)
-        return report
 
 
 def pad_or_crop(data: Tensor, new_shape: Sequence[int]) -> Tensor:
@@ -233,9 +223,9 @@ def espirit_2d(
     return sens_maps
 
 
-def _write(group: h5py.Group, name: str, tensor: Tensor, coil_chunks: bool = False) -> None:
+def _write(group: h5py.Group, name: str, tensor: Tensor) -> None:
     data = tensor.detach().cpu().to(torch.complex64).numpy()
-    chunks = (1, 1, *data.shape[2:]) if coil_chunks else (1, *data.shape[1:])
+    chunks = (1, *data.shape[1:])
     group.create_dataset(name, data=data, compression="lzf", shuffle=True, chunks=chunks)
 
 
@@ -258,57 +248,38 @@ def prepare(
     subjects: Sequence[str] | None = None,
     limit: int | None = None,
     device: str = "cpu",
-    curated: bool = True,
-    repeat_order: str = "native",
-    repeat_manifest: Path | None = None,
 ) -> None:
-    """Prepare selected existing raw files; all output files use exclusive creation."""
     if limit is not None and limit < 1:
         raise ValueError("Limit must be positive.")
-    files = list(input_root.rglob("*.h5"))
-    if repeat_order == "sorted":
-        files.sort()
-    manifest = json.loads(repeat_manifest.read_text()) if repeat_manifest else None
     groups: dict[tuple[str, str], list[Path]] = defaultdict(list)
-    for file in files:
-        parts = file.stem.split("_")
+    for path in input_root.rglob("*.h5"):
+        parts = path.stem.split("_")
         if len(parts) < 2:
             continue
-        name, sequence = (parts[0], parts[1][:-2])
+        name, sequence = parts[0], parts[1][:-2]
         modality = {"T1": "t1w", "T2": "t2w", "FLAIR": "flair", "GRE": "gre"}.get(sequence, "")
         if not modality or (modalities and modality not in modalities) or (subjects and name not in subjects):
             continue
-        groups[modality, name].append(file)
-    selected = sorted(groups)[:limit]
-    if not selected:
+        groups[modality, name].append(path)
+    if not groups:
         raise ValueError("No matching raw inputs found; no output files created.")
-    filenames = {modality: f"m4raw_{modality}.h5" for modality, _ in selected}
-    for filename in filenames.values():
-        output = output_dir / filename
-        if output.exists() or output.is_symlink():
-            raise FileExistsError(output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    with ExitStack() as stack:
-        targets = {modality: stack.enter_context(h5py.File(str(output_dir / filename), "w-")) for modality, filename in filenames.items()}
-        for modality, name in selected:
-            paths = groups[modality, name]
-            if manifest is not None:
-                key = f"{name}/{modality}"
-                if key not in manifest:
-                    raise ValueError(f"Missing repeat manifest entry: {key}")
-                ordered = [input_root / relative for relative in manifest[key]]
-                if set(ordered) != set(paths) or len(ordered) != len(paths):
-                    raise ValueError(f"Repeat manifest does not match selected files: {key}")
-                paths = ordered
-            values = []
-            for path in paths:
-                with h5py.File(str(path), "r") as source:
-                    values.append(torch.tensor(np.array(source["kspace"]), device=device))
-            target = targets[modality]
-            image = m4raw_image(values, gre=modality == "gre")
-            if curated:
+    for modality in {kind for kind, _ in groups}:
+        path = output_dir / f"m4raw_{modality}.h5"
+        if path.exists() or path.is_symlink():
+            raise FileExistsError(path)
+    for modality in modalities or MODALITIES:
+        names = sorted(name for kind, name in groups if kind == modality)[:limit]
+        if not names:
+            continue
+        with exclusive_h5(output_dir / f"m4raw_{modality}.h5") as target:
+            for name in names:
+                repeats = []
+                for path in groups[modality, name]:
+                    with h5py.File(str(path), "r") as source:
+                        repeats.append(torch.tensor(np.array(source["kspace"]), device=device))
+                image = m4raw_image(repeats, gre=modality == "gre")
                 image = image[retained_indices(image.numpy())]
-            _write(target, name, image)
+                _write(target, name, image)
 
 
 def main() -> None:
@@ -321,8 +292,6 @@ def main() -> None:
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--prepared", action="store_true", help="Filter archived prepared H5 files instead of reconstructing k-space")
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--repeat-order", choices=["native", "sorted"], default="native")
-    parser.add_argument("--repeat-manifest", type=Path)
     args = parser.parse_args()
     limit = None if args.all else args.limit
     torch.set_num_threads(1)
@@ -332,16 +301,7 @@ def main() -> None:
             clean_file(args.input_root / filename, args.output_dir / filename, args.subjects, limit)
     else:
         with torch.inference_mode():
-            prepare(
-                args.input_root,
-                args.output_dir,
-                args.modalities,
-                args.subjects,
-                limit,
-                args.device,
-                repeat_order=args.repeat_order,
-                repeat_manifest=args.repeat_manifest,
-            )
+            prepare(args.input_root, args.output_dir, args.modalities, args.subjects, limit, args.device)
 
 
 if __name__ == "__main__":

@@ -23,24 +23,20 @@ def exclusive_h5(path: str | Path) -> h5py.File:
 
 def axial_chunks(shape: tuple[int, ...]) -> tuple[int, ...]:
     """Use the historical cleanup layout for image volumes."""
-    if not shape or any(size <= 0 for size in shape):
-        raise ValueError(f"Expected a nonempty array, got shape {shape}")
     if len(shape) == 4:
         return (1, 1, *shape[2:])
     return (1, *shape[1:])
 
 
-def retained_indices(
-    dataset: h5py.Dataset | np.ndarray, threshold: float = ACTIVE_THRESHOLD, min_pixels: int = MIN_ACTIVE_PIXELS
-) -> list[int]:
+def retained_indices(dataset: h5py.Dataset | np.ndarray) -> list[int]:
     """Return the exact original >=1000 active-pixel selection."""
     if dataset.ndim not in (3, 4):
         raise ValueError(f"Expected (Z,H,W) or (Z,C,H,W): {dataset.shape}")
     valid = []
     for index in range(dataset.shape[0]):
-        active = np.abs(dataset[index]) > threshold
+        active = np.abs(dataset[index]) > ACTIVE_THRESHOLD
         count = int(np.max(np.sum(active, axis=(-2, -1))) if active.ndim == 3 else np.sum(active))
-        if count >= min_pixels:
+        if count >= MIN_ACTIVE_PIXELS:
             valid.append(index)
     return valid
 

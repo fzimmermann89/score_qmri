@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import argparse
 import math
-from collections import defaultdict
 from collections.abc import Sequence
-from contextlib import ExitStack
 from pathlib import Path
 from typing import cast
 
@@ -45,17 +43,15 @@ def axial_chunks(shape: tuple[int, ...]) -> tuple[int, ...]:
     return (1, *shape[1:])
 
 
-def retained_indices(
-    dataset: h5py.Dataset | np.ndarray, threshold: float = ACTIVE_THRESHOLD, min_pixels: int = MIN_ACTIVE_PIXELS
-) -> list[int]:
+def retained_indices(dataset: h5py.Dataset | np.ndarray) -> list[int]:
     """Return the exact original >=1000 active-pixel selection."""
     if dataset.ndim not in (3, 4):
         raise ValueError(f"Expected (Z,H,W) or (Z,C,H,W): {dataset.shape}")
     valid = []
     for index in range(dataset.shape[0]):
-        active = np.abs(dataset[index]) > threshold
+        active = np.abs(dataset[index]) > ACTIVE_THRESHOLD
         count = int(np.max(np.sum(active, axis=(-2, -1))) if active.ndim == 3 else np.sum(active))
-        if count >= min_pixels:
+        if count >= MIN_ACTIVE_PIXELS:
             valid.append(index)
     return valid
 
@@ -72,16 +68,13 @@ def clean_file(
     output_path: str | Path,
     subjects: list[str] | None = None,
     limit: int | None = None,
-) -> dict[str, dict[str, int]]:
-    """Create a new filtered file, optionally selecting a bounded subject subset."""
+) -> None:
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
     with h5py.File(str(input_path), "r") as source:
         groups = [name for name in ("coilwise", "combined") if name in source and isinstance(source[name], h5py.Group)]
         reference = source["combined"] if "combined" in groups else source[groups[0]] if groups else source
         names = sorted(name for name in reference if isinstance(reference[name], h5py.Dataset))
-        if not groups and any(isinstance(source[name], h5py.Group) for name in source):
-            raise ValueError("Unsupported nested schema; use the Brainweb packing recipe for class volumes")
         if subjects is not None:
             missing = set(subjects) - set(names)
             if missing:
@@ -91,13 +84,11 @@ def clean_file(
             names = names[:limit]
         if not names:
             raise ValueError("No subjects selected")
-        report = {}
         with exclusive_h5(output_path) as target:
             for name in groups:
                 target.create_group(name)
             for name in names:
                 indices = retained_indices(reference[name])
-                report[name] = {"input_slices": reference[name].shape[0], "output_slices": len(indices)}
                 if not indices:
                     continue
                 if groups:
@@ -106,7 +97,6 @@ def clean_file(
                             _copy_selected(source[group][name], target[group], name, indices)
                 else:
                     _copy_selected(source[name], target, name, indices)
-        return report
 
 
 def pad_or_crop(data: Tensor, new_shape: Sequence[int]) -> Tensor:
@@ -194,9 +184,9 @@ def espirit_2d(
     return sens_maps
 
 
-def _write(group: h5py.Group, name: str, tensor: Tensor, coil_chunks: bool = False) -> None:
+def _write(group: h5py.Group, name: str, tensor: Tensor) -> None:
     data = tensor.detach().cpu().to(torch.complex64).numpy()
-    chunks = (1, 1, *data.shape[2:]) if coil_chunks else (1, *data.shape[1:])
+    chunks = (1, *data.shape[1:])
     group.create_dataset(name, data=data, compression="lzf", shuffle=True, chunks=chunks)
 
 
@@ -229,16 +219,14 @@ def prepare(
     subjects: Sequence[str] | None = None,
     limit: int | None = None,
     device: str = "cpu",
-    curated: bool = True,
 ) -> None:
-    """Prepare selected existing raw files; all output files use exclusive creation."""
+    import ismrmrd
+
     if limit is not None and limit < 1:
         raise ValueError("Limit must be positive.")
-    files = list(input_root.rglob("*.h5"))
-    files.sort()
-    groups: dict[tuple[str, str], list[Path]] = defaultdict(list)
-    for file in files:
-        parts = file.stem[13:].split("_")
+    files: dict[str, list[tuple[str, Path]]] = {}
+    for path in sorted(input_root.rglob("*.h5")):
+        parts = path.stem[13:].split("_")
         if len(parts) != 3:
             continue
         sequence, first, second = parts
@@ -246,43 +234,30 @@ def prepare(
         name = f"{first}_{second}"
         if not modality or (modalities and modality not in modalities) or (subjects and name not in subjects):
             continue
-        groups[modality, name].append(file)
-    selected = sorted(groups)[:limit]
-    if not selected:
+        files.setdefault(modality, []).append((name, path))
+    if not files:
         raise ValueError("No matching raw inputs found; no output files created.")
-    if any(len(groups[key]) != 1 for key in selected):
-        raise ValueError("Multiple raw files have the same output subject key; select an unambiguous input root.")
-    filenames = {modality: f"fastmri_{modality}.h5" for modality, _ in selected}
-    for filename in filenames.values():
-        output = output_dir / filename
-        if output.exists() or output.is_symlink():
-            raise FileExistsError(output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    with ExitStack() as stack:
-        targets = {modality: stack.enter_context(h5py.File(str(output_dir / filename), "w-")) for modality, filename in filenames.items()}
-        for target in targets.values():
-            target.create_group("combined")
-            target.create_group("coilwise")
-        for modality, name in selected:
-            paths = groups[modality, name]
-            values = []
-            matrix = None
-            for path in paths:
+    for modality in files:
+        path = output_dir / f"fastmri_{modality}.h5"
+        if path.exists() or path.is_symlink():
+            raise FileExistsError(path)
+    for modality, candidates in files.items():
+        selected = sorted(candidates)[:limit]
+        if len({name for name, _ in selected}) != len(selected):
+            raise ValueError("Multiple raw files have the same output subject key; select an unambiguous input root.")
+        with exclusive_h5(output_dir / f"fastmri_{modality}.h5") as target:
+            combined_group = target.create_group("combined")
+            coilwise_group = target.create_group("coilwise")
+            for name, path in selected:
                 with h5py.File(str(path), "r") as source:
-                    values.append(torch.tensor(np.array(source["kspace"]), device=device))
-                    import ismrmrd
-
+                    kspace = torch.tensor(np.array(source["kspace"]), device=device)
                     header = ismrmrd.xsd.CreateFromDocument(source["ismrmrd_header"][()])
                     size = header.encoding[0].reconSpace.matrixSize
-                    matrix = (size.x, size.y)
-            target = targets[modality]
-            assert matrix is not None
-            combined, coilwise = fastmri_images(values[0], matrix)
-            if curated:
+                combined, coilwise = fastmri_images(kspace, (size.x, size.y))
                 indices = retained_indices(combined.numpy())
-                combined, coilwise = (combined[indices], coilwise[indices])
-            _write(target["combined"], name, combined)
-            _write(target["coilwise"], name, coilwise, coil_chunks=False)
+                combined, coilwise = combined[indices], coilwise[indices]
+                _write(combined_group, name, combined)
+                _write(coilwise_group, name, coilwise)
 
 
 def main() -> None:

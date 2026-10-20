@@ -32,9 +32,9 @@ def test_limit_selects_subject_with_requested_contrast(tmp_path: Path, monkeypat
     (present / "scan_T2w.nii.gz").touch()
     seen = []
 
-    def image(root: Path, modalities: set[str]) -> list[tuple[str, str, torch.Tensor]]:
+    def image(root: Path, modality: str) -> list[tuple[str, torch.Tensor]]:
         seen.append(root)
-        return [(next(iter(modalities)), "sub-02", torch.ones(2, 4, 4))]
+        return [("sub-02", torch.ones(2, 4, 4))]
 
     monkeypatch.setattr(script, "subject_221" if dataset == "ds000221" else "subject_4611", image)
     modality = "t2w" if dataset == "ds000221" else "t2map"
@@ -108,3 +108,33 @@ def test_zenodo_curated_default_drops_empty_map_slice(tmp_path: Path) -> None:
             assert handle[name].shape[0] == 7
             assert handle[name].dtype == np.float32
             assert handle[name][:].max() == 1.5
+
+
+def test_ds004889_skips_rejected_volume_before_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataset_preparation import ds004889
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    for name in ("a_T1.nii.gz", "b_T1.nii.gz", "c_T1.nii.gz"):
+        (raw / name).touch()
+    monkeypatch.setattr(ds004889, "volume", lambda _, path: None if path.name.startswith("a_") else torch.ones(2, 4, 4))
+    output = tmp_path / "new"
+    ds004889.prepare(raw, output, modalities=["t1w"], limit=1)
+    with h5py.File(str(output / "ds004889_t1w.h5")) as handle:
+        assert list(handle) == ["b_T1.nii"]
+
+
+def test_quiero_limit_ignores_non_parameter_scans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataset_preparation import quiero
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    for name, channels in (("a_test.nii", 1), ("b_test.nii", 3)):
+        nib.save(nib.Nifti1Image(np.ones((2, 2, 2, channels)), np.eye(4)), raw / name)
+    expected = np.full((2, 40, 40), 1.5, dtype=np.float32)
+    monkeypatch.setattr(quiero, "quiero_volumes", lambda _: {"t1map": expected})
+    output = tmp_path / "new"
+    quiero.prepare(raw, output, modalities=["t1map"], limit=1)
+    with h5py.File(str(output / "quiero_t1map.h5")) as handle:
+        assert len(handle) == 1
+        np.testing.assert_array_equal(next(iter(handle.values()))[:], expected)

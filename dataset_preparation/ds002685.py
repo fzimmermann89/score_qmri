@@ -1,6 +1,7 @@
 """Build ds002685_*.h5 from the downloaded ds002685 NIfTIs.
 Get https://openneuro.org/datasets/ds002685 with its git-annex file contents;
-pass the dataset root as --input-root. Original masks, units and crops are retained.
+pass the dataset root as --input-root. Skip the two TSE scans absent from the training H5;
+retain native widths and the original masks and crops.
 Run: python ds002685.py --input-root RAW --output-dir NEW --limit 1.
 """
 
@@ -43,23 +44,12 @@ def selected_paths(paths: Iterable[Path], subjects: list[str] | None = None, lim
     return result[:limit] if limit is not None else result
 
 
-def load_nifti(path: Path, *, oriented: bool = True) -> tuple[torch.Tensor, nib.Nifti1Header]:
-    """Load with original float64 get_fdata precision and optional ZYX flip."""
-    image = nib.load(path)
-    data = torch.as_tensor(image.get_fdata())
-    if oriented:
-        data = rearrange(data, "x y z -> z y x").flip(1)
-    return data, image.header
-
-
-def clean_mask_3d(mask: torch.Tensor | np.ndarray, *, large: bool = True) -> torch.Tensor:
-    """Original v3-v7 radius2 mask or v8-v9 radius1 mask."""
+def clean_mask_3d(mask: torch.Tensor | np.ndarray) -> torch.Tensor:
     st = ndi.generate_binary_structure(3, 1)
-    if large:
-        st = ndi.iterate_structure(st, 2)
+    st = ndi.iterate_structure(st, 2)
     result = ndi.binary_opening(np.asarray(mask, dtype=bool), structure=st)
-    result = ndi.binary_closing(result, structure=st, iterations=5 if large else 3)
-    result = ndi.binary_dilation(result, structure=st, iterations=3 if large else 1)
+    result = ndi.binary_closing(result, structure=st, iterations=5)
+    result = ndi.binary_dilation(result, structure=st, iterations=3)
     result = np.array([ndi.binary_fill_holes(s) for s in result])
     labels, n = ndi.label(result, structure=ndi.generate_binary_structure(3, 1))
     if n:
@@ -68,7 +58,7 @@ def clean_mask_3d(mask: torch.Tensor | np.ndarray, *, large: bool = True) -> tor
 
 
 def volume(modality: str, path: Path) -> torch.Tensor:
-    image, header = load_nifti(path, oriented=False)
+    image = torch.as_tensor(nib.load(path).get_fdata())
     image = rearrange(image, "x y z -> y x z")
     if modality == "flair":
         image = reduce(image, "z (y two) x -> z y x", "mean", two=2)
@@ -91,7 +81,15 @@ def prepare(
         outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"ds002685_{m}.h5")) for m in modalities or MODALITIES}
         for modality, output in outputs.items():
             pattern = {"t1w": "*ses-00_T1w*.nii.gz", "t2w": "*ses-00*T2w*.nii.gz", "flair": "*FLAIR*.nii.gz"}[modality]
-            paths = selected_paths((p for p in input_root.rglob(pattern) if p.is_file()), subjects, limit)
+            paths = selected_paths(
+                (
+                    p
+                    for p in input_root.rglob(pattern)
+                    if p.is_file() and p.stem not in {"sub-01_ses-00_acq-tse_T2w.nii", "sub-02_ses-00_acq-tse_T2w.nii"}
+                ),
+                subjects,
+                limit,
+            )
             if not paths:
                 raise ValueError(f"No matching {pattern} inputs")
             for path in paths:

@@ -11,15 +11,11 @@ import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import h5py
 import numpy as np
 import scipy.ndimage as ndi
 import torch
-
-if TYPE_CHECKING:
-    import torch
 
 
 def clean_mask_2d(mask: np.ndarray | torch.Tensor) -> torch.Tensor:
@@ -71,8 +67,6 @@ def repack_samples(source: Path, output: Path, subjects: Sequence[str] | None = 
 
 def prepare_generated_sample(volume: torch.Tensor) -> torch.Tensor:
     """Apply the original generated-volume orientation, slices, mask and scaling."""
-    import torch
-
     x = volume.transpose(0, 2).flip(-2)[40:-40:4].cpu().float().detach()
     x = torch.nn.functional.pad(x[None], (16, 16, 16, 16))[0]
     mask = torch.stack([clean_mask_2d(m) for m in x > 0.05])
@@ -95,7 +89,6 @@ def generate_samples(bundle_root: Path, output: Path, limit: int = 1, seed: int 
         if not path.is_file():
             raise FileNotFoundError(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    import torch
     from monai.bundle import ConfigParser
 
     torch.manual_seed(seed)
@@ -147,10 +140,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--limit", type=int, help="Sample limit; generation defaults to one.")
     parser.add_argument("--seed", type=int, default=0, help="New generation seed; historical seed was not saved.")
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--threads", type=int, default=1)
     args = parser.parse_args(argv)
-    if args.limit is not None and args.limit < 1 or args.threads < 1:
-        parser.error("--limit and --threads must be positive.")
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be positive.")
     if args.mode == "repack":
         if args.input_root is None or args.bundle_root is not None:
             parser.error("repack requires --input-root and no --bundle-root.")
@@ -158,9 +150,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     else:
         if args.bundle_root is None or args.input_root is not None or args.subjects:
             parser.error("generate requires --bundle-root and no --input-root/--subjects.")
-        import torch
-
-        torch.set_num_threads(args.threads)
+        torch.set_num_threads(1)
         generate_samples(args.bundle_root, args.output, args.limit or 1, args.seed, args.device)
 
 

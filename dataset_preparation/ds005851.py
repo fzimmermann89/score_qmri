@@ -32,7 +32,6 @@ def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Data
 
 
 def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
-    """Filter by BIDS ancestor or filename without changing volume contents."""
     paths = sorted(set(paths))
     if subjects:
         paths = [p for p in paths if any(s in p.parts or p.name.startswith(s + "_") or p.stem == s for s in subjects)]
@@ -41,7 +40,7 @@ def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> 
             raise ValueError("limit must be positive")
         paths = paths[:limit]
     if not paths:
-        raise ValueError("No matching input files; check input root, subjects and downloaded annex content")
+        raise ValueError("No matching input files")
     return paths
 
 
@@ -63,7 +62,7 @@ def ds005851_volumes(folder: Path) -> dict[str, np.ndarray]:
     arrays = [nib.load(next(folder.rglob(pattern))).get_fdata() for pattern in ("*MNI_R1*.nii.gz", "*MNI_R2*.nii.gz", "*MNI_PD*.nii.gz")]
     r1, r2, pd = [torch.tensor(d).moveaxis((0, 1, 2), (2, 1, 0)).flip(1) for d in arrays]
     pd /= pd.max()
-    pd /= np.percentile(pd[pd > 0.01], 99)
+    pd /= float(np.percentile(pd[pd > 0.01], 99))
     pd.clamp_max_(1.5)
     mask = torch.stack([clean_mask_2d(m > 0.05) for m in pd.abs()])
     good = mask.float().mean((1, 2)) > 0.2

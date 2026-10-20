@@ -9,10 +9,10 @@ import torch
 
 pytest.importorskip("nilearn")
 
+from dataset_preparation import ibc_t2star
 from dataset_preparation.ibc_t1 import fit_t1_linear
 from dataset_preparation.ibc_t2 import fit_t2
 from dataset_preparation.ibc_t2star import fit_t2star
-from dataset_preparation.normalize_h5 import normalize_file, pad_or_crop_centered
 
 
 def test_vfa_fit_recovers_known_t1_with_b1_correction() -> None:
@@ -42,26 +42,16 @@ def test_echo_fits_recover_known_decay_and_normalized_signal() -> None:
     assert star.shape == (30, 16, 16)
 
 
-def test_shape_normalization_uses_original_odd_crop_and_refuses_overwrite(tmp_path: Path) -> None:
-    source, output = tmp_path / "source.h5", tmp_path / "out.h5"
-    data: np.ndarray = np.arange(2 * 7 * 9, dtype=np.float32).reshape(2, 7, 9)
-    with h5py.File(str(source), "w-") as handle:
-        handle.create_dataset("subject", data=data)
-    normalize_file(source, output, (4, 12))
-    expected = torch.nn.functional.pad(torch.from_numpy(data), (1, 2, -2, -1)).numpy()
-    np.testing.assert_array_equal(pad_or_crop_centered(data, 4, 12), expected)
-    with h5py.File(str(output), "r") as handle:
-        np.testing.assert_array_equal(handle["subject"][:], expected)
+def test_t2star_preparation_skips_excluded_subject_before_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for subject in ("12", "13", "14"):
+        (tmp_path / f"sub-{subject}_ses-17_part-mag_T2starmap.nii.gz").touch()
+    arrays = (torch.full((2, 256, 160), 0.07), torch.ones(2, 256, 160))
+    monkeypatch.setattr(ibc_t2star, "compute_t2star_map", lambda *_: arrays)
+    output = tmp_path / "output"
+    ibc_t2star.prepare(tmp_path, output, limit=1)
+    for kind, expected in zip(("t2starmap", "s0map"), arrays, strict=True):
+        with h5py.File(str(output / f"ibc_relaxo_{kind}.h5"), "r") as handle:
+            assert list(handle) == ["sub-13_ses-17"]
+            np.testing.assert_array_equal(handle["sub-13_ses-17"][:], expected)
     with pytest.raises(FileExistsError):
-        normalize_file(source, output, (4, 12))
-
-
-def test_historical_normalization_skips_bad_ibc_subject(tmp_path: Path) -> None:
-    source, output = tmp_path / "ibc_relaxo_s0map.h5", tmp_path / "out.h5"
-    with h5py.File(str(source), "w-") as handle:
-        handle.create_dataset("sub-12_ses-17", data=np.ones((2, 8, 8), np.float32))
-        handle.create_dataset("sub-14_ses-20", data=np.ones((2, 8, 8), np.float32))
-    normalize_file(source, output)
-    with h5py.File(str(output), "r") as handle:
-        assert list(handle) == ["sub-14_ses-20"]
-        assert handle["sub-14_ses-20"].shape == (2, 256, 160)
+        ibc_t2star.prepare(tmp_path, output, limit=1)

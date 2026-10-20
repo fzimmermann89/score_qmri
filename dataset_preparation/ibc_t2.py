@@ -147,7 +147,7 @@ def pad_or_crop(array: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     return torch.nn.functional.pad(torch.from_numpy(array), pads).numpy()
 
 
-def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = None, limit: int | None = None) -> list[str]:
+def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = None, limit: int | None = None) -> None:
     """Write the paired parameter/S0 files for selected subject/session keys."""
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
@@ -185,7 +185,6 @@ def prepare(input_path: Path, output_dir: Path, subjects: list[str] | None = Non
             arrays = tuple(pad_or_crop(array.numpy(), (224, 176)) for array in t2_arrays)
             for handle, array in zip(handles, arrays, strict=True):
                 write_dataset(handle, name, np.asarray(array))
-    return names
 
 
 def main() -> None:
