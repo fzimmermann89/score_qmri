@@ -184,7 +184,7 @@ def prepare(
             for name, path in selected:
                 with h5py.File(str(path), "r") as source:
                     kspace = torch.tensor(np.array(source["kspace"]), device=device)
-                    header = ismrmrd.xsd.CreateFromDocument(source["ismrmrd_header"][()])
+                    header = ismrmrd.xsd.CreateFromDocument(cast(h5py.Dataset, source["ismrmrd_header"])[()])
                     size = header.encoding[0].reconSpace.matrixSize
                 combined, coilwise = fastmri_images(kspace, (size.x, size.y))
                 keep = (combined.abs() > 1e-6).sum((-2, -1)) >= 1000
