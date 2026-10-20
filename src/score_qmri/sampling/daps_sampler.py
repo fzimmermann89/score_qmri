@@ -125,7 +125,7 @@ class DAPSSampler:
         x = x0hat.detach().clone().requires_grad_(True)
 
         for _ in range(cfg.langevin_steps):
-            y_pred = forward_op(_to_complex(x))[0]
+            y_pred = forward_op(to_complex(x))[0]
             resid = y_pred - measurement
             data_energy = 0.5 * resid.abs().square().sum()
             (grad_data,) = torch.autograd.grad(data_energy, x, create_graph=False)
@@ -175,15 +175,8 @@ class DAPSSampler:
         )
         sigmas = torch.cat([sigmas, torch.zeros_like(sigmas[:1])], dim=0)
 
-        if x0_init is None:
-            x0_init_2ch = None
-        else:
-            x0_init_2ch = _to_2ch(x0_init.to(device))
-
-        if noise is None:
-            eps0 = _create_noise((bsz, 2, h, w), kind_t, device, torch.float32)
-        else:
-            eps0 = _to_2ch(noise.to(device))
+        x0_init_2ch = None if x0_init is None else to_2ch(x0_init.to(device))
+        eps0 = _create_noise((bsz, 2, h, w), kind_t, device, torch.float32) if noise is None else to_2ch(noise.to(device))
 
         x_t = eps0 * float(cfg.sigma_start) if x0_init_2ch is None else x0_init_2ch + eps0 * float(cfg.sigma_start)
         x_t = _apply_kind_constraints(x_t, kind_t)
@@ -202,8 +195,8 @@ class DAPSSampler:
 
             if cfg.debug_every > 0 and (i % cfg.debug_every == 0 or i == cfg.anneal_steps - 1):
                 with torch.no_grad():
-                    r_hat = forward_op(_to_complex(x0hat))[0] - measurement
-                    r_x0 = forward_op(_to_complex(x0))[0] - measurement
+                    r_hat = forward_op(to_complex(x0hat))[0] - measurement
+                    r_x0 = forward_op(to_complex(x0))[0] - measurement
                     print(
                         f"{i:4d} {sigma:9.4g} {self._lr_at(ratio):10.3g} "
                         f"{float(r_hat.abs().square().mean().sqrt().item()):12.4g} "
@@ -220,4 +213,4 @@ class DAPSSampler:
 
             x0_last = x0
 
-        return _to_complex(x0_last)
+        return to_complex(x0_last)

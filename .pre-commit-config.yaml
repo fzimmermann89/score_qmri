@@ -18,13 +18,14 @@ repos:
     rev: v1.19.1
     hooks:
       - id: mypy
+        language_version: python3.11
         exclude: ^debug_.*\.py$
         additional_dependencies:
           - torch>=2.8.0
           - torchvision>=0.20.0
           - lightning>=2.0.0
           - einops>=0.7.0
-          - numpy>=1.24.0
+          - numpy>=1.24.0,<=2.4.0
           - kornia>=0.7.0
           - jsonargparse[signatures]>=4.27.0
           - h5py>=3.8.0
