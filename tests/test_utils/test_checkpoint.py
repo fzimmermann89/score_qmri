@@ -100,10 +100,10 @@ def test_saved_training_checkpoint_resumes_with_weights_only(tmp_path):
 
     samples = [
         {
-            "image": torch.rand(2, 16, 16),
+            "image": torch.rand(2, 32, 32),
             "kind": torch.tensor(0),
-            "background_mask": torch.zeros(16, 16, dtype=torch.bool),
-            "penumbra_mask": torch.zeros(16, 16, dtype=torch.bool),
+            "background_mask": torch.zeros(32, 32, dtype=torch.bool),
+            "penumbra_mask": torch.zeros(32, 32, dtype=torch.bool),
         }
         for _ in range(4)
     ]
@@ -142,3 +142,76 @@ def test_runtime_logger_and_callbacks_are_not_checkpoint_configuration(tmp_path)
     path = tmp_path / "runtime.ckpt"
     torch.save(converted, path)
     torch.load(path, weights_only=True)
+
+
+@pytest.mark.parametrize("destination_compiled", [False, True])
+def test_full_compiled_training_resume_preserves_optimizer_scheduler_and_ema(tmp_path, destination_compiled):
+    from lightning.pytorch import Callback, Trainer
+    from torch.utils.data import DataLoader
+
+    from score_qmri.training.lightning_module import DiffusionLightningModule
+
+    def make_module(compiled):
+        unet = UNet(base_channels=8, num_res_blocks=1, channel_mult=(1,), attention_levels=(), cond_dim=16)
+        # An eager compile backend exercises actual wrapper keys without an
+        # expensive compiler invocation in this CPU state-restoration test.
+        if compiled:
+            with torch._dynamo.config.patch(disable=False):
+                unet = torch.compile(unet, backend="eager")
+        return DiffusionLightningModule(
+            unet=unet, diffusion=DiffusionConfig(cond_dim=16), aux_weight=0.1, warmup_steps=0, cond_dropout_rate=0, compile_model=False
+        )
+
+    samples = [
+        {
+            "image": torch.rand(2, 32, 32) * 0.2,
+            "kind": torch.tensor(1),
+            "background_mask": torch.zeros(32, 32, dtype=torch.bool),
+            "penumbra_mask": torch.zeros(32, 32, dtype=torch.bool),
+        }
+        for _ in range(4)
+    ]
+    settings = {
+        "accelerator": "cpu",
+        "devices": 1,
+        "logger": False,
+        "enable_checkpointing": False,
+        "enable_progress_bar": False,
+        "enable_model_summary": False,
+        "default_root_dir": str(tmp_path),
+        "gradient_clip_val": 1.0,
+    }
+    trainer = Trainer(max_steps=1, **settings)
+    original = make_module(True)
+    trainer.fit(original, train_dataloaders=DataLoader(samples, batch_size=2))
+    path = tmp_path / "compiled-resume.ckpt"
+    trainer.save_checkpoint(path)
+    saved = torch.load(path, weights_only=True)
+    assert any("_orig_mod." in name for name in saved["state_dict"])
+    assert saved["optimizer_states"][0]["state"]
+
+    class CheckRestoration(Callback):
+        checked = False
+
+        def on_train_start(self, resumed_trainer, module):
+            from score_qmri.utils.checkpoint import remap_compiled_state
+
+            assert resumed_trainer.global_step == 1
+            for name, tensor in remap_compiled_state(saved["state_dict"], module.state_dict()).items():
+                torch.testing.assert_close(module.state_dict()[name], tensor, rtol=0, atol=0)
+            for name, tensor in remap_compiled_state(saved["ema"]["shadow"], module.ema.shadow.state_dict()).items():
+                torch.testing.assert_close(module.ema.shadow.state_dict()[name], tensor, rtol=0, atol=0)
+            actual = resumed_trainer.optimizers[0].state_dict()
+            assert actual["param_groups"] == saved["optimizer_states"][0]["param_groups"]
+            for index, state in saved["optimizer_states"][0]["state"].items():
+                for name, value in state.items():
+                    torch.testing.assert_close(actual["state"][index][name], value, rtol=0, atol=0)
+            assert resumed_trainer.lr_scheduler_configs[0].scheduler.state_dict() == saved["lr_schedulers"][0]
+            self.checked = True
+
+    check = CheckRestoration()
+    resumed = Trainer(max_steps=2, callbacks=[check], **settings)
+    loaded = make_module(destination_compiled)
+    resumed.fit(loaded, train_dataloaders=DataLoader(samples, batch_size=2), ckpt_path=path, weights_only=True)
+    assert check.checked and resumed.global_step == 2
+    assert loaded._ema_step == 2

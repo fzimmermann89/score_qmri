@@ -658,8 +658,9 @@ class DiffusionModel(torch.nn.Module):
 
         # Compiled training checkpoints and eager inference use different wrapper
         # paths, but the underlying tensor names and shapes must match strictly.
-        target_keys = {key.replace("_orig_mod.", ""): key for key in super().state_dict()}
-        sd = {target_keys.get(key.replace("_orig_mod.", ""), key): value for key, value in sd.items()}
+        from score_qmri.utils.checkpoint import remap_compiled_state
+
+        sd = remap_compiled_state(sd, super().state_dict())
 
         return cast(
             torch.nn.modules.module._IncompatibleKeys,

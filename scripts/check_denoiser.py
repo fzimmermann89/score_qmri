@@ -14,9 +14,11 @@ from torch import Tensor
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from score_qmri.datasets.kind import DatasetKind
+from score_qmri.datasets.lightning import MRIDataModule
 from score_qmri.models.diffusion import DiffusionModel
 from score_qmri.sampling._utils import to_2ch
 from score_qmri.training.losses import create_channel_mask
+from score_qmri.training.validation import backbone_gradient_diagnostics, validation_reference
 
 
 @torch.enable_grad()
@@ -79,8 +81,10 @@ def score_diagnostics(
 def main() -> None:
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--cases", type=Path, required=True, help="NPZ truth in normalized model units, complex (N,1,1,H,W)")
-    parser.add_argument("--kind", choices=[kind.name for kind in DatasetKind], required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--cases", type=Path, help="NPZ truth in normalized model units, complex (N,1,1,H,W)")
+    source.add_argument("--data-config", type=Path, help="data.yaml with explicit validation_samples")
+    parser.add_argument("--kind", choices=[kind.name for kind in DatasetKind], default=None)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--weights", choices=["ema", "raw"], default="ema")
     parser.add_argument("--sigmas", type=list[float], default=[0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.2, 2.0])
@@ -88,34 +92,69 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--roi-key", type=str, default=None, help="Optional NPZ boolean (N,H,W) ROI for foreground/block checks")
+    parser.add_argument("--backbone-gradients", action="store_true", help="Measure shared-feature gradients once per sigma/case")
+    parser.add_argument("--aux-weight", type=float, default=0.1)
     args = parser.parse_args()
     if args.probes < 1 or args.output.exists():
         raise ValueError("Require positive probes and a new output path")
     model = DiffusionModel.from_checkpoint(args.checkpoint, map_location="cpu", weights=args.weights, compile_model=False).to(args.device)
     generator = torch.Generator(device=args.device).manual_seed(args.seed)
-    kind = torch.tensor([int(DatasetKind[args.kind])], device=args.device)
+    batches = []
+    rois = []
+    if args.data_config is not None:
+        data_parser = ArgumentParser()
+        data_parser.add_subclass_arguments(MRIDataModule, "data", required=True)
+        data_parser.add_argument("--trainer", type=dict, default={})
+        datamodule = data_parser.instantiate_classes(data_parser.parse_path(args.data_config)).data
+        datamodule.setup("validate")
+        if datamodule.validation_batch is None:
+            raise ValueError("data.yaml must configure fixed validation_samples")
+        for index in range(len(datamodule.validation_batch["image"])):
+            batches.append({key: value[index : index + 1].to(args.device) for key, value in datamodule.validation_batch.items()})
+            rois.append(~batches[-1]["background_mask"].unsqueeze(1))
+    else:
+        if args.kind is None:
+            raise ValueError("--cases requires --kind")
+        with np.load(args.cases) as cases:
+            for index, image in enumerate(cases["truth"]):
+                clean = to_2ch(torch.from_numpy(image[None]).to(args.device))
+                batches.append(
+                    {
+                        "image": clean,
+                        "kind": torch.tensor([int(DatasetKind[args.kind])], device=args.device),
+                        "background_mask": torch.zeros_like(clean[:, 0], dtype=torch.bool),
+                        "penumbra_mask": torch.zeros_like(clean[:, 0], dtype=torch.bool),
+                    }
+                )
+                rois.append(
+                    None if args.roi_key is None else torch.from_numpy(cases[args.roi_key][index : index + 1, None]).to(args.device)
+                )
     rows = []
-    with np.load(args.cases) as cases:
-        for index, image in enumerate(cases["truth"]):
-            clean = to_2ch(torch.from_numpy(image[None]).to(args.device))
-            roi = None if args.roi_key is None else torch.from_numpy(cases[args.roi_key][index : index + 1, None]).to(args.device)
-            noise = torch.randn(clean.shape, device=clean.device, dtype=clean.dtype, generator=generator)
-            for probe_index in range(args.probes):
-                probe = torch.randint(0, 2, clean.shape, device=clean.device, generator=generator).to(clean) * 2 - 1
-                for sigma in args.sigmas:
-                    rows.append(
-                        {
-                            "case": index,
-                            "probe": probe_index,
-                            "sigma": sigma,
-                            **score_diagnostics(model, clean, kind, sigma, noise, probe, roi=roi),
-                        }
-                    )
+    for index, (batch, roi) in enumerate(zip(batches, rois, strict=True)):
+        clean = validation_reference(model, batch) if args.data_config is not None else batch["image"]
+        kind = batch["kind"]
+        noise = torch.randn(clean.shape, device=clean.device, dtype=clean.dtype, generator=generator)
+        for probe_index in range(args.probes):
+            probe = torch.randint(0, 2, clean.shape, device=clean.device, generator=generator).to(clean) * 2 - 1
+            for sigma in args.sigmas:
+                rows.append(
+                    {
+                        "case": index,
+                        "probe": probe_index,
+                        "sigma": sigma,
+                        **score_diagnostics(model, clean, kind, sigma, noise, probe, roi=roi),
+                        **(
+                            backbone_gradient_diagnostics(model, batch, sigma, noise, aux_weight=args.aux_weight)
+                            if args.backbone_gradients and probe_index == 0
+                            else {}
+                        ),
+                    }
+                )
     report = {
         "scope": "Local diagnostics; verify subject-held-out provenance separately. Passing probes is not a posterior calibration certificate.",
         "arguments": vars(args),
         "checkpoint": model.checkpoint_info,
-        "case_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
+        "case_sha256": hashlib.sha256((args.data_config or args.cases).read_bytes()).hexdigest(),
         "diagnostic_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "rows": rows,
     }

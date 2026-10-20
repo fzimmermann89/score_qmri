@@ -1,15 +1,64 @@
 """Tests for MRIDataModule."""
 
+import pytest
 import torch
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.datasets.lightning import (
     Collate,
+    ComplexDatasetConfig,
     ConstantSchedule,
     DatasetConfig,
     MagnitudeDatasetConfig,
     MRIDataModule,
+    ValidationSampleConfig,
 )
+
+
+def test_fixed_validation_excludes_whole_subject_across_contrasts(sample_h5_file_magnitude):
+    config = MagnitudeDatasetConfig(h5_path=sample_h5_file_magnitude, subject_namespace="example", penumbra_width=0)
+    second = MagnitudeDatasetConfig(h5_path=sample_h5_file_magnitude, subject_namespace="example", kind=DatasetKind.T2W_MAGNITUDE)
+    sample = ValidationSampleConfig(dataset=config, subject="subject_001", slice_index=2)
+    dm = MRIDataModule(dataset_configs=[config, second], validation_samples=[sample], sample_size=(64, 64), num_workers=0)
+    dm.setup("fit")
+    assert dm.dataset_lengths == [3, 3]
+    assert dm.validation_batch is not None
+    first = dm.validation_batch["image"].clone()
+    for dataset in dm.concat_ds.datasets:
+        assert {dataset.dataset._slice_index[i][0] for i in dataset.indices} == {"subject_002"}
+    dm.setup("validate")
+    assert torch.equal(first, dm.validation_batch["image"])
+    assert config.augmentation_config is not None  # Validation does not mutate training augmentation.
+
+
+def test_coilwise_validation_requires_exact_coil_and_excludes_all_coils(sample_h5_file_complex):
+    config = ComplexDatasetConfig(h5_path=sample_h5_file_complex, mode="coilwise", subject_namespace="example", penumbra_width=0)
+    fixed = ValidationSampleConfig(dataset=config, subject="subject_001", slice_index=1, coil_index=2)
+    dm = MRIDataModule(dataset_configs=[config], validation_samples=[fixed], sample_size=(64, 64), num_workers=0)
+    dm.setup("fit")
+    assert dm.dataset_lengths == [8]
+    assert dm.validation_batch["image"].shape == (1, 2, 64, 64)
+    fixed.coil_index = None
+    with pytest.raises(ValueError, match="coil_index"):
+        dm.setup("validate")
+
+
+def test_explicit_holdout_also_reserves_subjects_not_in_fixed_validation(sample_h5_file_magnitude):
+    config = MagnitudeDatasetConfig(h5_path=sample_h5_file_magnitude, subject_namespace="example")
+    dm = MRIDataModule(dataset_configs=[config], held_out_subjects={"example": ["subject_002"]})
+    dm.setup("fit")
+    assert dm.dataset_lengths == [5]
+
+
+def test_validation_rejects_missing_namespace_and_missing_sample(sample_h5_file_magnitude):
+    config = MagnitudeDatasetConfig(h5_path=sample_h5_file_magnitude)
+    fixed = ValidationSampleConfig(dataset=config, subject="subject_001", slice_index=99)
+    with pytest.raises(ValueError, match="subject_namespace"):
+        MRIDataModule(validation_samples=[fixed])
+    config.subject_namespace = "example"
+    dm = MRIDataModule(validation_samples=[fixed])
+    with pytest.raises(ValueError, match="Missing validation sample"):
+        dm.setup("validate")
 
 
 def test_datamodule_init_stores_config():

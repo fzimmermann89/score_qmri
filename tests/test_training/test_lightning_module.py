@@ -137,9 +137,8 @@ def test_training_step_all_invalid_samples(module):
         "kind": torch.tensor([0, 1, 0, 1]),
     }
 
-    loss = module.training_step(batch, 0)
-    assert loss is not None
-    assert torch.isfinite(loss)
+    with pytest.raises(ValueError, match="no image"):
+        module.training_step(batch, 0)
 
 
 def test_training_step_no_skip_on_partial_invalid(module):
@@ -238,3 +237,45 @@ def test_ema_updates_once_per_optimizer_step(module, monkeypatch):
         trainer.global_step = step
         module.on_train_batch_end(None, None, 0)
     assert updates == [1, 2]
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_nonfinite_loss_aborts_instead_of_returning_zero(module, monkeypatch, value):
+    monkeypatch.setattr(
+        "score_qmri.training.lightning_module.noise_loss", lambda prediction, *args, **kwargs: prediction.flatten(1).sum(1) * value
+    )
+    module.hparams.aux_weight = 0
+    batch = {
+        "image": torch.randn(1, 2, 64, 64),
+        "background_mask": torch.zeros(1, 64, 64, dtype=torch.bool),
+        "penumbra_mask": torch.zeros(1, 64, 64, dtype=torch.bool),
+        "kind": torch.tensor([1]),
+    }
+    with pytest.raises(FloatingPointError, match="training loss"):
+        module.training_step(batch, 0)
+
+
+def test_large_finite_loss_is_trained_instead_of_silently_rejected(module, monkeypatch):
+    monkeypatch.setattr(
+        "score_qmri.training.lightning_module.noise_loss", lambda prediction, *args, **kwargs: prediction.flatten(1).sum(1) * 0 + 1000
+    )
+    module.hparams.aux_weight = 0
+    batch = {
+        "image": torch.randn(1, 2, 64, 64),
+        "background_mask": torch.zeros(1, 64, 64, dtype=torch.bool),
+        "penumbra_mask": torch.zeros(1, 64, 64, dtype=torch.bool),
+        "kind": torch.tensor([1]),
+    }
+    loss = module.training_step(batch, 0)
+    assert loss.requires_grad and loss > 100
+
+
+def test_nonfinite_gradients_abort_before_adamw_update(module):
+    optimizer = module.configure_optimizers()["optimizer"]
+    parameter = next(module.model.parameters())
+    before = parameter.detach().clone()
+    parameter.grad = torch.full_like(parameter, float("nan"))
+    with pytest.raises(FloatingPointError, match="training gradients"):
+        module.on_before_optimizer_step(optimizer)
+    assert torch.equal(parameter, before)
+    assert not optimizer.state

@@ -2,12 +2,13 @@
 
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 import torch
 from lightning import LightningDataModule
-from torch.utils.data import ConcatDataset, DataLoader
+from torch.utils.data import ConcatDataset, DataLoader, Subset
 
 from .batch_sampler import ScheduledBatchSampler
 from .brainweb import VALUES_3T_RANDOMIZED, BrainwebQualitativeDataset, BrainwebQuantitativeDataset, BrainwebTissue
@@ -72,6 +73,7 @@ class BaseDatasetConfig(ABC):
     augmentation_config: AugmentationConfig | None = None
     schedule: ScheduleType | None = None
     penumbra_width: int = 30
+    subject_namespace: str | None = None
 
     def __post_init__(self) -> None:
         if self.schedule is None:
@@ -274,6 +276,16 @@ DatasetConfig = (
 )
 
 
+@dataclass(kw_only=True)
+class ValidationSampleConfig:
+    """One fixed subject/slice/coil, loaded without random augmentation."""
+
+    dataset: ComplexDatasetConfig | MagnitudeDatasetConfig | MappingDatasetConfig
+    subject: str
+    slice_index: int
+    coil_index: int | None = None
+
+
 @dataclass
 class MRIDataModuleHparams:
     """Type-safe hyperparameter definitions for MRIDataModule."""
@@ -338,6 +350,8 @@ class MRIDataModule(LightningDataModule):
         num_workers: int = 8,
         base_seed: int = 42,
         kind_normalization: float = 0.5,
+        validation_samples: list[ValidationSampleConfig] | None = None,
+        held_out_subjects: dict[str, list[str]] | None = None,
     ) -> None:
         """
         Parameters
@@ -354,6 +368,11 @@ class MRIDataModule(LightningDataModule):
             Random seed for reproducibility.
         kind_normalization
             Interpolation between size-proportional (0.0) and kind-uniform (1.0) sampling.
+        validation_samples
+            Explicit H5/subject/slice/coil references, evaluated without augmentation.
+        held_out_subjects
+            Subjects excluded across all training configs in the same namespace.
+            Fixed validation subjects are added automatically.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -364,6 +383,21 @@ class MRIDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.base_seed = base_seed
         self.kind_normalization = kind_normalization
+        self.validation_samples = validation_samples or []
+        self.held_out_subjects = {name: set(subjects) for name, subjects in (held_out_subjects or {}).items()}
+        for sample in self.validation_samples:
+            if not sample.dataset.subject_namespace:
+                raise ValueError("Fixed validation samples require a subject_namespace shared across contrasts/coils")
+            if sample.slice_index < 0 or (sample.coil_index is not None and sample.coil_index < 0):
+                raise ValueError("Validation slice and coil indices must be nonnegative")
+            self.held_out_subjects.setdefault(sample.dataset.subject_namespace, set()).add(sample.subject)
+        validation_paths = {Path(sample.dataset.h5_path).resolve(): sample.dataset.subject_namespace for sample in self.validation_samples}
+        if any(
+            Path(cfg.h5_path).resolve() in validation_paths and cfg.subject_namespace != validation_paths[Path(cfg.h5_path).resolve()]
+            for cfg in self.dataset_configs
+        ):
+            raise ValueError("Training configs sharing validation files must use the same subject_namespace")
+        self.validation_batch: dict[str, torch.Tensor] | None = None
 
         self.concat_ds: ConcatDataset | None = None
         self.dataset_lengths: list[int] | None = None
@@ -386,6 +420,7 @@ class MRIDataModule(LightningDataModule):
             summary[f"{prefix}/kind"] = cfg.kind.name
             summary[f"{prefix}/h5_path"] = cfg.h5_path
             summary[f"{prefix}/type"] = cfg.type
+            summary[f"{prefix}/subject_namespace"] = cfg.subject_namespace
             schedule: ScheduleType = cfg.schedule if cfg.schedule is not None else ConstantSchedule()
             summary[f"{prefix}/schedule_type"] = schedule.type
             summary[f"{prefix}/schedule_weight"] = schedule.weight
@@ -410,13 +445,57 @@ class MRIDataModule(LightningDataModule):
                 summary[f"{aug_prefix}/contrast_strength"] = aug.contrast_strength
                 summary[f"{aug_prefix}/poly_coeff_range"] = list(aug.poly_coeff_range)
 
+        summary["data/held_out_subjects"] = {name: sorted(subjects) for name, subjects in self.held_out_subjects.items()}
+        summary["data/validation_samples"] = [
+            {
+                "h5_path": sample.dataset.h5_path,
+                "kind": sample.dataset.kind.name,
+                "subject": sample.subject,
+                "slice_index": sample.slice_index,
+                "coil_index": sample.coil_index,
+            }
+            for sample in self.validation_samples
+        ]
         return summary
 
     def setup(self, stage: str) -> None:
+        if stage in ("fit", "validate", None) and self.validation_samples:
+            samples = []
+            for config in self.validation_samples:
+                dataset = replace(config.dataset, augmentation_config=None).create()
+                coilwise = isinstance(config.dataset, ComplexDatasetConfig) and config.dataset.mode == "coilwise"
+                if coilwise != (config.coil_index is not None):
+                    raise ValueError("Only coilwise validation requires an explicit coil_index")
+                try:
+                    if isinstance(dataset, ComplexImageDataset):
+                        index = dataset._slice_index.index((config.subject, config.slice_index, config.coil_index or 0))
+                    else:
+                        index = dataset._slice_index.index((config.subject, config.slice_index))
+                except ValueError as error:
+                    raise ValueError(
+                        f"Missing validation sample {config.subject}/{config.slice_index} in {config.dataset.h5_path}"
+                    ) from error
+                samples.append(dataset[index])
+            collated = Collate(*self.sample_size)(samples)
+            if not torch.isfinite(collated["image"]).all() or ((~collated["background_mask"]).sum(dim=(-2, -1)) < 1000).any():
+                raise ValueError("Fixed validation images must be finite with at least 1000 signal pixels after cropping")
+            self.validation_batch = {key: value for key, value in collated.items() if isinstance(value, torch.Tensor)}
         if stage == "fit" or stage is None:
             if not self.dataset_configs:
                 raise ValueError("No datasets configured.")
-            datasets = [cfg.create() for cfg in self.dataset_configs]
+            datasets: list[MRIDataset | Subset] = []
+            for training_config in self.dataset_configs:
+                training_dataset = training_config.create()
+                excluded = self.held_out_subjects.get(training_config.subject_namespace or "", set())
+                if excluded:
+                    if not hasattr(training_dataset, "_slice_index"):
+                        raise ValueError("Subject exclusions require a dataset with explicit subject/slice indexing")
+                    indices = [i for i, entry in enumerate(training_dataset._slice_index) if entry[0] not in excluded]
+                    if not indices:
+                        raise ValueError(f"Subject exclusions leave no training data in {training_config.h5_path}")
+                    datasets.append(Subset(training_dataset, indices))
+                else:
+                    datasets.append(training_dataset)
             self.concat_ds = ConcatDataset(datasets)
             self.dataset_lengths = [len(ds) for ds in datasets]
 

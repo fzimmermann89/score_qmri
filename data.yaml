@@ -1,9 +1,100 @@
 data:
   class_path: score_qmri.datasets.lightning.MRIDataModule
   init_args:
+    held_out_subjects:
+      m4raw:
+        - '2022061203'
+        - '2022061204'
+        - '2022061206'
+        - '2022061207'
+        - '2022061213'
+        - '2022061301'
+        - '2022061302'
+        - '2022062303'
+        - '2022062501'
+        - '2022062604'
+        - '2022062612'
+        - '2022062614'
+        - '2022062616'
+        - '2022070508'
+        - '2022090101'
+        - '2022090102'
+        - '2022090104'
+        - '2022090301'
+        - '2022090305'
+        - '2022090503'
+        - '2022090602'
+        - '2022090603'
+        - '2022090803'
+        - '2022091405'
+        - '2022091408'
+        - '2022091505'
+        - '2022092002'
+        - '2022092007'
+        - '2022092502'
+        - '2022101101'
+        - '2022101102'
+        - '2022101103'
+        - '2022101201'
+        - '2022101204'
+        - '2022101301'
+        - '2022101302'
+        - '2022101303'
+        - '2022112702'
+        - '2022112704'
+        - '2022120401'
+        - '2022120402'
+        - '2022120403'
+        - '2022120404'
+        - '2022120406'
+        - '2022120407'
+        - '2022120408'
+        - '2022120409'
+        - '2022121701'
+        - '2022121702'
+        - '2022121703'
+        - '2022121705'
+        - '2022121706'
+        - '2022121707'
+        - '2022121708'
+        - '2023053002'
+    validation_samples:
+      - dataset:
+          type: complex
+          h5_path: ./datasets/m4raw_t1w.h5
+          subject_namespace: m4raw
+          mode: flat
+          kind: COMPLEX_T1W_COIL_COMBINED
+        subject: '2022061203'
+        slice_index: 8
+      - dataset:
+          type: complex
+          h5_path: ./datasets/m4raw_t1w.h5
+          subject_namespace: m4raw
+          mode: flat
+          kind: COMPLEX_T1W_COIL_COMBINED
+        subject: '2022061204'
+        slice_index: 8
+      - dataset:
+          type: complex
+          h5_path: ./datasets/m4raw_t2w.h5
+          subject_namespace: m4raw
+          mode: flat
+          kind: COMPLEX_T2W_COIL_COMBINED
+        subject: '2022061203'
+        slice_index: 8
+      - dataset:
+          type: complex
+          h5_path: ./datasets/m4raw_t2w.h5
+          subject_namespace: m4raw
+          mode: flat
+          kind: COMPLEX_T2W_COIL_COMBINED
+        subject: '2022061204'
+        slice_index: 8
     dataset_configs:
       - type: complex
         h5_path: ./datasets/fastmri_t1.h5
+        subject_namespace: fastmri
         mode: coilwise
         kind: COMPLEX_T1W_COILWISE
         augmentation_config:
@@ -17,6 +108,7 @@ data:
 
       - type: complex
         h5_path: ./datasets/fastmri_t1.h5
+        subject_namespace: fastmri
         mode: combined
         kind: COMPLEX_T1W_COIL_COMBINED
         augmentation_config:
@@ -26,6 +118,7 @@ data:
 
       - type: complex
         h5_path: ./datasets/fastmri_t2.h5
+        subject_namespace: fastmri
         mode: coilwise
         kind: COMPLEX_T2W_COILWISE
         augmentation_config:
@@ -38,6 +131,7 @@ data:
 
       - type: complex
         h5_path: ./datasets/fastmri_t2.h5
+        subject_namespace: fastmri
         mode: combined
         kind: COMPLEX_T2W_COIL_COMBINED
         augmentation_config:
@@ -46,6 +140,7 @@ data:
 
       - type: complex
         h5_path: ./datasets/fastmri_flair.h5
+        subject_namespace: fastmri
         mode: coilwise
         kind: COMPLEX_FLAIR_COILWISE
         augmentation_config:
@@ -58,6 +153,7 @@ data:
 
       - type: complex
         h5_path: ./datasets/fastmri_flair.h5
+        subject_namespace: fastmri
         mode: combined
         kind: COMPLEX_FLAIR_COIL_COMBINED
         augmentation_config:
@@ -86,6 +182,7 @@ data:
 
       - type: complex
         h5_path: ./datasets/m4raw_gre.h5
+        subject_namespace: m4raw
         mode: flat
         kind: COMPLEX_T1W_COIL_COMBINED
         augmentation_config:
@@ -93,6 +190,7 @@ data:
 
       - type: complex
         h5_path: ./datasets/m4raw_t1w.h5
+        subject_namespace: m4raw
         mode: flat
         kind: COMPLEX_T1W_COIL_COMBINED
         augmentation_config:
@@ -100,6 +198,7 @@ data:
 
       - type: complex
         h5_path: ./datasets/m4raw_t2w.h5
+        subject_namespace: m4raw
         mode: flat
         kind: COMPLEX_T2W_COIL_COMBINED
         augmentation_config:
@@ -107,6 +206,7 @@ data:
 
       - type: complex
         h5_path: ./datasets/m4raw_flair.h5
+        subject_namespace: m4raw
         mode: flat
         kind: COMPLEX_FLAIR_COIL_COMBINED
         augmentation_config:

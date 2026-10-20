@@ -1,10 +1,22 @@
 """Pure-data checkpoint metadata and recovery of recorded model specifications."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 from os import PathLike, fspath
 from typing import Any
+
+
+def remap_compiled_state(state: Mapping[str, Any], target_keys: Iterable[str]) -> dict[str, Any]:
+    """Map torch.compile wrapper paths to the destination without losing tensors."""
+    targets = {key.replace("_orig_mod.", ""): key for key in target_keys}
+    result = {}
+    for key, value in state.items():
+        target = targets.get(key.replace("_orig_mod.", ""), key)
+        if target in result:
+            raise ValueError(f"Ambiguous compiled checkpoint keys for {target!r}")
+        result[target] = value
+    return result
 
 
 def plain_config(value: Any) -> Any:
