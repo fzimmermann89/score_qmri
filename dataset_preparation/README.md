@@ -79,7 +79,7 @@ python dataset_preparation/latent_t1.py generate --bundle-root /path/to/local/mo
   --output /path/to/new/ldm_t1w.h5 --limit 1 --seed 0 --device cpu
 ```
 
-Brainweb raw classes are cached as `sXX/CLASS.gz`; add `--download` to fetch missing classes from Brainweb. Little-endian decoding and the original unsigned baseline subtraction reproduce the selected newer version. Synthetic generation requires compatible MONAI and bundle revision `55d88321e08930ba3a71d084ed94afaab0b29320`; it was not run in full. The original seed was not saved, so only repacking reproduces the historical samples exactly.
+Brainweb raw classes are cached as `sXX/CLASS.gz`; add `--download` to fetch missing classes from Brainweb. Interrupted downloads can leave a truncated class gzip; use a fresh cache path for a retry. Little-endian decoding and the original unsigned baseline subtraction reproduce the selected newer version. Synthetic generation requires compatible MONAI and bundle revision `55d88321e08930ba3a71d084ed94afaab0b29320`; it was not run in full. The original seed was not saved, so only repacking reproduces the historical samples exactly.
 
 ## Matching archived prepared H5 files
 

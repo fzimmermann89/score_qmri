@@ -90,8 +90,6 @@ def pack_subjects(input_root: Path, output: Path, subjects: Sequence[str]) -> No
     """Losslessly pack flat newer subject files into the training schema."""
     if not subjects or len(set(subjects)) != len(subjects):
         raise ValueError("Select distinct subjects.")
-    if output.exists() or output.is_symlink():
-        raise FileExistsError(output)
     sources = [input_root / f"s{subject}.h5" for subject in subjects]
     for source, subject in zip(sources, subjects, strict=True):
         with h5py.File(str(source), "r") as file:

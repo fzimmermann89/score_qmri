@@ -21,8 +21,6 @@ import torch
 from einops import einsum, rearrange
 from torch import Tensor
 
-ACTIVE_THRESHOLD = 1e-6
-MIN_ACTIVE_PIXELS = 1000
 MODALITIES = ("t1", "t2", "flair")
 
 
@@ -34,31 +32,14 @@ def exclusive_h5(path: str | Path) -> h5py.File:
     return h5py.File(str(path), "w-")
 
 
-def axial_chunks(shape: tuple[int, ...]) -> tuple[int, ...]:
-    """Use the historical cleanup layout for image volumes."""
-    if not shape or any(size <= 0 for size in shape):
-        raise ValueError(f"Expected a nonempty array, got shape {shape}")
-    if len(shape) == 4:
-        return (1, 1, *shape[2:])
-    return (1, *shape[1:])
-
-
 def retained_indices(dataset: h5py.Dataset | np.ndarray) -> list[int]:
-    """Return the exact original >=1000 active-pixel selection."""
-    if dataset.ndim not in (3, 4):
-        raise ValueError(f"Expected (Z,H,W) or (Z,C,H,W): {dataset.shape}")
-    valid = []
-    for index in range(dataset.shape[0]):
-        active = np.abs(dataset[index]) > ACTIVE_THRESHOLD
-        count = int(np.max(np.sum(active, axis=(-2, -1))) if active.ndim == 3 else np.sum(active))
-        if count >= MIN_ACTIVE_PIXELS:
-            valid.append(index)
-    return valid
+    return [index for index in range(dataset.shape[0]) if (np.abs(dataset[index]) > 1e-6).sum() >= 1000]
 
 
 def _copy_selected(source: h5py.Dataset, target: h5py.Group, name: str, indices: list[int]) -> None:
     shape = (len(indices), *source.shape[1:])
-    output = target.create_dataset(name, shape=shape, dtype=source.dtype, chunks=axial_chunks(shape), compression="lzf", shuffle=True)
+    chunks = (1, 1, *shape[2:]) if len(shape) == 4 else (1, *shape[1:])
+    output = target.create_dataset(name, shape=shape, dtype=source.dtype, chunks=chunks, compression="lzf", shuffle=True)
     for destination, original in enumerate(indices):
         output[destination] = source[original]
 
@@ -72,8 +53,7 @@ def clean_file(
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
     with h5py.File(str(input_path), "r") as source:
-        groups = [name for name in ("coilwise", "combined") if name in source and isinstance(source[name], h5py.Group)]
-        reference = source["combined"] if "combined" in groups else source[groups[0]] if groups else source
+        reference = source["combined"]
         names = sorted(name for name in reference if isinstance(reference[name], h5py.Dataset))
         if subjects is not None:
             missing = set(subjects) - set(names)
@@ -85,18 +65,14 @@ def clean_file(
         if not names:
             raise ValueError("No subjects selected")
         with exclusive_h5(output_path) as target:
-            for name in groups:
-                target.create_group(name)
+            for group in ("combined", "coilwise"):
+                target.create_group(group)
             for name in names:
                 indices = retained_indices(reference[name])
                 if not indices:
                     continue
-                if groups:
-                    for group in groups:
-                        if name in source[group]:
-                            _copy_selected(source[group][name], target[group], name, indices)
-                else:
-                    _copy_selected(source[name], target, name, indices)
+                for group in ("combined", "coilwise"):
+                    _copy_selected(source[group][name], target[group], name, indices)
 
 
 def pad_or_crop(data: Tensor, new_shape: Sequence[int]) -> Tensor:
@@ -237,14 +213,18 @@ def prepare(
         files.setdefault(modality, []).append((name, path))
     if not files:
         raise ValueError("No matching raw inputs found; no output files created.")
-    for modality in files:
+    for modality in modalities or MODALITIES:
+        if modality not in files:
+            print(f"No {modality} inputs")
+    for modality, candidates in files.items():
+        selected = sorted(candidates)[:limit]
+        if len({name for name, _ in selected}) != len(selected):
+            raise ValueError("Multiple raw files have the same output subject key; select an unambiguous input root.")
         path = output_dir / f"fastmri_{modality}.h5"
         if path.exists() or path.is_symlink():
             raise FileExistsError(path)
     for modality, candidates in files.items():
         selected = sorted(candidates)[:limit]
-        if len({name for name, _ in selected}) != len(selected):
-            raise ValueError("Multiple raw files have the same output subject key; select an unambiguous input root.")
         with exclusive_h5(output_dir / f"fastmri_{modality}.h5") as target:
             combined_group = target.create_group("combined")
             coilwise_group = target.create_group("coilwise")

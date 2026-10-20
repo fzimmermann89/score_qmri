@@ -135,3 +135,42 @@ def test_cli_defaults_do_not_select_cuda(tmp_path: Path, monkeypatch: pytest.Mon
     fastmri.main()
     assert calls[0][5] == "cpu"
     assert torch.get_num_threads() == 1
+
+
+@pytest.mark.parametrize("dataset", ["cc", "fastmri", "m4raw"])
+def test_prepared_slice_filter_matches_each_schema(tmp_path: Path, dataset: str) -> None:
+    module: ModuleType = {"cc": cc, "fastmri": fastmri, "m4raw": m4raw}[dataset]
+    source = tmp_path / "source.h5"
+    target = tmp_path / "target.h5"
+    images = np.zeros((3, 40, 40), dtype=np.complex64)
+    images[0].flat[:999] = 1j
+    images[1].flat[:1000] = 1j
+    images[2] = 1e-6
+    coils = np.ones((3, 2, 40, 40), dtype=np.complex64)
+    with h5py.File(str(source), "w-") as handle:
+        if dataset == "m4raw":
+            handle.create_dataset("subject", data=images)
+        else:
+            handle.create_dataset("combined/subject", data=images)
+            handle.create_dataset("coilwise/subject", data=coils)
+    module.clean_file(source, target)
+    with h5py.File(str(target), "r") as handle:
+        if dataset == "m4raw":
+            np.testing.assert_array_equal(handle["subject"][:], images[[1]])
+        else:
+            np.testing.assert_array_equal(handle["combined/subject"][:], images[[1]])
+            np.testing.assert_array_equal(handle["coilwise/subject"][:], coils[[1]])
+            assert handle["coilwise/subject"].chunks == (1, 1, 40, 40)
+
+
+def test_fastmri_duplicate_keys_checked_before_any_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    filenames = ["x" * 13 + "T1_001_scan.h5", "x" * 13 + "T2_001_scan.h5", "y" * 13 + "T2_001_scan.h5"]
+    for filename in filenames:
+        (raw / filename).touch()
+    monkeypatch.setitem(sys.modules, "ismrmrd", SimpleNamespace())
+    output = tmp_path / "new"
+    with pytest.raises(ValueError, match="same output subject key"):
+        fastmri.prepare(raw, output, limit=None)
+    assert not output.exists()
