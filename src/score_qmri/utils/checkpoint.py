@@ -2,13 +2,15 @@
 
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
-from enum import Enum
+from enum import Enum, IntEnum
 from os import PathLike, fspath
 from typing import Any
 
 
 def plain_config(value: Any) -> Any:
     """Remove Python-specific config objects without changing numeric values."""
+    if isinstance(value, IntEnum):
+        return int(value)
     if isinstance(value, Enum):
         return value.name
     if isinstance(value, PathLike):

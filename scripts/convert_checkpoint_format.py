@@ -16,8 +16,14 @@ def convert_checkpoint(input_path: Path, output_path: Path) -> None:
         raise FileExistsError(f"Choose a new output file; refusing to overwrite {output_path}")
     checkpoint = torch.load(input_path, map_location="cpu", weights_only=False, mmap=True)
     converted = portable_checkpoint(checkpoint)
-    with output_path.open("xb") as output:
-        torch.save(converted, output)
+    output = output_path.open("xb")
+    try:
+        with output:
+            torch.save(converted, output)
+        torch.load(output_path, map_location="cpu", weights_only=True, mmap=True)
+    except BaseException:
+        output_path.unlink(missing_ok=True)
+        raise
 
 
 def main() -> None:
