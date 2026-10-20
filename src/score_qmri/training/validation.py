@@ -61,9 +61,15 @@ def backbone_gradient_diagnostics(
     clean = validation_reference(model, batch) if normalized_clean is None else normalized_clean
     kind = batch["kind"]
     channel = create_channel_mask(kind).to(clean)
-    output = model(clean + sigma * noise * channel, clean.new_full((len(clean),), sigma), kind)
+    noisy = clean + sigma * noise * channel
+    sigmas = clean.new_full((len(clean),), sigma)
+    output = model(noisy, sigmas, kind)
     weight = (sigma**2 + model.sigma_data**2) / (sigma * model.sigma_data) ** 2
     main = main_weight * weight * noise_loss(output.x0_main, clean, None, channel)
+    trunk = [p for name, p in model.named_parameters() if p.requires_grad and "main_head" not in name and "aux_head" not in name]
+    main_grads = torch.autograd.grad(main, trunk, allow_unused=True)
+    # Compiled backward may donate buffers, so use a fresh graph for the auxiliary loss.
+    output = model(noisy, sigmas, kind)
     spatial = torch.where(batch["background_mask"], background_weight, 1.0)
     spatial = torch.where(batch["penumbra_mask"], penumbra_weight, spatial).unsqueeze(1)
     auxiliary = (
@@ -71,8 +77,6 @@ def backbone_gradient_diagnostics(
         * weight**0.5
         * (ssim_weight * ssim_loss(output.x0_aux, clean, spatial, channel) + l1_weight * l1_loss(output.x0_aux, clean, spatial, channel))
     )
-    trunk = [p for name, p in model.named_parameters() if p.requires_grad and "main_head" not in name and "aux_head" not in name]
-    main_grads = torch.autograd.grad(main, trunk, retain_graph=True, allow_unused=True)
     aux_grads = torch.autograd.grad(auxiliary, trunk, allow_unused=True)
     zero = clean.new_zeros(())
     main_sq = sum((g.detach().square().sum() for g in main_grads if g is not None), zero)
