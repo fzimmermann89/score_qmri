@@ -5,6 +5,7 @@ from dataclasses import asdict
 from enum import Enum
 from pathlib import Path
 from runpy import run_path
+from typing import cast
 
 import pytest
 import torch
@@ -199,12 +200,12 @@ def test_full_compiled_training_resume_preserves_optimizer_scheduler_and_ema(tmp
     from score_qmri.training.lightning_module import DiffusionLightningModule
 
     def make_module(compiled):
-        unet = UNet(base_channels=8, num_res_blocks=1, channel_mult=(1,), attention_levels=(), cond_dim=16)
+        unet: torch.nn.Module = UNet(base_channels=8, num_res_blocks=1, channel_mult=(1,), attention_levels=(), cond_dim=16)
         # An eager compile backend exercises actual wrapper keys without an
         # expensive compiler invocation in this CPU state-restoration test.
         if compiled:
             with torch._dynamo.config.patch(disable=False):
-                unet = torch.compile(unet, backend="eager")
+                unet = cast(torch.nn.Module, torch.compile(unet, backend="eager"))
         return DiffusionLightningModule(
             unet=unet, diffusion=DiffusionConfig(cond_dim=16), aux_weight=0.1, warmup_steps=0, cond_dropout_rate=0, compile_model=False
         )
