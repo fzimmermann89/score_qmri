@@ -8,8 +8,8 @@ Run: python ds002685.py --input-root RAW --output-dir NEW --limit 1.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterable
-from contextlib import ExitStack
+from collections.abc import Iterable, Iterator
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 import h5py
@@ -22,12 +22,20 @@ from einops import rearrange, reduce
 MODALITIES = ("t1w", "t2w", "flair")
 
 
-def exclusive_h5(path: str | Path) -> h5py.File:
+@contextmanager
+def exclusive_h5(path: str | Path) -> Iterator[h5py.File]:
     path = Path(path)
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(str(path), "w-")
+    handle = h5py.File(str(path), "w-")
+    try:
+        with handle:
+            yield handle
+    except BaseException:
+        with suppress(OSError):
+            path.unlink()
+        raise
 
 
 def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Dataset:
@@ -77,23 +85,26 @@ def volume(modality: str, path: Path) -> torch.Tensor:
 def prepare(
     input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
 ) -> None:
+    selected = {}
+    for modality in modalities or MODALITIES:
+        pattern = {"t1w": "*ses-00_T1w*.nii.gz", "t2w": "*ses-00*T2w*.nii.gz", "flair": "*FLAIR*.nii.gz"}[modality]
+        paths = selected_paths(
+            (
+                p
+                for p in input_root.rglob(pattern)
+                if p.is_file() and p.stem not in {"sub-01_ses-00_acq-tse_T2w.nii", "sub-02_ses-00_acq-tse_T2w.nii"}
+            ),
+            subjects,
+            limit,
+        )
+        if not paths:
+            raise ValueError(f"No matching {pattern} inputs")
+        selected[modality] = paths
     with ExitStack() as stack:
-        outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"ds002685_{m}.h5")) for m in modalities or MODALITIES}
-        for modality, output in outputs.items():
-            pattern = {"t1w": "*ses-00_T1w*.nii.gz", "t2w": "*ses-00*T2w*.nii.gz", "flair": "*FLAIR*.nii.gz"}[modality]
-            paths = selected_paths(
-                (
-                    p
-                    for p in input_root.rglob(pattern)
-                    if p.is_file() and p.stem not in {"sub-01_ses-00_acq-tse_T2w.nii", "sub-02_ses-00_acq-tse_T2w.nii"}
-                ),
-                subjects,
-                limit,
-            )
-            if not paths:
-                raise ValueError(f"No matching {pattern} inputs")
+        outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"ds002685_{m}.h5")) for m in selected}
+        for modality, paths in selected.items():
             for path in paths:
-                write_dataset(output, path.stem, volume(modality, path).numpy())
+                write_dataset(outputs[modality], path.stem, volume(modality, path).numpy())
 
 
 def main() -> None:

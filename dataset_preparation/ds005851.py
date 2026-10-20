@@ -7,7 +7,8 @@ Run: python ds005851.py --input-root RAW --output-dir NEW --limit 1.
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 import h5py
@@ -19,12 +20,20 @@ import torch
 MODALITIES = ("t1map", "t2map", "m0_abs")
 
 
-def exclusive_h5(path: str | Path) -> h5py.File:
+@contextmanager
+def exclusive_h5(path: str | Path) -> Iterator[h5py.File]:
     path = Path(path)
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(str(path), "w-")
+    handle = h5py.File(str(path), "w-")
+    try:
+        with handle:
+            yield handle
+    except BaseException:
+        with suppress(OSError):
+            path.unlink()
+        raise
 
 
 def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Dataset:
@@ -77,9 +86,9 @@ def ds005851_volumes(folder: Path) -> dict[str, np.ndarray]:
 def prepare(
     input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
 ) -> None:
+    folders = select([p.parent for p in input_root.rglob("*MNI_PD*.*")], subjects, limit)
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"ds005851_{m}.h5")) for m in modalities or MODALITIES}
-        folders = select([p.parent for p in input_root.rglob("*MNI_PD*.*")], subjects, limit)
         for folder in folders:
             for modality, array in ds005851_volumes(folder).items():
                 if modality in outputs:

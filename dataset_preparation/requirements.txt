@@ -1,8 +1,8 @@
-# Versions used for the reproduction comparisons (Python 3.12).
+# Python 3.12. Historical comparisons used Torch 2.9.1; checkpoint loading needs 2.10.0.
 numpy==2.3.5
 scipy==1.16.3
 h5py==3.15.1
-torch==2.9.1
+torch==2.10.0
 nibabel==5.3.3
 nilearn==0.12.1
 pydicom==3.0.1

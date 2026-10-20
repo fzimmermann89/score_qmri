@@ -225,6 +225,7 @@ def prepare(
     if limit is not None and limit < 1:
         raise ValueError("Limit must be positive.")
     groups: dict[tuple[str, str], list[Path]] = defaultdict(list)
+    # The original repeat order sets the first-coil phase reference.
     for path in input_root.rglob("*.h5"):
         parts = path.stem.split("_")
         if len(parts) < 2:
@@ -252,7 +253,10 @@ def prepare(
                     with h5py.File(str(path), "r") as source:
                         repeats.append(torch.tensor(np.array(source["kspace"]), device=device))
                 image = m4raw_image(repeats, gre=modality == "gre")
-                image = image[retained_indices(image.numpy())]
+                indices = retained_indices(image.numpy())
+                if not indices:
+                    continue
+                image = image[indices]
                 _write(target, name, image)
 
 

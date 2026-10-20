@@ -7,7 +7,8 @@ Run: python ixi.py --input-root RAW --output-dir NEW --limit 1.
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 import h5py
@@ -19,12 +20,20 @@ import torch
 MODALITIES = ("t1w", "t2w", "pd")
 
 
-def exclusive_h5(path: str | Path) -> h5py.File:
+@contextmanager
+def exclusive_h5(path: str | Path) -> Iterator[h5py.File]:
     path = Path(path)
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(str(path), "w-")
+    handle = h5py.File(str(path), "w-")
+    try:
+        with handle:
+            yield handle
+    except BaseException:
+        with suppress(OSError):
+            path.unlink()
+        raise
 
 
 def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Dataset:
@@ -34,7 +43,7 @@ def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Data
 def select(paths: list[Path], subjects: list[str] | None, limit: int | None) -> list[Path]:
     paths = sorted(set(paths))
     if subjects:
-        paths = [p for p in paths if any(s in p.parts or p.name.startswith(s + "_") or p.stem == s for s in subjects)]
+        paths = [p for p in paths if any(s in p.parts or p.name.startswith((s + "_", s + "-")) or p.stem == s for s in subjects)]
     if limit is not None:
         if limit <= 0:
             raise ValueError("limit must be positive")
@@ -79,11 +88,12 @@ def ixi_volume(path: Path, modality: str) -> np.ndarray:
 def prepare(
     input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
 ) -> None:
+    tags = {"t1w": "T1", "t2w": "T2", "pd": "PD"}
+    selected = {m: select(list(input_root.rglob(f"*{tags[m]}*.nii.gz")), subjects, limit) for m in modalities or MODALITIES}
     with ExitStack() as stack:
-        outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"ixi_{m}.h5")) for m in modalities or MODALITIES}
-        tags = {"t1w": "T1", "t2w": "T2", "pd": "PD"}
-        for modality, output in outputs.items():
-            paths = select(list(input_root.rglob(f"*{tags[modality]}*.nii.gz")), subjects, limit)
+        outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"ixi_{m}.h5")) for m in selected}
+        for modality, paths in selected.items():
+            output = outputs[modality]
             for path in paths:
                 name = path.name.split(".")[0]
                 array = ixi_volume(path, modality)

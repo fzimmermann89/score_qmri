@@ -7,7 +7,8 @@ Run: python rockland.py --input-root RAW --output-dir NEW --limit 1.
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 import h5py
@@ -19,12 +20,20 @@ import torch
 MODALITIES = ("t1w", "t2w", "flair")
 
 
-def exclusive_h5(path: str | Path) -> h5py.File:
+@contextmanager
+def exclusive_h5(path: str | Path) -> Iterator[h5py.File]:
     path = Path(path)
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(str(path), "w-")
+    handle = h5py.File(str(path), "w-")
+    try:
+        with handle:
+            yield handle
+    except BaseException:
+        with suppress(OSError):
+            path.unlink()
+        raise
 
 
 def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Dataset:
@@ -78,11 +87,12 @@ def rockland_volume(path: Path) -> np.ndarray:
 def prepare(
     input_root: Path, output_dir: Path, modalities: list[str] | None = None, subjects: list[str] | None = None, limit: int | None = None
 ) -> None:
+    tags = {"t1w": "T1w", "t2w": "T2w", "flair": "FLAIR"}
+    selected = {m: select(list(input_root.rglob(f"*{tags[m]}*.nii.gz")), subjects, limit) for m in modalities or MODALITIES}
     with ExitStack() as stack:
-        outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"rockland_{m}.h5")) for m in modalities or MODALITIES}
-        tags = {"t1w": "T1w", "t2w": "T2w", "flair": "FLAIR"}
-        for modality, output in outputs.items():
-            paths = select(list(input_root.rglob(f"*{tags[modality]}*.nii.gz")), subjects, limit)
+        outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"rockland_{m}.h5")) for m in selected}
+        for modality, paths in selected.items():
+            output = outputs[modality]
             for path in paths:
                 name = path.stem
                 array = rockland_volume(path)

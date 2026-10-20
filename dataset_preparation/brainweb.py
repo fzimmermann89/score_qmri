@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import os
 import shutil
+import tempfile
 import urllib.request
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack
@@ -119,11 +121,14 @@ def _cache_paths(root: Path, subject: str, download: bool) -> list[Path]:
     paths = [folder / f"{tissue}.gz" for tissue in CLASSES]
     for path, tissue in zip(paths, CLASSES, strict=True):
         if not path.exists() and download:
-            with (
-                urllib.request.urlopen(URL.format(subject=subject, tissue=tissue), timeout=120) as response,
-                path.open("xb") as target,
-            ):
-                shutil.copyfileobj(response, target, length=1024 * 1024)
+            with tempfile.NamedTemporaryFile(dir=folder, prefix=path.name + ".", suffix=".part") as target:
+                with urllib.request.urlopen(URL.format(subject=subject, tissue=tissue), timeout=120) as response:
+                    shutil.copyfileobj(response, target, length=1024 * 1024)
+                target.flush()
+                target.seek(0)
+                if target.read(2) != b"\x1f\x8b":
+                    raise ValueError(f"Not a gzip download: {path}")
+                os.link(target.name, path)
         if not path.is_file():
             raise FileNotFoundError(f"{path}: provide cached raw classes or explicitly pass --download.")
     return paths

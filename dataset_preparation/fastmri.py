@@ -235,6 +235,8 @@ def prepare(
                     size = header.encoding[0].reconSpace.matrixSize
                 combined, coilwise = fastmri_images(kspace, (size.x, size.y))
                 indices = retained_indices(combined.numpy())
+                if not indices:
+                    continue
                 combined, coilwise = combined[indices], coilwise[indices]
                 _write(combined_group, name, combined)
                 _write(coilwise_group, name, coilwise)

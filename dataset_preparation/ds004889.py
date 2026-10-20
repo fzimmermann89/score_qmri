@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import argparse
 import math
-from collections.abc import Iterable
-from contextlib import ExitStack
+from collections.abc import Iterable, Iterator
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 import h5py
@@ -22,12 +22,20 @@ from einops import rearrange
 MODALITIES = ("t1w", "flair")
 
 
-def exclusive_h5(path: str | Path) -> h5py.File:
+@contextmanager
+def exclusive_h5(path: str | Path) -> Iterator[h5py.File]:
     path = Path(path)
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(str(path), "w-")
+    handle = h5py.File(str(path), "w-")
+    try:
+        with handle:
+            yield handle
+    except BaseException:
+        with suppress(OSError):
+            path.unlink()
+        raise
 
 
 def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Dataset:
@@ -106,13 +114,17 @@ def prepare(
 ) -> None:
     if limit is not None and limit < 1:
         raise ValueError("--limit must be positive")
+    selected = {}
+    for modality in modalities or MODALITIES:
+        pattern = f"*{'T1' if modality == 't1w' else 'FLAIR'}*.nii.gz"
+        paths = selected_paths((p for p in input_root.rglob(pattern) if p.is_file()), subjects)
+        if not paths:
+            raise ValueError(f"No matching {pattern} inputs")
+        selected[modality] = paths
     with ExitStack() as stack:
-        outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"ds004889_{m}.h5")) for m in modalities or MODALITIES}
-        for modality, output in outputs.items():
-            pattern = f"*{'T1' if modality == 't1w' else 'FLAIR'}*.nii.gz"
-            paths = selected_paths((p for p in input_root.rglob(pattern) if p.is_file()), subjects)
-            if not paths:
-                raise ValueError(f"No matching {pattern} inputs")
+        outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"ds004889_{m}.h5")) for m in selected}
+        for modality, paths in selected.items():
+            output = outputs[modality]
             written = 0
             for path in paths:
                 image = volume(modality, path)

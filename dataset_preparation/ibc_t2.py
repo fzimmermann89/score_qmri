@@ -192,12 +192,15 @@ def main() -> None:
     parser.add_argument("--input-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--subjects", nargs="+")
-    parser.add_argument("--limit", type=int, default=1)
+    parser.add_argument("--limit", type=int)
     parser.add_argument("--all", action="store_true")
     args = parser.parse_args()
     torch.set_num_threads(1)
     with threadpool_limits(limits=1):
-        prepare(args.input_root, args.output_dir, args.subjects, None if args.all else args.limit)
+        limit = None if args.all else args.limit
+        if limit is None and not args.all and not args.subjects:
+            limit = 1
+        prepare(args.input_root, args.output_dir, args.subjects, limit)
 
 
 if __name__ == "__main__":

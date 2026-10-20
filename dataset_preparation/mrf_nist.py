@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import math
 from collections.abc import Iterator
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 import h5py
@@ -21,12 +21,20 @@ import torch
 MODALITIES = ("t1map", "t2map", "m0map")
 
 
-def exclusive_h5(path: str | Path) -> h5py.File:
+@contextmanager
+def exclusive_h5(path: str | Path) -> Iterator[h5py.File]:
     path = Path(path)
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(str(path), "w-")
+    handle = h5py.File(str(path), "w-")
+    try:
+        with handle:
+            yield handle
+    except BaseException:
+        with suppress(OSError):
+            path.unlink()
+        raise
 
 
 def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Dataset:
@@ -95,15 +103,18 @@ def prepare(
     subjects: list[str] | None = None,
     limit: int | None = None,
 ) -> None:
+    selected = {}
+    for modality in modalities or MODALITIES:
+        tag = {"t1map": "T1", "t2map": "T2", "m0map": "M0"}[modality]
+        roots = select_roots((p for p in input_root.rglob(f"*{tag}*") if p.is_dir()), subjects, limit)
+        if not roots:
+            raise ValueError(f"No {tag} DICOM series found")
+        selected[modality] = roots
     with ExitStack() as stack:
-        for modality in modalities or MODALITIES:
-            output = stack.enter_context(exclusive_h5(output_dir / f"mrf_nist_{modality}.h5"))
-            tag = {"t1map": "T1", "t2map": "T2", "m0map": "M0"}[modality]
-            roots = select_roots((p for p in input_root.rglob(f"*{tag}*") if p.is_dir()), subjects, limit)
-            if not roots:
-                raise ValueError(f"No {tag} DICOM series found")
+        outputs = {m: stack.enter_context(exclusive_h5(output_dir / f"mrf_nist_{m}.h5")) for m in selected}
+        for modality, roots in selected.items():
             for root in roots:
-                write_dataset(output, "_".join(root.parts[-2:]), nist_series(root, modality).numpy())
+                write_dataset(outputs[modality], "_".join(root.parts[-2:]), nist_series(root, modality).numpy())
 
 
 def main() -> None:

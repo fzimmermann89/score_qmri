@@ -10,7 +10,8 @@ from __future__ import annotations
 import argparse
 import pickle
 from collections import defaultdict
-from contextlib import ExitStack
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 import h5py
@@ -20,12 +21,20 @@ import scipy.ndimage as ndi
 import torch
 
 
-def exclusive_h5(path: str | Path) -> h5py.File:
+@contextmanager
+def exclusive_h5(path: str | Path) -> Iterator[h5py.File]:
     path = Path(path)
     if path.exists() or path.is_symlink():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return h5py.File(str(path), "w-")
+    handle = h5py.File(str(path), "w-")
+    try:
+        with handle:
+            yield handle
+    except BaseException:
+        with suppress(OSError):
+            path.unlink()
+        raise
 
 
 def write_dataset(handle: h5py.Group, name: str, array: np.ndarray) -> h5py.Dataset:
@@ -208,22 +217,25 @@ def main() -> None:
     if quantitative and (args.lut is None or not args.lut.is_file()):
         parser.error("MP2RAGE requires the original complete LUT via --lut")
     torch.set_num_threads(1)
+    folders = []
+    if quantitative:
+        groups = defaultdict(list)
+        for path in sorted(args.input_root.rglob("*MP2RAGE*.nii.gz")):
+            groups[path.stem.split("_acq")[0]].append(path)
+        folders = select([v[0].parent for v in groups.values() if len(v) == 4], args.subjects, args.limit)
+    selected = {}
+    for modality, pattern in [("t2w", "*nlgradcorr_T2w*.nii.gz"), ("t1w_neu", "**/anat/**/*T1w*.nii.gz")]:
+        if modality in args.modalities:
+            selected[modality] = select(list(args.input_root.rglob(pattern)), args.subjects, args.limit)
     with ExitStack() as stack:
         outputs = {m: stack.enter_context(exclusive_h5(args.output_dir / f"wand_{m}.h5")) for m in args.modalities}
-        if quantitative:
-            groups = defaultdict(list)
-            for path in sorted(args.input_root.rglob("*MP2RAGE*.nii.gz")):
-                groups[path.stem.split("_acq")[0]].append(path)
-            folders = select([v[0].parent for v in groups.values() if len(v) == 4], args.subjects, args.limit)
-            for folder in folders:
-                name = "_".join(folder.parts[-3:-1])
-                for modality, array in mp2rage_volumes(folder, args.lut).items():
-                    if modality in outputs:
-                        write_dataset(outputs[modality], name, array)
-        for modality, pattern in [("t2w", "*nlgradcorr_T2w*.nii.gz"), ("t1w_neu", "**/anat/**/*T1w*.nii.gz")]:
-            if modality not in outputs:
-                continue
-            for path in select(list(args.input_root.rglob(pattern)), args.subjects, args.limit):
+        for folder in folders:
+            name = "_".join(folder.parts[-3:-1])
+            for modality, array in mp2rage_volumes(folder, args.lut).items():
+                if modality in outputs:
+                    write_dataset(outputs[modality], name, array)
+        for modality, paths in selected.items():
+            for path in paths:
                 name = "_".join(path.stem.split("_")[:2]) if modality == "t2w" else path.stem.split("_T1w")[0]
                 write_dataset(outputs[modality], name, magnitude_volume(path, modality))
 

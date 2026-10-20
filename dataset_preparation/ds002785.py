@@ -37,7 +37,7 @@ def selected_paths(paths: Iterable[Path], subjects: list[str] | None = None, lim
         raise ValueError("--limit must be positive")
     result = sorted(set(paths))
     if subjects:
-        result = [p for p in result if set(p.parts) & set(subjects) or p.stem in subjects]
+        result = [p for p in result if set(p.parts) & set(subjects) or p.stem in subjects or p.resolve().stem in subjects]
     return result[:limit] if limit is not None else result
 
 
@@ -55,7 +55,10 @@ def clean_mask_3d(mask: torch.Tensor | np.ndarray) -> torch.Tensor:
 
 
 def volume(path: Path) -> torch.Tensor:
-    image = torch.as_tensor(nib.load(path).get_fdata())
+    source = nib.load(path)
+    if len(source.shape) != 3:
+        raise ValueError(f"Expected a 3D T1w image: {path}")
+    image = torch.as_tensor(source.get_fdata())
     image = rearrange(image, "x y z -> z y x").flip(1)
     image = image / image.max() * clean_mask_3d(image > 20).float()
     image = image[80:-20].float()
@@ -63,12 +66,15 @@ def volume(path: Path) -> torch.Tensor:
 
 
 def prepare(input_root: Path, output_dir: Path, subjects: list[str] | None = None, limit: int | None = None) -> None:
-    paths = selected_paths((p for p in input_root.rglob("*.nii.gz") if p.is_file()), subjects, limit)
+    paths = selected_paths((p for p in input_root.rglob("*_T1w.nii.gz") if ".git" not in p.parts and p.is_file()), subjects, limit)
     if not paths:
         raise ValueError("No NIfTI inputs found")
     with exclusive_h5(output_dir / "ds002785_t1w.h5") as output:
         for path in paths:
-            write_dataset(output, path.stem, volume(path).numpy())
+            image = volume(path).numpy()
+            # The training files contain both BIDS and annex-object keys for each scan.
+            for name in dict.fromkeys((path.stem, path.resolve().stem)):
+                write_dataset(output, name, image)
 
 
 def main() -> None:

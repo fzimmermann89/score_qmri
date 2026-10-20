@@ -1,6 +1,6 @@
 # Dataset scripts
 
-Prepare the datasets used by `data.yaml`. Each script's header lists the required inputs and download links. Install `requirements.txt` in a Python 3.12 environment.
+Prepare the datasets used by `data.yaml`. Each script's header lists the required inputs and download links. Install `requirements.txt` in a Python 3.12 environment. The Torch pin includes the checkpoint-loading fix; historical comparisons used Torch 2.9.1.
 
 | Script | Output |
 | --- | --- |

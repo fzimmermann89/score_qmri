@@ -113,8 +113,8 @@ def main() -> None:
     if args.output.exists() or args.output.is_symlink():
         raise FileExistsError(args.output)
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    inv1, inv2, psir, mp2 = create_lut()
     with args.output.open("xb") as handle:
-        inv1, inv2, psir, mp2 = create_lut()
         np.savez(handle, inv1=inv1, inv2=inv2, psir=psir, mp2rage=mp2)
 
 
