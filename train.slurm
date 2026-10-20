@@ -64,4 +64,5 @@ srun --unbuffered "${PYTHON}" -u -m score_qmri.cli fit \
     --trainer.num_nodes="${SLURM_JOB_NUM_NODES}" \
     --trainer.devices="${SLURM_NTASKS_PER_NODE}" \
     --job_name "${RUN_NAME}" \
-    --config config.yaml "$@"
+    --config data.yaml \
+    --config model.yaml "$@"
