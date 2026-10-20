@@ -356,7 +356,8 @@ class DiffusionLightningModule(LightningModule):
 
     @torch.no_grad()
     def _log_validation(self) -> None:
-        if self._validation_cases is None or self.global_rank != 0:
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if self._validation_cases is None or not isinstance(datamodule, MRIDataModule) or self.global_rank != 0:
             return
         metrics: dict[str, list[Tensor]] = {}
         for label, model in (("raw", self.model), ("ema", self.ema.shadow)):
@@ -366,7 +367,7 @@ class DiffusionLightningModule(LightningModule):
                 for index in range(len(self._validation_cases["image"])):
                     batch = {key: value[index : index + 1].to(self.device) for key, value in self._validation_cases.items()}
                     clean = validation_reference(model, batch)
-                    noise = torch.randn(clean.shape, generator=torch.Generator().manual_seed(42 + index)).to(clean)
+                    noise = torch.randn(clean.shape, generator=torch.Generator().manual_seed(datamodule.base_seed + index)).to(clean)
                     kind = DatasetKind(int(batch["kind"].item())).name
                     for sigma in VALIDATION_SIGMAS:
                         if model.sigma_min <= sigma <= model.sigma_max:
