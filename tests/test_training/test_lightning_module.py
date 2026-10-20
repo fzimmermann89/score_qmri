@@ -2,20 +2,26 @@
 
 import pytest
 import torch
+from lightning import __version__ as lightning_version
 
 from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind, is_complex_kind
+from score_qmri.models.diffusion import DiffusionConfig
+from score_qmri.models.unet import UNet
 from score_qmri.training.lightning_module import DiffusionLightningModule
 
 
 @pytest.fixture
 def module():
-    return DiffusionLightningModule(
+    diffusion = DiffusionConfig(cond_dim=64)
+    unet = UNet(
+        in_channels=2,
         base_channels=16,
         num_res_blocks=2,
         channel_mult=(1, 2),
-        cond_dim=64,
-        validation_size=32,
+        cond_dim=diffusion.cond_dim,
+        attention_levels=(),
     )
+    return DiffusionLightningModule(unet=unet, diffusion=diffusion)
 
 
 def test_training_step(module):
@@ -55,12 +61,43 @@ def test_configure_optimizers(module):
 
 
 def test_hparams_saved(module):
-    assert module.hparams.base_channels == 16
-    assert module.hparams.num_res_blocks == 2
+    assert not hasattr(module.hparams, "unet")
+    assert not hasattr(module.hparams, "unet_spec")
+    assert module.hparams.diffusion["cond_dim"] == 64
+
+
+def test_load_from_checkpoint_roundtrip(tmp_path, module):
+    ckpt_path = tmp_path / "module.ckpt"
+    torch.save(
+        {
+            "state_dict": module.state_dict(),
+            "hyper_parameters": dict(module.hparams),
+            "pytorch-lightning_version": lightning_version,
+            "cli_config": {
+                "model": {
+                    "unet": {
+                        "class_path": "score_qmri.models.unet.UNet",
+                        "init_args": {
+                            "in_channels": 2,
+                            "base_channels": 16,
+                            "num_res_blocks": 2,
+                            "channel_mult": [1, 2],
+                            "attention_levels": [],
+                        },
+                    },
+                    "diffusion": module.hparams.diffusion,
+                }
+            },
+        },
+        ckpt_path,
+    )
+
+    loaded = DiffusionLightningModule.load_from_checkpoint(ckpt_path)
+    assert loaded.hparams.diffusion["cond_dim"] == 64
 
 
 def test_create_fixed_noise_for_all_kinds(module):
-    from score_qmri.sampling.ddim_sampler import create_fixed_noise
+    from score_qmri.sampling.edm_sampler import create_fixed_noise
 
     noise = create_fixed_noise((32, 32))
     assert len(noise) == NUM_DATASET_KINDS

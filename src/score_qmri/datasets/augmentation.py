@@ -95,6 +95,12 @@ class AugmentationPipeline:
             resample="bilinear",
             p=1.0,
         )
+        scale_mean = sum(config.scale_range) / 2.0
+        self._scale = K.RandomAffine(
+            degrees=0.0,
+            scale=(scale_mean, scale_mean),
+            p=1.0,
+        )
         self._hflip = K.RandomHorizontalFlip(p=config.flip_prob)
         self.phase_aug = (
             PhaseAugmentation(
@@ -145,6 +151,10 @@ class AugmentationPipeline:
             if torch.rand(()) < self.config.contrast_prob:
                 img_bhw = self._apply_gamma(img_bhw)
 
+        # Intensity scaling (applies to both real and complex)
+        if torch.rand(()) < self.config.intensity_scale_prob:
+            img_bhw = self._apply_intensity_scale(img_bhw)
+
         mask_bhw = mask_bchw[:, 0] > 0.9
 
         if squeeze:
@@ -172,14 +182,17 @@ class AugmentationPipeline:
             img = torch.roll(img, shifts=shifts, dims=(-2, -1))
             mask = torch.roll(mask, shifts=shifts, dims=(-2, -1))
 
-        img = self._hflip(img)
-        mask = self._hflip(mask, params=self._hflip._params)
+        stacked = torch.cat([img, mask], dim=1)
+        stacked = self._hflip(stacked)
 
         if torch.rand(()) < self.config.geometric_prob:
-            stacked = torch.cat([img, mask], dim=1)
             stacked = self._affine(stacked)
-            img, mask = stacked[:, :-1], stacked[:, -1:]
+        else:
+            scale_mean = sum(self.config.scale_range) / 2.0
+            if not math.isclose(scale_mean, 1.0, abs_tol=0.05):
+                stacked = self._scale(stacked)
 
+        img, mask = stacked[:, :-1], stacked[:, -1:]
         return img, mask
 
     def _apply_gamma(self, image: Tensor) -> Tensor:
@@ -204,3 +217,25 @@ class AugmentationPipeline:
             1.0 + self.config.contrast_strength,
         )
         return img_norm.pow(gamma) * (img_max - img_min) + img_min
+
+    def _apply_intensity_scale(self, image: Tensor) -> Tensor:
+        """Random intensity scaling.
+
+        Multiplies image by a random factor sampled log-uniformly from the
+        configured range (default 0.25 to 4.0).
+
+        Parameters
+        ----------
+        image
+            Image tensor of shape (B, H, W). Can be real or complex.
+
+        Returns
+        -------
+        Tensor
+            Intensity-scaled image with same shape and dtype.
+        """
+        lo, hi = self.config.intensity_scale_range
+        # Log-uniform sampling for symmetric scaling (0.25 and 4.0 equally likely)
+        log_scale = torch.empty(()).uniform_(math.log(lo), math.log(hi))
+        scale = log_scale.exp()
+        return image * scale

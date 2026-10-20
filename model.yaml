@@ -1,0 +1,25 @@
+memory_budget: 0.99
+
+data:
+  init_args:
+    batch_size: 128
+
+model:
+  unet:
+    class_path: score_qmri.models.unet.UNet
+    init_args:
+      in_channels: 2
+      base_channels: 96
+      num_res_blocks: 2
+      channel_mult: [1, 1, 2, 2, 4, 4]
+      attention_levels: [-1, -2, -3]
+  diffusion:
+    normalization:
+      kind_scales:
+        T1MAP: 0.25
+        T2MAP: 2
+        T2STARMAP: 8
+  learning_rate: 0.8e-4
+  weight_decay: 0.02
+  cond_dropout_rate: 0.2
+  ema_decay: 0.999

@@ -1,15 +1,17 @@
 """CLI application for MRI diffusion model training and generation."""
 
+import argparse
 import os
 import sys
 import warnings
 from pathlib import Path
+from typing import Any
 
 import jsonargparse
 import torch
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, ModelSummary
-from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
+from lightning.pytorch.cli import LightningArgumentParser, LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
 
 from score_qmri.datasets.lightning import MRIDataModule
@@ -60,6 +62,15 @@ class WandbSaveConfigCallback(SaveConfigCallback):
         artifact.add_file(str(config_path))
         wandb.run.log_artifact(artifact)
 
+    def on_save_checkpoint(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        checkpoint: dict[str, Any],
+    ) -> None:
+        if hasattr(self.config, "as_dict"):
+            checkpoint["cli_config"] = self.config.as_dict()
+
 
 class DiffusionTrainer(Trainer):
     """Trainer with generate subcommand for sample generation."""
@@ -71,9 +82,8 @@ class DiffusionTrainer(Trainer):
         kind: str = "T1W_MAGNITUDE",
         n: int = 4,
         size: int = 256,
-        sampler: str = "ddim",
+        sampler: str = "edm",
         steps: int = 100,
-        eta: float = 0.0,
         seed: int | None = None,
         output: str | None = None,
         device: str = "cuda",
@@ -93,11 +103,9 @@ class DiffusionTrainer(Trainer):
         size
             Image size (height = width).
         sampler
-            Sampling algorithm: "ddim" or "ddpm".
+            Sampling algorithm. Currently only "edm" is supported.
         steps
             Number of denoising steps.
-        eta
-            DDIM stochasticity (0 = deterministic, 1 = full stochastic).
         seed
             Random seed for reproducibility.
         output
@@ -131,7 +139,6 @@ class DiffusionTrainer(Trainer):
             size=size,
             sampler_type=sampler,
             num_steps=steps,
-            eta=eta,
             seed=seed,
         )
 
@@ -146,25 +153,42 @@ class DiffusionLightningCLI(LightningCLI):
     def add_arguments_to_parser(self, parser: jsonargparse.ArgumentParser) -> None:
         parser.add_argument(
             "--job_name",
-            type=str | None,
-            default=None,
-            help="Unique job name for resumption. WandB auto-generates if omitted.",
+            type=str,
+            required=True,
+            help="Unique job name for checkpointing and WandB.",
         )
         parser.add_argument("--wandb_project", type=str, default="mri-diffusion", help="WandB project name.")
         parser.add_argument("--wandb_entity", type=str | None, default=None, help="WandB entity name.")
         parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Base path for checkpoints.")
+        parser.add_argument("--memory_budget", type=float, default=1.0, help="activation checkpointing budget")
+        parser.link_arguments("model.diffusion.cond_dim", "model.unet.init_args.cond_dim", apply_on="parse")
         parser.set_defaults({"data": {"class_path": "score_qmri.datasets.lightning.MRIDataModule"}})
 
     def before_instantiate_classes(self) -> None:
+        config = self.config if self.subcommand is None else getattr(self.config, self.subcommand)
+
         if self.subcommand != "fit":
             return
 
-        config = getattr(self.config, self.subcommand)
+        functorch_mod = getattr(torch, "_functorch", None)
+        if functorch_mod is not None and hasattr(functorch_mod, "config"):
+            functorch_mod.config.activation_memory_budget = config.memory_budget
+
+        job_name = config.job_name
+        run_dir = Path(config.checkpoint_dir) / job_name
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        # Set default_root_dir so Lightning's HPC checkpoints go to job-specific dir
+        config.trainer.default_root_dir = str(run_dir)
+
+        # Store for later use in after_instantiate_classes
+        self._job_name = job_name
+        self._run_dir = run_dir
 
         logger = WandbLogger(
-            id=config.job_name,
-            name=config.job_name,
-            resume="allow" if config.job_name else None,
+            id=job_name,
+            name=job_name,
+            resume="allow",
             project=config.wandb_project,
             entity=config.wandb_entity,
             log_model=False,
@@ -173,7 +197,7 @@ class DiffusionLightningCLI(LightningCLI):
         config.trainer.logger = logger
 
         checkpoint_callback = ModelCheckpoint(
-            dirpath=config.checkpoint_dir,
+            dirpath=str(run_dir),
             monitor="train/loss",
             mode="min",
             save_top_k=3,
@@ -193,46 +217,19 @@ class DiffusionLightningCLI(LightningCLI):
             return
 
         config = getattr(self.config, self.subcommand)
-        logger = self.trainer.logger
 
-        if not isinstance(logger, WandbLogger):
+        if not isinstance(self.trainer.logger, WandbLogger):
             return
 
-        run_name = self._get_synced_run_name(config.job_name)
-        run_dir = Path(config.checkpoint_dir) / run_name
-
-        if self.trainer.global_rank == 0:
-            run_dir.mkdir(parents=True, exist_ok=True)
-        self.trainer.strategy.barrier("after_instantiate_mkdir")
-
-        for callback in self.trainer.callbacks:  # type: ignore[attr-defined]
-            if isinstance(callback, ModelCheckpoint):
-                callback.dirpath = str(run_dir)
-                break
-
-        last_ckpt = run_dir / "last.ckpt"
+        # Auto-resume from last.ckpt if exists and no explicit ckpt_path provided
+        last_ckpt = self._run_dir / "last.ckpt"
         if last_ckpt.exists() and not config.ckpt_path:
             print(f"Auto-resuming from: {last_ckpt}")
             self.trainer.ckpt_path = str(last_ckpt)
 
-        self._log_hyperparams(config, run_name)
+        self._log_hyperparams(config)
 
-    def _get_synced_run_name(self, job_name: str | None) -> str:
-        if job_name:
-            return job_name
-
-        if self.trainer.global_rank == 0:
-            logger = self.trainer.logger
-            assert isinstance(logger, WandbLogger)
-            run_name: str | None = logger.experiment.name
-        else:
-            run_name = None
-
-        synced_name = self.trainer.strategy.broadcast(run_name, src=0)
-        assert isinstance(synced_name, str)
-        return synced_name
-
-    def _log_hyperparams(self, config: jsonargparse.Namespace, run_name: str) -> None:
+    def _log_hyperparams(self, config: jsonargparse.Namespace) -> None:
         logger = self.trainer.logger
         if not isinstance(logger, WandbLogger):
             return
@@ -274,10 +271,9 @@ class DiffusionLightningCLI(LightningCLI):
 
         logger.log_hyperparams(
             {
-                "experiment/job_name": config.job_name,
-                "experiment/run_name": run_name,
+                "experiment/job_name": self._job_name,
                 "experiment/wandb_project": config.wandb_project,
-                "experiment/checkpoint_dir": config.checkpoint_dir,
+                "experiment/checkpoint_dir": str(self._run_dir),
             }
         )
 
@@ -287,6 +283,24 @@ class DiffusionLightningCLI(LightningCLI):
             "fit": {"model", "train_dataloaders", "datamodule"},
             "generate": {"model"},
         }
+
+    def _prepare_subcommand_kwargs(self, subcommand: str) -> dict[str, Any]:
+        """Exclude datamodule from generate subcommand kwargs."""
+        fn_kwargs = super()._prepare_subcommand_kwargs(subcommand)
+        if subcommand == "generate":
+            fn_kwargs.pop("datamodule", None)
+        return fn_kwargs
+
+    def _prepare_subcommand_parser(self, klass: type, subcommand: str, **kwargs: Any) -> LightningArgumentParser:
+        """For generate: hide trainer/data/optimizer/lr_scheduler from help."""
+        parser = super()._prepare_subcommand_parser(klass, subcommand, **kwargs)
+        if subcommand == "generate":
+            # Hide irrelevant arguments from --help by destination prefix
+            hide_prefixes = ("trainer", "data", "optimizer", "lr_scheduler")
+            for action in parser._actions:
+                if action.dest and any(action.dest == p or action.dest.startswith(p + ".") for p in hide_prefixes):
+                    action.help = argparse.SUPPRESS
+        return parser
 
 
 def main() -> None:

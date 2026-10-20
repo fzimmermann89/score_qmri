@@ -4,38 +4,35 @@ import math
 from typing import Literal
 
 import torch
+import torch._dynamo as dynamo
 from einops import rearrange
 from torch import Tensor
 
+dynamo.config.recompile_limit = max(64, dynamo.config.recompile_limit)
 UpsampleMode = Literal["nearest", "pixelshuffle"]
+
+
+def zero_module(module: torch.nn.Module) -> torch.nn.Module:
+    """Zero out the parameters of a module and return it."""
+    for p in module.parameters():
+        p.detach().zero_()
+    return module
 
 
 class CoordConcat(torch.nn.Module):
     """Concatenate normalized (x, y) coordinate channels to input.
 
     Breaks translation invariance by providing absolute spatial position.
-    Caches the coordinate grid for efficiency when resolution is unchanged.
     """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._cached_grid: Tensor | None = None
 
     def forward(self, x: Tensor) -> Tensor:
         B, C, H, W = x.shape
 
-        if (
-            self._cached_grid is None
-            or self._cached_grid.shape[-2:] != (H, W)
-            or self._cached_grid.device != x.device
-            or self._cached_grid.dtype != x.dtype
-        ):
-            y_coords = torch.linspace(-1, 1, H, device=x.device, dtype=x.dtype)
-            x_coords = torch.linspace(-1, 1, W, device=x.device, dtype=x.dtype)
-            grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
-            self._cached_grid = torch.stack([grid_y, grid_x], dim=0).clone()
-
-        coords = self._cached_grid.unsqueeze(0).expand(B, -1, -1, -1)
+        y_coords = torch.linspace(-1, 1, H, device=x.device, dtype=x.dtype)
+        x_coords = torch.linspace(-1, 1, W, device=x.device, dtype=x.dtype)
+        grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
+        coords = torch.stack([grid_y, grid_x], dim=0)
+        coords = coords.unsqueeze(0).expand(B, -1, -1, -1)
         return torch.cat([x, coords], dim=1)
 
 
@@ -43,13 +40,12 @@ class SinusoidalPosEmb2D(torch.nn.Module):
     """2D sinusoidal positional embeddings for attention layers.
 
     Generates separate embeddings for height and width dimensions,
-    then combines them. Caches for efficiency when resolution is unchanged.
+    then combines them.
     """
 
     def __init__(self, channels: int) -> None:
         super().__init__()
         self.channels = channels
-        self._cached_emb: Tensor | None = None
 
     def _get_1d_sincos(self, positions: Tensor, dim: int) -> Tensor:
         half_dim = dim // 2
@@ -62,24 +58,21 @@ class SinusoidalPosEmb2D(torch.nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         B, C, H, W = x.shape
 
-        if self._cached_emb is None or self._cached_emb.shape[-2:] != (H, W) or self._cached_emb.device != x.device:
-            dim_y = self.channels // 2
-            dim_x = self.channels - dim_y
+        dim_y = self.channels // 2
+        dim_x = self.channels - dim_y
 
-            y_pos = torch.arange(H, device=x.device)
-            x_pos = torch.arange(W, device=x.device)
+        y_pos = torch.arange(H, device=x.device)
+        x_pos = torch.arange(W, device=x.device)
 
-            y_emb = self._get_1d_sincos(y_pos, dim_y)
-            x_emb = self._get_1d_sincos(x_pos, dim_x)
+        y_emb = self._get_1d_sincos(y_pos, dim_y)
+        x_emb = self._get_1d_sincos(x_pos, dim_x)
 
-            y_emb = y_emb[:, None, :].expand(H, W, -1)
-            x_emb = x_emb[None, :, :].expand(H, W, -1)
+        y_emb = y_emb[:, None, :].expand(H, W, -1)
+        x_emb = x_emb[None, :, :].expand(H, W, -1)
 
-            emb = torch.cat([y_emb, x_emb], dim=-1)
-            emb = emb.permute(2, 0, 1).unsqueeze(0)
-            self._cached_emb = emb.clone()
-
-        return self._cached_emb.to(dtype=x.dtype).expand(B, -1, -1, -1)
+        emb = torch.cat([y_emb, x_emb], dim=-1)
+        emb = emb.moveaxis(-1, 0).unsqueeze(0)
+        return emb.to(dtype=x.dtype).expand(B, -1, -1, -1)
 
 
 class GroupNorm32(torch.nn.GroupNorm):
@@ -126,8 +119,7 @@ class Attention(torch.nn.Module):
             d=self.head_dim,
         ).unbind(0)
 
-        dropout = 0.1 if self.training else 0.0
-        out: Tensor = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False, dropout_p=dropout)
+        out: Tensor = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False, dropout_p=0.0)
 
         out = rearrange(out, "b heads (h w) d -> b (heads d) h w", h=H, w=W)
         if x.is_contiguous(memory_format=torch.channels_last):
@@ -145,36 +137,50 @@ def get_groups(channels: int) -> int:
     return 1
 
 
-class ResBlock(torch.nn.Module):
-    """Residual block with FiLM conditioning and ReZero initialization.
+class AdaGN(torch.nn.Module):
+    """Adaptive GroupNorm (AdaGN) for diffusion conditioning.
 
-    Uses Pre-Norm architecture (GroupNorm -> SiLU -> Conv) for better gradient flow.
+    Applies GroupNorm32 (affine=False) followed by per-channel scale/shift from a
+    conditioning vector.
+    """
+
+    def __init__(self, channels: int, cond_dim: int = 128) -> None:
+        super().__init__()
+        self.norm = GroupNorm32(get_groups(channels), channels, affine=False)
+        self.cond_proj = torch.nn.Linear(cond_dim, channels * 2)
+
+    def forward(self, x: Tensor, cond: Tensor) -> Tensor:
+        scale, shift = self.cond_proj(cond).chunk(2, dim=1)
+        scale = scale[:, :, None, None].to(dtype=x.dtype)
+        shift = shift[:, :, None, None].to(dtype=x.dtype)
+        h: Tensor = self.norm(x)
+        out: Tensor = h * (1 + scale) + shift
+        return out
+
+
+class ResBlock(torch.nn.Module):
+    """Residual block with AdaGN conditioning.
+
+    Uses Pre-Norm architecture with conditioning injected at both normalization
+    sites:
+
+    - AdaGN(in_ch) -> SiLU -> Conv(in_ch -> out_ch)
+    - AdaGN(out_ch) -> SiLU -> Conv(out_ch -> out_ch) (zero-init)
     """
 
     def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128) -> None:
         super().__init__()
-        groups1 = get_groups(in_ch)
-        self.block1 = torch.nn.Sequential(
-            GroupNorm32(groups1, in_ch),
-            torch.nn.SiLU(),
-            torch.nn.Conv2d(in_ch, out_ch, 3, padding=1),
-        )
-        groups2 = get_groups(out_ch)
-        self.block2 = torch.nn.Sequential(
-            GroupNorm32(groups2, out_ch),
-            torch.nn.SiLU(),
-            torch.nn.Conv2d(out_ch, out_ch, 3, padding=1),
-        )
-        self.cond_proj = torch.nn.Linear(cond_dim, out_ch * 2)
+        self.norm1 = AdaGN(in_ch, cond_dim)
+        self.conv1 = torch.nn.Conv2d(in_ch, out_ch, 3, padding=1)
+        self.norm2 = AdaGN(out_ch, cond_dim)
+        self.conv2 = zero_module(torch.nn.Conv2d(out_ch, out_ch, 3, padding=1))
+        self.act = torch.nn.SiLU()
         self.skip = torch.nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else torch.nn.Identity()
-        self.alpha = torch.nn.Parameter(torch.tensor(0.1))
 
     def forward(self, x: Tensor, cond: Tensor) -> Tensor:
-        h: Tensor = self.block1(x)
-        scale, shift = self.cond_proj(cond)[:, :, None, None].chunk(2, dim=1)
-        h = h * (1 + scale) + shift
-        h = self.block2(h)
-        out: Tensor = self.skip(x) + self.alpha * h
+        h: Tensor = self.conv1(self.act(self.norm1(x, cond)))
+        h = self.conv2(self.act(self.norm2(h, cond)))
+        out: Tensor = self.skip(x) + h
         return out
 
 
@@ -277,43 +283,26 @@ class DecoderBlock(torch.nn.Module):
         return h, h
 
 
-class OutputHead(torch.nn.Module):
-    """ResBlock output head with optional input skip connection."""
-
-    def __init__(self, in_ch: int, out_ch: int, cond_dim: int = 128, skip_ch: int = 0) -> None:
-        super().__init__()
-        self.res = ResBlock(in_ch + skip_ch, in_ch, cond_dim)
-        self.conv = torch.nn.Conv2d(in_ch, out_ch, 3, padding=1)
-
-    def forward(self, x: Tensor, cond: Tensor, skip: Tensor | None = None) -> Tensor:
-        if skip is not None:
-            x = torch.cat([x, skip], dim=1)
-        out: Tensor = self.conv(self.res(x, cond))
-        return out
-
-
 class UNet(torch.nn.Module):
-    """UNet with dual prediction heads, FiLM conditioning, and optional attention.
+    """UNet backbone with two output heads.
 
-    Predicts both clean image (x₀) and noise (ε) through separate output heads.
-    Architecture uses symmetric EncoderBlock/DecoderBlock with skip connections.
-    Attention is applied at specified resolution levels for global context.
-
-    Input: 2 channels (real/imag for complex MRI)
-    Output: (x0_pred, noise_pred), each (B, 2, H, W)
+    The diffusion wrapper (EDM/VE) interprets both heads as *clean-image* predictors
+    via external preconditioning:
+    - main head: trained with EDM-weighted L2
+    - aux head: trained with SSIM + L1
     """
 
     def __init__(
         self,
         in_channels: int = 2,
-        base_channels: int = 64,
+        base_channels: int = 96,
         num_res_blocks: int = 2,
-        channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
+        channel_mult: tuple[int, ...] = (1, 2, 2, 4, 4, 4),
         cond_dim: int = 128,
         upsample_mode: UpsampleMode = "nearest",
-        attention_levels: tuple[int, ...] = (),
+        attention_levels: tuple[int, ...] = (-1, -2, -3),
         head_dim: int = 64,
-        positional_embedding: bool = True,
+        positional_embedding: bool = False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -377,11 +366,10 @@ class UNet(torch.nn.Module):
                 )
                 ch = out_ch
 
-        self.x0_head = OutputHead(ch, 2, cond_dim, skip_ch=in_channels)
-        self.noise_head = OutputHead(ch, 2, cond_dim, skip_ch=in_channels)
+        self.main_head = zero_module(torch.nn.Conv2d(ch, in_channels, 3, padding=1))
+        self.aux_head = zero_module(torch.nn.Conv2d(ch, in_channels, 3, padding=1))
 
     def forward(self, x: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
-        x_in = x
         if self.coord_concat is not None:
             x = self.coord_concat(x)
         x = self.input_conv(x)
@@ -398,4 +386,6 @@ class UNet(torch.nn.Module):
         for block in self.decoder:
             x, _ = block(x, skips.pop(), cond)
 
-        return self.x0_head(x, cond, x_in), self.noise_head(x, cond, x_in)
+        main: Tensor = self.main_head(x)
+        aux: Tensor = self.aux_head(x)
+        return main, aux

@@ -1,43 +1,109 @@
-"""Continuous-time VP-SDE diffusion model with dual prediction heads.
+"""VE/EDM diffusion model with continuous noise level sigma.
 
-This module implements a diffusion model using the Variance Preserving SDE (VP-SDE)
-framework (Song et al., ICLR 2021). Time is continuous t ∈ [0, 1], allowing flexible
-inference with any number of discretization steps.
+This repository uses a 2-channel real representation for both real and complex data:
 
-The model predicts both:
-- Noise ε (trained with L_simple MSE, used for score/sampling)
-- Clean image x0 (trained with SSIM + L1, auxiliary denoising task)
+- Complex kinds: channel 0 = real, channel 1 = imag
+- Real kinds: channel 0 = value, channel 1 = zeros
+
+The forward corruption process is Variance Exploding (VE):
+
+    x = x0 + sigma * eps,   eps ~ N(0, I)
+
+We follow the EDM (Karras et al., 2022) preconditioning scheme to stabilize training
+across a wide range of sigma values.
 """
 
-import math
-from collections.abc import Sequence
-from dataclasses import dataclass
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from enum import IntEnum, auto
 from pathlib import Path
-from typing import Literal, cast, overload
+from typing import Any, cast, overload
 
 import torch
 from torch import Tensor
 
-from score_qmri.datasets.kind import DatasetKind, is_complex_kind, is_mapping_kind
+from score_qmri.datasets.kind import NUM_DATASET_KINDS, DatasetKind, is_complex_kind, is_mapping_kind
 
 from .conditioning import ConditioningMLP
-from .unet import UNet
-
-NoiseSchedule = Literal["linear", "cosine"]
 
 DEFAULT_KIND_SCALES: dict[str, float] = {
-    "T1MAP": 0.0003,
-    "T2MAP": 0.005,
-    "T2STARMAP": 0.01,
+    "T1MAP": 1 / 4,
+    "T2MAP": 2,
+    "T2STARMAP": 8,
 }
 
 
 @dataclass
 class NormalizationConfig:
+    """Normalization configuration.
+
+    Notes
+    -----
+    - Mapping kinds use fixed per-kind scaling (kind_scales) to map values into a
+      stable training range and to allow conversion back to physical units.
+    - train_clip/sample_clip clamp clean-image predictions (x0) in normalized space.
+    """
+
     train_clip: float = 1.2
     sample_clip: float = 1.0
     kind_scales: dict[str, float] | None = None
+
+
+@dataclass
+class DiffusionConfig:
+    """Diffusion model configuration.
+
+    Parameters
+    ----------
+    cond_dim
+        Conditioning dimension used by the conditioning MLP and UNet FiLM blocks.
+    num_kinds
+        Number of dataset kinds for the kind embedding.
+    sigma_min, sigma_max
+        Minimum and maximum sigmas used for training and sampling.
+    sigma_data
+        Characteristic standard deviation of normalized training data.
+    p_mean, p_std
+        Log-normal sigma sampling distribution for training.
+    rho
+        Exponent for Karras (poly-rho) sigma schedule in sampling.
+    normalization
+        Normalization configuration.
+
+    Notes
+    -----
+    ``cond_dim`` is the single source of truth for the conditioning dimension.
+    It is used for both:
+
+    - the output dimension of :class:`~score_qmri.models.conditioning.ConditioningMLP`
+    - the FiLM/AdaGN conditioning dimension inside the UNet
+    """
+
+    cond_dim: int = 128
+    num_kinds: int = NUM_DATASET_KINDS
+    sigma_min: float = 0.001
+    sigma_max: float = 20.0
+    sigma_data: float = 0.2
+    p_mean: float = -1.6
+    p_std: float = 1.4
+    rho: float = 7.0
+    normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> DiffusionConfig:
+        payload = dict(data)
+
+        normalization = payload.get("normalization")
+        if isinstance(normalization, Mapping):
+            payload["normalization"] = NormalizationConfig(**dict(normalization))
+        elif normalization is None:
+            payload.pop("normalization", None)
+        elif not isinstance(normalization, NormalizationConfig):
+            raise TypeError(f"Unsupported normalization type: {type(normalization)!r}")
+
+        return cls(**payload)
 
 
 class InputFormat(IntEnum):
@@ -56,15 +122,17 @@ class ListMetadata:
 
 
 @dataclass
-class DiffusionOutput:
-    x0: Tensor
-    noise: Tensor
+class DenoiseOutput:
+    """Denoiser outputs in the input's original format."""
+
+    x0_main: Tensor
+    x0_aux: Tensor
 
 
 @dataclass
-class DiffusionOutputList:
-    x0: list[Tensor]
-    noise: list[Tensor]
+class DenoiseOutputList:
+    x0_main: list[Tensor]
+    x0_aux: list[Tensor]
 
 
 def _to_2ch_single(x: Tensor) -> tuple[Tensor, InputFormat]:
@@ -85,16 +153,6 @@ def _to_2ch(x: Tensor | Sequence[Tensor], kind: Tensor | None = None) -> tuple[T
 
     For list/sequence inputs, tensors are concatenated along the batch dimension.
     Each element can be real (B_i, H, W), complex (B_i, H, W), or 2ch (B_i, 2, H, W).
-
-    Returns
-    -------
-    x_2ch
-        Tensor in canonical format (B, 2, H, W).
-    fmt
-        Input format (for reconstruction).
-    metadata
-        For list inputs, contains per-element formats and batch sizes.
-        None for single tensor inputs.
     """
     if isinstance(x, (list, tuple)):
         if not all(isinstance(tensor, Tensor) for tensor in x):
@@ -108,6 +166,7 @@ def _to_2ch(x: Tensor | Sequence[Tensor], kind: Tensor | None = None) -> tuple[T
         if kind is not None:
             x_2ch = _apply_kind_constraints(x_2ch, kind)
         return x_2ch, InputFormat.LIST_2CH, ListMetadata(formats, batch_sizes)
+
     x_2ch, fmt = _to_2ch_single(cast(Tensor, x))
     if kind is not None:
         x_2ch = _apply_kind_constraints(x_2ch, kind)
@@ -126,7 +185,12 @@ def _from_2ch_single(x_2ch: Tensor, fmt: InputFormat) -> Tensor:
             raise ValueError(f"Unsupported format: {fmt}")
 
 
-def _from_2ch(x_2ch: Tensor, fmt: InputFormat, kind: Tensor | None = None, metadata: ListMetadata | None = None) -> Tensor | list[Tensor]:
+def _from_2ch(
+    x_2ch: Tensor,
+    fmt: InputFormat,
+    kind: Tensor | None = None,
+    metadata: ListMetadata | None = None,
+) -> Tensor | list[Tensor]:
     """Convert canonical (B, 2, H, W) back to original format."""
     if kind is not None:
         x_2ch = _apply_kind_constraints(x_2ch, kind)
@@ -158,135 +222,321 @@ def _create_noise(shape: tuple[int, ...], kind: Tensor, device: torch.device, dt
     return _apply_kind_constraints(noise, kind)
 
 
+def _extract_model_config(cli_config: Mapping[str, Any]) -> Mapping[str, Any]:
+    model_cfg = cli_config.get("model")
+    if isinstance(model_cfg, Mapping):
+        return model_cfg
+
+    raise ValueError("Checkpoint cli_config does not contain model configuration.")
+
+
+def _instantiate_unet_from_spec(unet_spec: Mapping[str, Any], *, cond_dim: int | None = None) -> torch.nn.Module:
+    import jsonargparse
+
+    spec = dict(unet_spec)
+    init_args = dict(spec.get("init_args", {}))
+    if cond_dim is not None:
+        init_args["cond_dim"] = int(cond_dim)
+    spec["init_args"] = init_args
+
+    parser = jsonargparse.ArgumentParser()
+    parser.add_subclass_arguments(torch.nn.Module, "unet")
+    cfg = parser.parse_object({"unet": spec})
+    unet = parser.instantiate_classes(cfg).unet
+    if not isinstance(unet, torch.nn.Module):
+        raise TypeError(f"UNet spec did not instantiate torch.nn.Module, got {type(unet)!r}")
+    return unet
+
+
 class DiffusionModel(torch.nn.Module):
-    """VP-SDE diffusion model with continuous time t ∈ [0, 1].
+    """VE/EDM diffusion model with continuous sigma.
 
-    The forward SDE is: dx = -½β(t)x dt + √β(t) dw
-    with linear noise schedule: β(t) = β_min + t(β_max - β_min)
+    This module wraps a conditional UNet and exposes sigma-native primitives:
+    - q_sample(x0, sigma)
+    - denoise(x, sigma)
+    - score(x, sigma)
 
-    Key quantities:
-        ᾱ(t) = exp(-∫₀ᵗ β(s)ds) = exp(-β_min·t - ½(β_max - β_min)·t²)
-        σ(t) = √(1 - ᾱ(t))
-        SNR(t) = ᾱ(t) / (1 - ᾱ(t))
-
-    At t=0: ᾱ=1, σ=0 (clean image)
-    At t=1: ᾱ≈0, σ≈1 (pure noise)
+    Conditioning is via FiLM with a conditioning MLP that embeds:
+    - EDM noise embedding: c_noise = log(sigma) / 4
+    - dataset kind embedding
     """
+
+    sigma_min: float
+    sigma_max: float
+    sigma_data: float
+    p_mean: float
+    p_std: float
+    rho: float
+    train_clip: float
+    sample_clip: float
+    _kind_scale_lookup: dict[int, float]
 
     def __init__(
         self,
-        beta_min: float = 0.1,
-        beta_max: float = 20.0,
-        base_channels: int = 64,
-        num_res_blocks: int = 2,
-        channel_mult: tuple[int, ...] = (1, 2, 4, 8, 16),
-        cond_dim: int = 128,
-        num_kinds: int = 14,
-        attention_levels: tuple[int, ...] = (),
-        head_dim: int = 64,
-        noise_schedule: NoiseSchedule = "linear",
-        normalization: NormalizationConfig | None = None,
+        *,
+        unet: torch.nn.Module,
+        diffusion: DiffusionConfig | dict[str, Any] | None = None,
     ) -> None:
-        """
-        Parameters
-        ----------
-        beta_min
-            Minimum noise rate β(0) (for linear schedule).
-        beta_max
-            Maximum noise rate β(1) (for linear schedule).
-        base_channels
-            UNet base channel count.
-        num_res_blocks
-            Number of ResBlocks per level.
-        channel_mult
-            Channel multipliers per level (e.g., (1, 2, 4, 8) gives 4 levels).
-        cond_dim
-            Conditioning embedding dimension.
-        num_kinds
-            Number of dataset kind classes for embedding.
-        attention_levels
-            Tuple of level indices where self-attention is applied (0-indexed).
-            E.g., (3, 4) applies attention at 32×32 and 16×16 for 256×256 input.
-        head_dim
-            Dimension per attention head (default 64, following Stable Diffusion).
-        noise_schedule
-            Noise schedule type: "linear" (VP-SDE default) or "cosine" (Nichol & Dhariwal).
-        normalization
-            Normalization settings (clipping + mapping kind scales).
-        """
         super().__init__()
-        self.beta_min = beta_min
-        self.beta_max = beta_max
-        self.noise_schedule = noise_schedule
 
-        norm = normalization or NormalizationConfig()
-        self.train_clip = norm.train_clip
-        self.sample_clip = norm.sample_clip
+        if diffusion is None:
+            diffusion = DiffusionConfig()
+        elif isinstance(diffusion, DiffusionConfig):
+            diffusion = DiffusionConfig.from_mapping(diffusion.__dict__)
+        else:
+            if not isinstance(diffusion, dict):
+                raise TypeError(f"Unsupported diffusion type: {type(diffusion)!r}")
+            diffusion = DiffusionConfig.from_mapping(diffusion)
+
+        self.sigma_min = float(diffusion.sigma_min)
+        self.sigma_max = float(diffusion.sigma_max)
+        self.sigma_data = float(diffusion.sigma_data)
+        self.p_mean = float(diffusion.p_mean)
+        self.p_std = float(diffusion.p_std)
+        self.rho = float(diffusion.rho)
+
+        norm = diffusion.normalization
+        self.train_clip = float(norm.train_clip)
+        self.sample_clip = float(norm.sample_clip)
 
         merged_kind_scales = {**DEFAULT_KIND_SCALES, **(norm.kind_scales or {})}
         self._kind_scale_lookup: dict[int, float] = {}
         for kind_name, scale in merged_kind_scales.items():
             kind_enum = DatasetKind[kind_name]
-            self._kind_scale_lookup[int(kind_enum)] = scale
+            self._kind_scale_lookup[int(kind_enum)] = float(scale)
 
-        self.cond_mlp = ConditioningMLP(cond_dim=cond_dim, num_kinds=num_kinds)
-        unet = UNet(
-            in_channels=2,
-            base_channels=base_channels,
-            num_res_blocks=num_res_blocks,
-            channel_mult=channel_mult,
-            cond_dim=cond_dim,
-            attention_levels=attention_levels,
-            head_dim=head_dim,
-        )
-        unet.to(memory_format=torch.channels_last)  # type: ignore[call-overload]
-        self.unet = torch.compile(unet, mode="reduce-overhead")
+        self.cond_mlp = ConditioningMLP(cond_dim=diffusion.cond_dim, num_kinds=diffusion.num_kinds)
+
+        self.unet = cast(torch.nn.Module, torch.compile(unet, mode="reduce-overhead"))
 
     @property
     def device(self) -> torch.device:
         return next(self.parameters()).device
 
-    def beta(self, t: Tensor) -> Tensor:
-        """Instantaneous noise rate β(t)."""
-        if self.noise_schedule == "cosine":
-            t = t.float().clamp(min=0.0, max=1.0 - 1e-5)
-            theta = (t + 0.008) / (1 + 0.008) * math.pi / 2
-            return math.pi / (1 + 0.008) * torch.tan(theta)
-        return self.beta_min + t * (self.beta_max - self.beta_min)
+    def get_prior_sigma(self) -> float:
+        """Prior sigma for VE sampling: x ~ N(0, sigma_max^2 I)."""
+        return self.sigma_max
 
-    def alpha_bar(self, t: Tensor) -> Tensor:
-        """Cumulative signal variance ᾱ(t) = exp(-∫₀ᵗ β(s)ds)."""
-        if self.noise_schedule == "cosine":
-            return self._alpha_bar_cosine(t)
-        return torch.exp(-self.beta_min * t - 0.5 * (self.beta_max - self.beta_min) * t**2)
+    def sample_sigmas(self, batch_size: int, device: torch.device | None = None, *, generator: torch.Generator | None = None) -> Tensor:
+        """Sample training sigmas from EDM log-normal distribution."""
+        device = self.device if device is None else device
+        log_sigma = torch.randn(batch_size, device=device, generator=generator) * self.p_std + self.p_mean
+        sigma = log_sigma.exp().clamp(min=self.sigma_min, max=self.sigma_max)
+        return sigma
 
-    def _alpha_bar_cosine(self, t: Tensor, s: float = 0.008) -> Tensor:
-        """Cosine schedule: ᾱ(t) = f(t)/f(0) where f(t) = cos²((t+s)/(1+s) * π/2)."""
-        # Ensure t is float32 to avoid precision issues
-        t = t.float()
-        f_t = torch.cos((t + s) / (1 + s) * math.pi / 2) ** 2
-        f_0 = math.cos(s / (1 + s) * math.pi / 2) ** 2
-        return f_t / f_0
+    def _edm_preconditioning(self, sigma: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Compute EDM preconditioning scalars.
 
-    def sigma(self, t: Tensor) -> Tensor:
-        """Noise standard deviation σ(t) = √(1 - ᾱ(t))."""
-        return (1.0 - self.alpha_bar(t)).clamp(min=0.0).sqrt()
+        Returns
+        -------
+        c_skip, c_out, c_in, c_noise
+            Each tensor has shape (B,).
+        """
+        sigma_f = sigma.float().clamp(min=self.sigma_min)
+        sigma_data = torch.tensor(self.sigma_data, device=sigma.device, dtype=torch.float32)
+        sigma2 = sigma_f.square()
+        sigma_data2 = sigma_data.square()
+        denom = sigma2 + sigma_data2
 
-    def snr(self, t: Tensor) -> Tensor:
-        """Signal-to-noise ratio SNR(t) = ᾱ(t) / (1 - ᾱ(t))."""
-        ab = self.alpha_bar(t)
-        return ab / (1.0 - ab).clamp(min=1e-8)
+        c_skip = sigma_data2 / denom
+        c_out = sigma_f * sigma_data / denom.sqrt()
+        c_in = denom.rsqrt()
+        c_noise = sigma_f.log() / 4.0
+
+        return c_skip, c_out, c_in, c_noise
+
+    @overload
+    def q_sample(self, x0: Tensor, sigma: Tensor, kind: Tensor, noise: Tensor | None = None) -> Tensor: ...
+    @overload
+    def q_sample(self, x0: Sequence[Tensor], sigma: Tensor, kind: Tensor, noise: Sequence[Tensor] | None = None) -> list[Tensor]: ...
+    def q_sample(
+        self,
+        x0: Tensor | Sequence[Tensor],
+        sigma: Tensor,
+        kind: Tensor,
+        noise: Tensor | Sequence[Tensor] | None = None,
+    ) -> Tensor | list[Tensor]:
+        """Sample x = x0 + sigma * eps in canonical 2ch space.
+
+        Input/output formats follow the same rules as in `forward`.
+        """
+        x0_2ch, fmt, metadata = _to_2ch(x0, kind)
+        B = x0_2ch.shape[0]
+        if sigma.ndim == 0:
+            sigma = sigma.expand(B)
+        if sigma.shape[0] != B:
+            raise ValueError(f"sigma must have shape (B,), got {sigma.shape} for B={B}")
+
+        if noise is None:
+            eps = _create_noise(x0_2ch.shape, kind, x0_2ch.device, x0_2ch.dtype)
+        else:
+            eps, _, _ = _to_2ch(noise, kind)
+
+        sigma_b = sigma.to(device=x0_2ch.device, dtype=x0_2ch.dtype).view(-1, 1, 1, 1)
+        x = x0_2ch + sigma_b * eps
+        x = _apply_kind_constraints(x, kind)
+
+        return _from_2ch(x, fmt, kind, metadata)
+
+    def _denoise_both_2ch(self, x_2ch: Tensor, sigma: Tensor, kind: Tensor, cond_mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
+        """Denoise in canonical 2ch space. Returns (x0_main, x0_aux)."""
+        B = x_2ch.shape[0]
+        if sigma.ndim == 0:
+            sigma = sigma.expand(B)
+        if sigma.shape[0] != B:
+            raise ValueError(f"sigma must have shape (B,), got {sigma.shape} for B={B}")
+
+        x_2ch = _apply_kind_constraints(x_2ch, kind)
+
+        c_skip, c_out, c_in, c_noise = self._edm_preconditioning(sigma)
+        cond = self.cond_mlp(c_noise.to(device=x_2ch.device), kind, mask=cond_mask)
+
+        x_in = (c_in.to(device=x_2ch.device, dtype=x_2ch.dtype).view(-1, 1, 1, 1) * x_2ch).contiguous()
+        if x_2ch.is_contiguous(memory_format=torch.channels_last):
+            x_in = x_in.contiguous(memory_format=torch.channels_last)
+
+        out = self.unet(x_in, cond=cond)
+        if isinstance(out, Tensor):
+            f_main, f_aux = out.chunk(2, dim=1)
+        else:
+            f_main, f_aux = out
+
+        c_skip_b = c_skip.to(device=x_2ch.device, dtype=x_2ch.dtype).view(-1, 1, 1, 1)
+        c_out_b = c_out.to(device=x_2ch.device, dtype=x_2ch.dtype).view(-1, 1, 1, 1)
+        x0_main = c_skip_b * x_2ch + c_out_b * f_main
+        x0_aux = c_skip_b * x_2ch + c_out_b * f_aux
+
+        x0_main = _apply_kind_constraints(x0_main, kind)
+        x0_aux = _apply_kind_constraints(x0_aux, kind)
+
+        return x0_main, x0_aux
+
+    @overload
+    def forward(self, x: Tensor, sigma: Tensor, kind: Tensor, cond_mask: Tensor | None = None) -> DenoiseOutput: ...
+    @overload
+    def forward(self, x: Sequence[Tensor], sigma: Tensor, kind: Tensor, cond_mask: Tensor | None = None) -> DenoiseOutputList: ...
+    def forward(
+        self,
+        x: Tensor | Sequence[Tensor],
+        sigma: Tensor,
+        kind: Tensor,
+        cond_mask: Tensor | None = None,
+    ) -> DenoiseOutput | DenoiseOutputList:
+        """Predict clean images from a noisy input.
+
+        Parameters
+        ----------
+        x
+            Noisy input. Supported formats:
+            - real: (B, H, W)
+            - complex: (B, H, W) complex
+            - 2ch: (B, 2, H, W)
+            - list/tuple of the above (concatenated along batch)
+        sigma
+            Noise level(s) of shape (B,) or scalar.
+        kind
+            Dataset kind indices of shape (B,).
+        cond_mask
+            Optional conditioning mask for CFG-style kind dropout.
+
+        Returns
+        -------
+        DenoiseOutput | DenoiseOutputList
+            Predictions in the same input format.
+        """
+        x_2ch, fmt, metadata = _to_2ch(x, kind)
+        x0_main_2ch, x0_aux_2ch = self._denoise_both_2ch(x_2ch, sigma, kind, cond_mask=cond_mask)
+
+        x0_main = _from_2ch(x0_main_2ch, fmt, kind, metadata)
+        x0_aux = _from_2ch(x0_aux_2ch, fmt, kind, metadata)
+
+        if fmt == InputFormat.LIST_2CH:
+            return DenoiseOutputList(x0_main=cast(list[Tensor], x0_main), x0_aux=cast(list[Tensor], x0_aux))
+        return DenoiseOutput(x0_main=cast(Tensor, x0_main), x0_aux=cast(Tensor, x0_aux))
+
+    @overload
+    def denoise(self, x: Tensor, sigma: Tensor, kind: Tensor, cond_mask: Tensor | None = None) -> Tensor: ...
+    @overload
+    def denoise(self, x: Sequence[Tensor], sigma: Tensor, kind: Tensor, cond_mask: Tensor | None = None) -> list[Tensor]: ...
+    def denoise(
+        self,
+        x: Tensor | Sequence[Tensor],
+        sigma: Tensor,
+        kind: Tensor,
+        cond_mask: Tensor | None = None,
+    ) -> Tensor | list[Tensor]:
+        """Convenience: return only the main x0 prediction."""
+        out = self.forward(x, sigma, kind, cond_mask=cond_mask)
+        return out.x0_main
+
+    @overload
+    def denoise_aux(self, x: Tensor, sigma: Tensor, kind: Tensor, cond_mask: Tensor | None = None) -> Tensor: ...
+    @overload
+    def denoise_aux(self, x: Sequence[Tensor], sigma: Tensor, kind: Tensor, cond_mask: Tensor | None = None) -> list[Tensor]: ...
+    def denoise_aux(
+        self,
+        x: Tensor | Sequence[Tensor],
+        sigma: Tensor,
+        kind: Tensor,
+        cond_mask: Tensor | None = None,
+    ) -> Tensor | list[Tensor]:
+        out = self.forward(x, sigma, kind, cond_mask=cond_mask)
+        return out.x0_aux
+
+    @overload
+    def predict_eps(self, x: Tensor, sigma: Tensor, kind: Tensor, cond_mask: Tensor | None = None) -> Tensor: ...
+    @overload
+    def predict_eps(self, x: Sequence[Tensor], sigma: Tensor, kind: Tensor, cond_mask: Tensor | None = None) -> list[Tensor]: ...
+    def predict_eps(
+        self,
+        x: Tensor | Sequence[Tensor],
+        sigma: Tensor,
+        kind: Tensor,
+        cond_mask: Tensor | None = None,
+    ) -> Tensor | list[Tensor]:
+        """Compute eps_hat = (x - x0_hat_main) / sigma."""
+        x_2ch, fmt, metadata = _to_2ch(x, kind)
+        x0_main, _ = self._denoise_both_2ch(x_2ch, sigma, kind, cond_mask=cond_mask)
+
+        B = x_2ch.shape[0]
+        if sigma.ndim == 0:
+            sigma = sigma.expand(B)
+        sigma_b = sigma.to(device=x_2ch.device, dtype=x_2ch.dtype).view(-1, 1, 1, 1)
+        eps_hat_2ch = (x_2ch - x0_main) / sigma_b.clamp(min=1e-8)
+        eps_hat_2ch = _apply_kind_constraints(eps_hat_2ch, kind)
+
+        return _from_2ch(eps_hat_2ch, fmt, kind, metadata)
+
+    @overload
+    def score(self, x: Tensor, sigma: Tensor, kind: Tensor, cond_mask: Tensor | None = None) -> Tensor: ...
+    @overload
+    def score(self, x: Sequence[Tensor], sigma: Tensor, kind: Tensor, cond_mask: Tensor | None = None) -> list[Tensor]: ...
+    def score(
+        self,
+        x: Tensor | Sequence[Tensor],
+        sigma: Tensor,
+        kind: Tensor,
+        cond_mask: Tensor | None = None,
+    ) -> Tensor | list[Tensor]:
+        """Compute score ≈ (x0_hat_main - x) / sigma^2."""
+        x_2ch, fmt, metadata = _to_2ch(x, kind)
+        x0_main, _ = self._denoise_both_2ch(x_2ch, sigma, kind, cond_mask=cond_mask)
+
+        B = x_2ch.shape[0]
+        if sigma.ndim == 0:
+            sigma = sigma.expand(B)
+        sigma_b = sigma.to(device=x_2ch.device, dtype=x_2ch.dtype).view(-1, 1, 1, 1)
+        score_2ch = (x0_main - x_2ch) / sigma_b.square().clamp(min=1e-8)
+        score_2ch = _apply_kind_constraints(score_2ch, kind)
+
+        return _from_2ch(score_2ch, fmt, kind, metadata)
 
     @overload
     def normalize(self, x: Tensor, kind: Tensor) -> Tensor: ...
     @overload
     def normalize(self, x: Sequence[Tensor], kind: Tensor) -> list[Tensor]: ...
     def normalize(self, x: Tensor | Sequence[Tensor], kind: Tensor) -> Tensor | list[Tensor]:
-        """Normalize input using per-kind fixed scales (mapping kinds only).
-
-        For mapping kinds (T1MAP, T2MAP, T2STARMAP): multiply by kind_scale.
-        For all other kinds: identity (no change).
-        """
+        """Normalize input using per-kind fixed scales (mapping kinds only)."""
         x_2ch, fmt, metadata = _to_2ch(x, kind)
         x_norm = self._apply_kind_scale(x_2ch, kind, inverse=False)
         return _from_2ch(x_norm, fmt, kind, metadata)
@@ -296,17 +546,12 @@ class DiffusionModel(torch.nn.Module):
     @overload
     def denormalize(self, x: Sequence[Tensor], kind: Tensor) -> list[Tensor]: ...
     def denormalize(self, x: Tensor | Sequence[Tensor], kind: Tensor) -> Tensor | list[Tensor]:
-        """Denormalize output back to original scale (mapping kinds only).
-
-        For mapping kinds: divide by kind_scale to return to physical units (seconds).
-        For all other kinds: identity (no change).
-        """
+        """Denormalize output back to original scale (mapping kinds only)."""
         x_2ch, fmt, metadata = _to_2ch(x, kind)
         x_denorm = self._apply_kind_scale(x_2ch, kind, inverse=True)
         return _from_2ch(x_denorm, fmt, kind, metadata)
 
     def _apply_kind_scale(self, x: Tensor, kind: Tensor, inverse: bool = False) -> Tensor:
-        """Apply or remove kind-specific scaling for mapping kinds."""
         result = x.clone()
         for k in kind.unique():
             k_idx = int(k.item())
@@ -321,11 +566,7 @@ class DiffusionModel(torch.nn.Module):
         return result
 
     def clamp_x0(self, x: Tensor, kind: Tensor, limit: float | None = None) -> Tensor:
-        """Clamp x₀ predictions to physical ranges with phase preservation for complex.
-
-        For complex kinds: clips magnitude to [0, limit] while preserving phase.
-        For real kinds: clips to [0, limit] and zeros imaginary channel.
-        """
+        """Clamp x0 predictions to physical ranges with phase preservation for complex."""
         if limit is None:
             limit = self.sample_clip
         result = x.clone()
@@ -345,139 +586,130 @@ class DiffusionModel(torch.nn.Module):
                 result[idx, 1] = 0.0
         return result
 
-    @overload
-    def q_sample(
+    def load_state_dict(
         self,
-        x0: Tensor,
-        t: Tensor,
-        kind: Tensor,
-        noise: Tensor | None = None,
-    ) -> Tensor: ...
-    @overload
-    def q_sample(
-        self,
-        x0: Sequence[Tensor],
-        t: Tensor,
-        kind: Tensor,
-        noise: Sequence[Tensor] | None = None,
-    ) -> list[Tensor]: ...
-    def q_sample(
-        self,
-        x0: Tensor | Sequence[Tensor],
-        t: Tensor,
-        kind: Tensor,
-        noise: Tensor | Sequence[Tensor] | None = None,
-    ) -> Tensor | list[Tensor]:
-        """Sample from q(xₜ | x₀): xₜ = √ᾱ(t)·x₀ + √(1-ᾱ(t))·ε.
+        state_dict: Mapping[str, Any],
+        strict: bool = True,
+        assign: bool = False,
+    ) -> torch.nn.modules.module._IncompatibleKeys:
+        """Load state dict with support for Lightning/EMA checkpoint formats.
 
-        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
-        Returns same format as input (list returns list).
-        For real kinds, noise has zero imaginary component.
+        Handles:
+        - EMA shadow weights (prefers these if available)
+        - Lightning checkpoint format (strips 'model.' prefix)
+        - Plain state dicts
+
+        Parameters
+        ----------
+        state_dict
+            State dict to load. Can be a full checkpoint dict containing
+            'ema' or 'state_dict' keys, or a plain model state dict.
+        strict
+            Whether to require exact key matching.
+        assign
+            Whether to assign tensors instead of copying.
+
+        Returns
+        -------
+        _IncompatibleKeys
+            Named tuple with missing and unexpected keys.
         """
-        x0_2ch, fmt, metadata = _to_2ch(x0, kind)
+        # Handle EMA checkpoint format
+        sd: Mapping[str, Any] = state_dict
+        if "ema" in sd and "shadow" in sd["ema"]:
+            sd = sd["ema"]["shadow"]
+        # Handle Lightning checkpoint format
+        elif "state_dict" in sd:
+            sd = sd["state_dict"]
 
-        if noise is None:
-            noise_2ch = _create_noise(x0_2ch.shape, kind, x0_2ch.device, x0_2ch.dtype)
+        # Strip "model." prefix if present
+        if any(k.startswith("model.") for k in sd):
+            sd = {k.removeprefix("model."): v for k, v in sd.items() if k.startswith("model.")}
+
+        return cast(
+            torch.nn.modules.module._IncompatibleKeys,
+            super().load_state_dict(sd, strict=strict, assign=assign),
+        )
+
+    def load_checkpoint(self, path: str | Path) -> torch.nn.modules.module._IncompatibleKeys:
+        """Load checkpoint from file path.
+
+        Convenience wrapper around load_state_dict that handles file loading.
+
+        Parameters
+        ----------
+        path
+            Path to checkpoint file (.pt or .ckpt).
+
+        Returns
+        -------
+        _IncompatibleKeys
+            Named tuple with missing and unexpected keys.
+        """
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+        return self.load_state_dict(checkpoint)
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        path: str | Path,
+        *,
+        unet: torch.nn.Module | None = None,
+        map_location: torch.device | str | None = None,
+        strict: bool = True,
+        eval_mode: bool = True,
+    ) -> DiffusionModel:
+        """Instantiate a diffusion model from a Lightning-style checkpoint.
+
+        Parameters
+        ----------
+        path
+            Path to checkpoint file (.ckpt or .pt).
+        unet
+            Optional UNet instance. If not provided, the checkpoint must contain
+            ``cli_config.model.unet``.
+        map_location
+            Torch load map_location.
+        strict
+            Whether to require exact key matching when loading weights.
+        eval_mode
+            If True, puts the model in eval mode before returning.
+        """
+        if map_location is None:
+            map_location = "cuda" if torch.cuda.is_available() else "cpu"
+        checkpoint = torch.load(path, map_location=map_location, weights_only=False)
+        hparams = checkpoint.get("hyper_parameters")
+        if not isinstance(hparams, Mapping):
+            raise ValueError(
+                "Checkpoint is missing 'hyper_parameters'. Use DiffusionModel(...).load_checkpoint(...) or provide a Lightning checkpoint."
+            )
+
+        cli_config = checkpoint.get("cli_config")
+        model_cfg: Mapping[str, Any] | None = None
+        if isinstance(cli_config, Mapping):
+            model_cfg = _extract_model_config(cli_config)
+
+        diffusion = hparams.get("diffusion")
+        if diffusion is None:
+            raise ValueError("Checkpoint is missing 'hyper_parameters.diffusion'.")
+        if isinstance(diffusion, Mapping):
+            diffusion = DiffusionConfig.from_mapping(diffusion)
+        elif isinstance(diffusion, DiffusionConfig):
+            diffusion = DiffusionConfig.from_mapping(diffusion.__dict__)
         else:
-            noise_2ch, _, _ = _to_2ch(noise, kind)
+            raise TypeError(f"Unsupported diffusion type: {type(diffusion)!r}")
 
-        ab = self.alpha_bar(t).view(-1, 1, 1, 1)
-        x_t_2ch = ab.clamp(min=0.0).sqrt() * x0_2ch + (1.0 - ab).clamp(min=0.0).sqrt() * noise_2ch
+        if unet is None:
+            if model_cfg is None:
+                raise ValueError("Checkpoint is missing 'cli_config'; provide unet explicitly.")
+            unet_spec = model_cfg.get("unet")
+            if not isinstance(unet_spec, Mapping):
+                raise ValueError("Checkpoint cli_config is missing model.unet specification.")
+            unet = _instantiate_unet_from_spec(unet_spec, cond_dim=diffusion.cond_dim)
 
-        return _from_2ch(x_t_2ch, fmt, kind, metadata)
+        model = cls(unet=unet, diffusion=diffusion)
 
-    @overload
-    def forward(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput: ...
-    @overload
-    def forward(self, x_t: Sequence[Tensor], t: Tensor, kind: Tensor) -> DiffusionOutputList: ...
-    def forward(self, x_t: Tensor | Sequence[Tensor], t: Tensor, kind: Tensor) -> DiffusionOutput | DiffusionOutputList:
-        """Predict x₀ and noise from noisy input.
-
-        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
-        Returns DiffusionOutputList for list inputs, DiffusionOutput otherwise.
-        For real kinds, imaginary channel of outputs is zeroed.
-        """
-        x_t_2ch, fmt, metadata = _to_2ch(x_t, kind)
-        cond = self.cond_mlp(t, kind)
-        x0_pred_2ch, noise_pred_2ch = self.unet(x_t_2ch, cond)
-
-        x0_pred = _from_2ch(x0_pred_2ch, fmt, kind, metadata)
-        noise_pred = _from_2ch(noise_pred_2ch, fmt, kind, metadata)
-
-        if fmt == InputFormat.LIST_2CH:
-            return DiffusionOutputList(x0=cast(list[Tensor], x0_pred), noise=cast(list[Tensor], noise_pred))
-        return DiffusionOutput(x0=cast(Tensor, x0_pred), noise=cast(Tensor, noise_pred))
-
-    @overload
-    def predict_x0(
-        self,
-        x_t: Tensor,
-        t: Tensor,
-        noise: Tensor,
-        kind: Tensor,
-    ) -> Tensor: ...
-    @overload
-    def predict_x0(
-        self,
-        x_t: Sequence[Tensor],
-        t: Tensor,
-        noise: Sequence[Tensor],
-        kind: Tensor,
-    ) -> list[Tensor]: ...
-    def predict_x0(
-        self,
-        x_t: Tensor | Sequence[Tensor],
-        t: Tensor,
-        noise: Tensor | Sequence[Tensor],
-        kind: Tensor,
-    ) -> Tensor | list[Tensor]:
-        """Recover x₀ = (xₜ - σ(t)·ε) / √ᾱ(t).
-
-        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
-        Returns same format as input (list returns list).
-        """
-        x_t_2ch, fmt, metadata = _to_2ch(x_t, kind)
-        noise_2ch, _, _ = _to_2ch(noise, kind)
-
-        ab = self.alpha_bar(t).view(-1, 1, 1, 1)
-        x0_2ch = (x_t_2ch - (1.0 - ab).clamp(min=0.0).sqrt() * noise_2ch) / ab.clamp(min=0.0).sqrt().clamp(min=1e-8)
-
-        return _from_2ch(x0_2ch, fmt, kind, metadata)
-
-    @overload
-    def score(self, x_t: Tensor, t: Tensor, kind: Tensor) -> Tensor: ...
-    @overload
-    def score(self, x_t: Sequence[Tensor], t: Tensor, kind: Tensor) -> list[Tensor]: ...
-    def score(self, x_t: Tensor | Sequence[Tensor], t: Tensor, kind: Tensor) -> Tensor | list[Tensor]:
-        """Compute score ∇ₓ log p(xₜ) = -ε / σ(t).
-
-        Accepts tensor or list of tensors in (B, H, W) real/complex or (B, 2, H, W).
-        Returns same format as input (list returns list).
-        """
-        output = self.forward(x_t, t, kind)
-
-        x_t_2ch, fmt, metadata = _to_2ch(x_t, kind)
-        noise_2ch, _, _ = _to_2ch(output.noise, kind)
-
-        sigma_t = self.sigma(t).view(-1, 1, 1, 1)
-        score_2ch = -noise_2ch / sigma_t.clamp(min=1e-8)
-
-        return _from_2ch(score_2ch, fmt, kind, metadata)
-
-    @overload
-    def __call__(self, x_t: Tensor, t: Tensor, kind: Tensor) -> DiffusionOutput: ...
-    @overload
-    def __call__(self, x_t: Sequence[Tensor], t: Tensor, kind: Tensor) -> DiffusionOutputList: ...
-    def __call__(self, x_t: Tensor | Sequence[Tensor], t: Tensor, kind: Tensor) -> DiffusionOutput | DiffusionOutputList:
-        return self.forward(x_t, t, kind)
-
-    def load_checkpoint(self, checkpoint_path: Path | str) -> None:
-        """Load weights from checkpoint, preferring EMA shadow weights if available."""
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-
-        if "ema" in checkpoint:
-            self.load_state_dict(checkpoint["ema"]["shadow"])
-        else:
-            state_dict = checkpoint["state_dict"]
-            model_state = {k.removeprefix("model."): v for k, v in state_dict.items() if k.startswith("model.")}
-            self.load_state_dict(model_state)
+        model.load_state_dict(checkpoint, strict=strict)
+        if eval_mode:
+            model.eval()
+        return model

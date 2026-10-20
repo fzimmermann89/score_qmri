@@ -3,20 +3,27 @@
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import torch
 from lightning import LightningDataModule
 from torch.utils.data import ConcatDataset, DataLoader
 
 from .batch_sampler import ScheduledBatchSampler
+from .brainweb import VALUES_3T_RANDOMIZED, BrainwebQualitativeDataset, BrainwebQuantitativeDataset, BrainwebTissue
 from .complex import ComplexImageDataset
-from .config import AugmentationConfig
+from .config import (
+    COMPLEX_CONFIG,
+    MAGNITUDE_CONFIG,
+    MAPPING_CONFIG,
+    AugmentationConfig,
+)
 from .kind import DatasetKind
 from .magnitude import MagnitudeImageDataset
 from .mapping import MappingDataset
+from .utils import _pad_or_crop_centered
 
-MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset
+MRIDataset = ComplexImageDataset | MagnitudeImageDataset | MappingDataset | BrainwebQuantitativeDataset | BrainwebQualitativeDataset
 
 
 @dataclass(kw_only=True)
@@ -81,6 +88,7 @@ class ComplexDatasetConfig(BaseDatasetConfig):
     type: Literal["complex"] = "complex"
     mode: Literal["flat", "combined", "coilwise"] = "flat"
     kind: DatasetKind = DatasetKind.COMPLEX_T1W_COILWISE
+    augmentation_config: AugmentationConfig | None = COMPLEX_CONFIG
     scaling_factor: float = 1.0
 
     def create(self) -> ComplexImageDataset:
@@ -100,6 +108,7 @@ class MagnitudeDatasetConfig(BaseDatasetConfig):
 
     type: Literal["magnitude"] = "magnitude"
     kind: DatasetKind = DatasetKind.T1W_MAGNITUDE
+    augmentation_config: AugmentationConfig | None = MAGNITUDE_CONFIG
     scaling_factor: float = 1.0
 
     def create(self) -> MagnitudeImageDataset:
@@ -118,6 +127,7 @@ class MappingDatasetConfig(BaseDatasetConfig):
 
     type: Literal["mapping"] = "mapping"
     kind: DatasetKind = DatasetKind.T1MAP
+    augmentation_config: AugmentationConfig | None = MAPPING_CONFIG
     scaling_factor: float = 1.0
     penumbra_width: int = -1
 
@@ -131,7 +141,137 @@ class MappingDatasetConfig(BaseDatasetConfig):
         )
 
 
-DatasetConfig = ComplexDatasetConfig | MagnitudeDatasetConfig | MappingDatasetConfig
+@dataclass(kw_only=True)
+class BrainwebDatasetConfig(BaseDatasetConfig):
+    """Configuration for Brainweb quantitative datasets."""
+
+    type: Literal["brainweb"] = "brainweb"
+    kind: DatasetKind = DatasetKind.T1MAP
+    augmentation_config: AugmentationConfig | None = MAPPING_CONFIG
+    scaling_factor: float = 1.0
+    penumbra_width: int = -1
+    step: int = 1
+    skip_slices: tuple[int, int] = (80, 80)
+    parameters: dict[str, BrainwebTissue] | None = None
+    subject_id: int | None = None
+
+    def create(self) -> BrainwebQuantitativeDataset:
+        params = self.parameters if self.parameters is not None else VALUES_3T_RANDOMIZED
+        return BrainwebQuantitativeDataset(
+            h5_path=self.h5_path,
+            kind=self.kind,
+            parameters=params,
+            augmentation_config=self.augmentation_config,
+            scaling_factor=self.scaling_factor,
+            step=self.step,
+            skip_slices=self.skip_slices,
+            penumbra_width=self.penumbra_width,
+            subject_id=self.subject_id,
+        )
+
+
+@dataclass(kw_only=True)
+class BrainwebMagnitudeQualitativeDatasetConfig(BaseDatasetConfig):
+    """Configuration for Brainweb magnitude qualitative datasets."""
+
+    type: Literal["brainweb_qualitative_magnitude"] = "brainweb_qualitative_magnitude"
+    kind: DatasetKind = DatasetKind.T1W_MAGNITUDE
+    augmentation_config: AugmentationConfig | None = MAGNITUDE_CONFIG
+    scaling_factor: float = 1.0
+    penumbra_width: int = -1
+    step: int = 1
+    skip_slices: tuple[int, int] = (80, 80)
+    parameters: dict[str, BrainwebTissue] | None = None
+    subject_id: int | None = None
+    tr_range: tuple[float, float] | None = None
+    te_range: tuple[float, float] | None = None
+    flip_range: tuple[float, float] | None = None
+    background_phase_std: float = 0.3
+
+    _VALID_KINDS: ClassVar[frozenset[DatasetKind]] = frozenset(
+        {
+            DatasetKind.T1W_MAGNITUDE,
+            DatasetKind.T2W_MAGNITUDE,
+        }
+    )
+
+    def create(self: "BrainwebMagnitudeQualitativeDatasetConfig") -> BrainwebQualitativeDataset:
+        params = self.parameters if self.parameters is not None else VALUES_3T_RANDOMIZED
+        if self.kind not in self._VALID_KINDS:
+            raise ValueError(f"kind must be one of {self._VALID_KINDS}, got {self.kind}")
+        augmentation_config = self.augmentation_config
+        return BrainwebQualitativeDataset(
+            h5_path=self.h5_path,
+            kind=self.kind,
+            parameters=params,
+            augmentation_config=augmentation_config,
+            scaling_factor=self.scaling_factor,
+            step=self.step,
+            skip_slices=self.skip_slices,
+            penumbra_width=self.penumbra_width,
+            subject_id=self.subject_id,
+            tr_range=self.tr_range,
+            te_range=self.te_range,
+            flip_range=self.flip_range,
+            background_phase_std=self.background_phase_std,
+        )
+
+
+@dataclass(kw_only=True)
+class BrainwebComplexQualitativeDatasetConfig(BaseDatasetConfig):
+    """Configuration for Brainweb complex qualitative datasets."""
+
+    type: Literal["brainweb_qualitative_complex"] = "brainweb_qualitative_complex"
+    kind: DatasetKind = DatasetKind.COMPLEX_T1W_COIL_COMBINED
+    augmentation_config: AugmentationConfig | None = COMPLEX_CONFIG
+    scaling_factor: float = 1.0
+    penumbra_width: int = -1
+    step: int = 1
+    skip_slices: tuple[int, int] = (80, 80)
+    parameters: dict[str, BrainwebTissue] | None = None
+    subject_id: int | None = None
+    tr_range: tuple[float, float] | None = None
+    te_range: tuple[float, float] | None = None
+    flip_range: tuple[float, float] | None = None
+    background_phase_std: float = 0.3
+
+    _VALID_KINDS: ClassVar[frozenset[DatasetKind]] = frozenset(
+        {
+            DatasetKind.COMPLEX_T1W_COIL_COMBINED,
+            DatasetKind.COMPLEX_T2W_COIL_COMBINED,
+        }
+    )
+
+    def create(self: "BrainwebComplexQualitativeDatasetConfig") -> BrainwebQualitativeDataset:
+        params = self.parameters if self.parameters is not None else VALUES_3T_RANDOMIZED
+        if self.kind not in self._VALID_KINDS:
+            raise ValueError(f"kind must be one of {self._VALID_KINDS}, got {self.kind}")
+        augmentation_config = self.augmentation_config
+        return BrainwebQualitativeDataset(
+            h5_path=self.h5_path,
+            kind=self.kind,
+            parameters=params,
+            augmentation_config=augmentation_config,
+            scaling_factor=self.scaling_factor,
+            step=self.step,
+            skip_slices=self.skip_slices,
+            penumbra_width=self.penumbra_width,
+            subject_id=self.subject_id,
+            tr_range=self.tr_range,
+            te_range=self.te_range,
+            flip_range=self.flip_range,
+            background_phase_std=self.background_phase_std,
+        )
+
+
+DatasetConfig = (
+    ComplexDatasetConfig
+    | MagnitudeDatasetConfig
+    | MappingDatasetConfig
+    | BrainwebDatasetConfig
+    | BrainwebMagnitudeQualitativeDatasetConfig
+    | BrainwebComplexQualitativeDatasetConfig
+)
 
 
 @dataclass
@@ -144,18 +284,6 @@ class MRIDataModuleHparams:
     num_workers: int
     base_seed: int
     kind_normalization: float
-
-
-def _pad_or_crop_centered(tensor: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
-    """Pad (positive) or crop (negative) to target size, centered."""
-    h, w = tensor.shape[-2:]
-    delta_h = target_h - h
-    delta_w = target_w - w
-    pad_top = delta_h // 2
-    pad_bot = delta_h - pad_top
-    pad_left = delta_w // 2
-    pad_right = delta_w - pad_left
-    return torch.nn.functional.pad(tensor, (pad_left, pad_right, pad_top, pad_bot))
 
 
 def _to_2ch(image: torch.Tensor) -> torch.Tensor:
@@ -176,8 +304,13 @@ class Collate:
         self.target_h = target_h
         self.target_w = target_w
 
-    def _pad_mask(self, mask: torch.Tensor) -> torch.Tensor:
-        return _pad_or_crop_centered(mask.float(), self.target_h, self.target_w).bool()
+    def _pad_mask(self, mask: torch.Tensor, replicate: bool = False) -> torch.Tensor:
+        return _pad_or_crop_centered(mask.float(), self.target_h, self.target_w, replicate=replicate).bool()
+
+    def _pad_background_mask(self, mask: torch.Tensor) -> torch.Tensor:
+        signal_mask = (~mask).float()
+        padded_signal = _pad_or_crop_centered(signal_mask, self.target_h, self.target_w)
+        return ~padded_signal.bool()
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
         images_2ch = []
@@ -187,8 +320,8 @@ class Collate:
 
         return {
             "image": torch.stack(images_2ch),
-            "penumbra_mask": torch.stack([self._pad_mask(s["penumbra_mask"]) for s in batch]),
-            "background_mask": torch.stack([self._pad_mask(s["background_mask"]) for s in batch]),
+            "penumbra_mask": torch.stack([self._pad_mask(s["penumbra_mask"], replicate=True) for s in batch]),
+            "background_mask": torch.stack([self._pad_background_mask(s["background_mask"]) for s in batch]),
             "kind": torch.stack([s["kind"] for s in batch]),
             "h5_path": [s["h5_path"] for s in batch],
         }
@@ -197,12 +330,10 @@ class Collate:
 class MRIDataModule(LightningDataModule):
     """DataModule for MRI training datasets with scheduled sampling."""
 
-    hparams: MRIDataModuleHparams  # type: ignore[assignment]
-
     def __init__(
         self,
         dataset_configs: list[DatasetConfig] | None = None,
-        batch_size: int = 8,
+        batch_size: int = 32,
         sample_size: tuple[int, int] = (256, 256),
         num_workers: int = 8,
         base_seed: int = 42,
@@ -255,8 +386,9 @@ class MRIDataModule(LightningDataModule):
             summary[f"{prefix}/kind"] = cfg.kind.name
             summary[f"{prefix}/h5_path"] = cfg.h5_path
             summary[f"{prefix}/type"] = cfg.type
-            summary[f"{prefix}/schedule_type"] = cfg.schedule.type  # type: ignore[union-attr]
-            summary[f"{prefix}/schedule_weight"] = cfg.schedule.weight  # type: ignore[union-attr]
+            schedule: ScheduleType = cfg.schedule if cfg.schedule is not None else ConstantSchedule()
+            summary[f"{prefix}/schedule_type"] = schedule.type
+            summary[f"{prefix}/schedule_weight"] = schedule.weight
 
             if isinstance(cfg, ComplexDatasetConfig):
                 summary[f"{prefix}/mode"] = cfg.mode
@@ -298,11 +430,13 @@ class MRIDataModule(LightningDataModule):
         if self.trainer is not None and self.trainer.max_steps is not None and self.trainer.max_steps > 0:
             max_steps = self.trainer.max_steps
 
+        schedules: list[ScheduleType] = [cfg.schedule if cfg.schedule is not None else ConstantSchedule() for cfg in self.dataset_configs]
+
         batch_sampler = ScheduledBatchSampler(
             self.concat_ds,
             self.dataset_lengths,
             dataset_kinds=[cfg.kind for cfg in self.dataset_configs],
-            schedules=[cfg.schedule for cfg in self.dataset_configs],  # type: ignore[misc]
+            schedules=schedules,
             batch_size=self.batch_size,
             kind_normalization=self.kind_normalization,
             base_seed=self.base_seed,
@@ -317,7 +451,7 @@ class MRIDataModule(LightningDataModule):
             num_workers=self.num_workers,
             persistent_workers=self.num_workers > 0,
             pin_memory=torch.cuda.is_available(),
-            prefetch_factor=4 if self.num_workers > 0 else None,
+            prefetch_factor=8 if self.num_workers > 0 else None,
             multiprocessing_context="spawn" if self.num_workers > 0 else None,
             timeout=120 if self.num_workers > 0 else 0,
         )

@@ -1,13 +1,18 @@
-"""DPS (Diffusion Posterior Sampling) for MRI reconstruction.
+"""DPS (Diffusion Posterior Sampling) for MRI reconstruction under VE/EDM.
 
-Implements the algorithm from Chung et al., "Diffusion Posterior Sampling
-for General Noisy Inverse Problems" (ICLR 2023).
+Implements the core idea from Chung et al., "Diffusion Posterior Sampling for
+General Noisy Inverse Problems" (ICLR 2023): combine diffusion sampling with
+likelihood guidance via gradients through the denoiser prediction.
 
-Core idea: combine unconditional diffusion sampling with likelihood guidance
-via gradients through the predicted clean image x̂₀.
+This implementation is sigma-native (continuous noise level) and uses an
+EDM/Karras sigma schedule.
 """
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum, auto
 
 import torch
 from torch import Tensor
@@ -15,7 +20,32 @@ from torch import Tensor
 from score_qmri.datasets.kind import DatasetKind, is_complex_kind
 from score_qmri.models.diffusion import DiffusionModel, _apply_kind_constraints, _create_noise
 
+from .edm_sampler import karras_sigmas
 from .protocols import LinearOperatorProtocol
+
+
+def to_complex(x_2ch: Tensor) -> Tensor:
+    """Convert (B, 2, H, W) real to (B, 1, 1, H, W) complex."""
+    return torch.view_as_complex(torch.moveaxis(x_2ch, 1, -1).contiguous()).unsqueeze(1).unsqueeze(1)
+
+
+def to_2ch(x_complex: Tensor) -> Tensor:
+    """Convert (B, 1, 1, H, W) complex to (B, 2, H, W) real."""
+    z = x_complex.squeeze(1).squeeze(1)
+    return torch.view_as_real(z).moveaxis(-1, 1).contiguous()
+
+
+class GuidanceWeighting(Enum):
+    """Guidance weighting strategy for DPS."""
+
+    CONSTANT = auto()
+    """Fixed weight: scale * grad"""
+
+    SIGMA_SCALED = auto()
+    """Sigma-dependent: scale / (sigma + floor) * grad"""
+
+    RESIDUAL_NORM = auto()
+    """Paper-style: scale / ||y - A(x0)|| * grad"""
 
 
 @dataclass
@@ -25,45 +55,64 @@ class DPSConfig:
     Parameters
     ----------
     num_steps
-        Number of diffusion steps (default 100).
-    eta
-        DDIM stochasticity parameter (0 = deterministic, 1 = DDPM).
+        Number of diffusion steps.
     guidance_scale
-        Guidance strength ζ for likelihood gradient.
-    gradient_clipping
-        Max norm for gradient clipping (None = no clipping).
+        Data consistency gradient strength.
+    weighting
+        Guidance weighting strategy.
+    sigma_start
+        Starting noise level. None uses model's sigma_max.
+    sigma_floor
+        For SIGMA_SCALED: weight = scale / (sigma + floor).
+    rho
+        Karras schedule exponent.
     normalize_gradient
-        If True, normalize gradient to unit norm before scaling.
+        Normalize gradients by RMS before weighting.
+    clamp_x0_prior
+        Clamp x0 estimate for prior score direction.
+    clamp_x0_dc
+        Clamp x0 estimate before forward model in data consistency.
     """
 
-    num_steps: int = 100
-    eta: float = 0.0
-    guidance_scale: float = 1.0
-    gradient_clipping: float | None = 1.0
+    num_steps: int = 1000
+    guidance_scale: float = 0.1
+    weighting: GuidanceWeighting = GuidanceWeighting.SIGMA_SCALED
+    sigma_start: float | None = None
+    sigma_floor: float = 0.05
+    rho: float = 7.0
     normalize_gradient: bool = True
+    clamp_x0_prior: bool = False
+    clamp_x0_dc: bool = False
 
 
-def _to_complex(x_2ch: Tensor) -> Tensor:
-    """Convert (B, 2, H, W) real to (B, 1, 1, H, W) complex for mrpro."""
-    return torch.view_as_complex(torch.moveaxis(x_2ch, 1, -1).contiguous()).unsqueeze(1).unsqueeze(1)
+@dataclass
+class DPSStepInfo:
+    """Diagnostic info from a DPS step."""
 
-
-def _from_complex(x_complex: Tensor) -> Tensor:
-    """Convert (B, 1, 1, H, W) complex to (B, 2, H, W) real."""
-    return torch.moveaxis(torch.view_as_real(x_complex.squeeze(2).squeeze(1)), -1, 1)
+    step: int
+    sigma: float
+    dc_loss: float
+    residual_norm: float
+    x0_absmax: float
+    grad_norm: float
 
 
 class DPSSampler:
-    """DPS sampler for MRI reconstruction with learned diffusion prior.
+    """DPS sampler for MRI reconstruction with VE/EDM diffusion prior.
 
-    Operates entirely in normalized space. The forward operator A maps
-    images to k-space: k = A(x). Dataset scaling is assumed already applied
-    to both images and measurements.
+    Implements Chung et al., "Diffusion Posterior Sampling for General Noisy
+    Inverse Problems" (ICLR 2023), adapted for VE/EDM formulation.
     """
 
-    def __init__(self, model: DiffusionModel, config: DPSConfig | None = None) -> None:
+    def __init__(
+        self,
+        model: DiffusionModel,
+        config: DPSConfig | None = None,
+        callback: Callable[[DPSStepInfo], None] | None = None,
+    ) -> None:
         self.model = model
-        self.config = config or DPSConfig()
+        self.cfg = config or DPSConfig()
+        self.callback = callback
 
     @torch.enable_grad()
     def sample(
@@ -71,129 +120,156 @@ class DPSSampler:
         forward_op: LinearOperatorProtocol,
         measurement: Tensor,
         kind: DatasetKind | int,
-        initial_noise: Tensor | None = None,
+        *,
+        x0_init: Tensor | None = None,
+        noise: Tensor | None = None,
     ) -> Tensor:
-        """Reconstruct image from k-space measurement using DPS.
+        """Reconstruct image from k-space measurement.
 
         Parameters
         ----------
         forward_op
-            Linear operator A: image → k-space. Must have .H adjoint.
-            Expects (B, 1, 1, H, W) complex input, returns tuple (k-data,).
-            Both operator and measurements are assumed to be in dataset-scaled space.
+            Forward operator A: image -> k-space with .H adjoint.
         measurement
-            K-space measurement y of shape (B, Coils, 1, k2, k1) complex64.
+            K-space data (B, Coils, 1, k2, k1) complex.
         kind
-            Dataset kind (must be complex: T1W_COMPLEX, T2W_COMPLEX, etc.).
-        initial_noise
-            Optional starting noise (B, 2, H, W). If None, sampled from N(0,1).
+            Dataset kind (must be complex).
+        x0_init
+            Warm-start image (B, 1, 1, H, W) complex, e.g. from adjoint. Optional.
+        noise
+            Unit complex Gaussian noise (B, 1, 1, H, W). Sampled if None.
 
         Returns
         -------
-        Reconstructed image (B, 1, 1, H, W) complex64 in normalized scale.
+        Tensor
+            Reconstructed image (B, 1, 1, H, W) complex.
         """
-        cfg = self.config
+        cfg = self.cfg
         device = self.model.device
         kind_idx = int(kind)
 
         if not is_complex_kind(kind_idx):
-            raise ValueError(f"DPS only supports complex kinds, got {DatasetKind(kind_idx).name}")
+            raise NotImplementedError(f"DPS only implemented for complex kind, got {DatasetKind(kind_idx).name}")
 
-        # Infer image shape from adjoint
-        x_template = forward_op.H(measurement)[0]  # (B, 1, 1, H, W)
-        B, _, _, H, W = x_template.shape
+        template = forward_op.H(measurement)[0]
+        B, _, _, H, W = template.shape
+        kind_t = torch.full((B,), kind_idx, dtype=torch.long, device=device)
 
-        kind_tensor = torch.full((B,), kind_idx, dtype=torch.long, device=device)
+        sigma_min = self.model.sigma_min
+        sigma_start = cfg.sigma_start if cfg.sigma_start is not None else self.model.sigma_max
 
-        # Initialize in normalized space with standard Gaussian noise
-        x = initial_noise.to(device) if initial_noise is not None else _create_noise((B, 2, H, W), kind_tensor, device, torch.float32)
+        sigmas = karras_sigmas(
+            cfg.num_steps + 1,
+            sigma_min=sigma_min,
+            sigma_max=sigma_start,
+            rho=cfg.rho,
+            device=device,
+        )
 
-        x = _apply_kind_constraints(x, kind_tensor)
-
-        # Time schedule
-        eps = 1e-3
-        timesteps = torch.linspace(1.0 - eps, eps, cfg.num_steps + 1, device=device)
-
-        x0_pred = x
+        noise_2ch = _create_noise((B, 2, H, W), kind_t, device, torch.float32) if noise is None else to_2ch(noise.to(device))
+        x0_init_2ch = to_2ch(x0_init.to(device)) if x0_init is not None else None
+        x = x0_init_2ch + noise_2ch * sigma_start if x0_init_2ch is not None else noise_2ch * sigma_start
 
         for i in range(cfg.num_steps):
-            t = timesteps[i].expand(B)
-            t_prev = timesteps[i + 1].expand(B)
+            x = self._step(
+                x,
+                kind_t,
+                forward_op,
+                measurement,
+                sigma=float(sigmas[i]),
+                sigma_next=float(sigmas[i + 1]),
+                step_idx=i,
+            )
 
-            x, x0_pred = self._step(x, t, t_prev, kind_tensor, forward_op, measurement)
+        sigma_final = torch.full((B,), sigma_min, device=device)
+        x0 = self.model.denoise(x, sigma_final, kind_t)
+        x0 = self.model.clamp_x0(x0, kind_t)
+        return to_complex(x0)
 
-        return _to_complex(x0_pred)
+    def _compute_guidance_weight(
+        self,
+        sigma: float,
+        residual_norm: Tensor,
+    ) -> Tensor:
+        """Compute guidance weight based on weighting strategy."""
+        cfg = self.cfg
+        B = residual_norm.shape[0]
+        device = residual_norm.device
+
+        match cfg.weighting:
+            case GuidanceWeighting.CONSTANT:
+                return torch.full((B, 1, 1, 1), cfg.guidance_scale, device=device)
+
+            case GuidanceWeighting.SIGMA_SCALED:
+                weight = cfg.guidance_scale / (sigma + cfg.sigma_floor)
+                return torch.full((B, 1, 1, 1), weight, device=device)
+
+            case GuidanceWeighting.RESIDUAL_NORM:
+                w = cfg.guidance_scale / (residual_norm + 1e-8)
+                return w.view(B, 1, 1, 1)
 
     def _step(
         self,
         x: Tensor,
-        t: Tensor,
-        t_prev: Tensor,
         kind: Tensor,
         forward_op: LinearOperatorProtocol,
         measurement: Tensor,
-    ) -> tuple[Tensor, Tensor]:
-        """Single DPS step: DDIM update + likelihood guidance."""
-        cfg = self.config
+        *,
+        sigma: float,
+        sigma_next: float,
+        step_idx: int,
+    ) -> Tensor:
+        """Single DPS step: Euler on probability flow ODE + DC guidance."""
+        cfg = self.cfg
         B = x.shape[0]
+        device = x.device
 
-        # Enable gradients for guidance
-        x = x.detach().requires_grad_(True)
+        sigma_t = torch.full((B,), sigma, device=device)
 
-        # Get noise prediction and x0 estimate (all in normalized space)
-        output = self.model(x, t, kind)
-        noise_pred = output.noise
-        x0_pred = self.model.predict_x0(x, t, noise_pred, kind)
-        x0_pred = self.model.clamp_x0(x0_pred, kind)
+        x_in = x.detach().requires_grad_(True)
+        x0_hat = self.model.denoise(x_in, sigma_t, kind)
 
-        # Data fidelity gradient
-        # For complex kinds, normalize/denormalize is identity, so we can use x0_pred directly
-        x0_complex = _to_complex(x0_pred)  # (B, 1, 1, H, W) complex
-        y_pred = forward_op(x0_complex)[0]
+        x0_for_dc = self.model.clamp_x0(x0_hat, kind) if cfg.clamp_x0_dc else x0_hat
+        y_pred = forward_op(to_complex(x0_for_dc))[0]
 
-        # L2 loss in k-space
-        # Chung et al. 2023 uses the norm (not squared norm) to stabilize step size
-        residual = y_pred - measurement
-        # Flatten to compute vector norm over all dimensions except batch
-        loss = torch.linalg.vector_norm(residual.view(B, -1), dim=1).sum()
+        residual = (y_pred - measurement).flatten(start_dim=1)
+        residual_norm = residual.abs().square().sum(dim=1).sqrt()
+        loss = 0.5 * residual.abs().square().mean(dim=1).sum()
 
-        # Gradient w.r.t. x (normalized state)
-        (grad,) = torch.autograd.grad(loss, x)
+        (grad,) = torch.autograd.grad(loss, x_in)
 
-        # Process gradient
+        grad_norm_raw = grad.flatten(start_dim=1).norm(dim=1)
+
         if cfg.normalize_gradient:
-            grad_norm = grad.reshape(B, -1).norm(dim=1).view(B, 1, 1, 1)
-            grad = grad / (grad_norm + 1e-8)
+            numel = float(grad[0].numel())
+            rms = grad_norm_raw / (numel**0.5)
+            grad = grad / (rms.view(B, 1, 1, 1) + 1e-12)
 
-        if cfg.gradient_clipping is not None:
-            grad = torch.clamp(grad, -cfg.gradient_clipping, cfg.gradient_clipping)
+        grad = grad.detach()
+        x0_hat = x0_hat.detach()
+        x = x_in.detach()
 
-        # Detach for DDIM step
-        x = x.detach()
-        noise_pred = noise_pred.detach()
-        x0_pred = x0_pred.detach()
+        x0_for_prior = self.model.clamp_x0(x0_hat, kind) if cfg.clamp_x0_prior else x0_hat
 
-        # DDIM step in normalized space
-        ab_t = self.model.alpha_bar(t).view(-1, 1, 1, 1)
-        ab_prev = self.model.alpha_bar(t_prev).view(-1, 1, 1, 1)
+        sigma_safe = max(sigma, 1e-8)
+        d_prior = (x - x0_for_prior) / sigma_safe
 
-        # DDIM variance
-        one_minus_ab_t = (1 - ab_t).clamp(min=1e-8)
-        one_minus_ab_prev = (1 - ab_prev).clamp(min=0.0)
-        sigma_sq = cfg.eta**2 * (one_minus_ab_prev / one_minus_ab_t * (1 - ab_t / ab_prev.clamp(min=1e-8)))
-        sigma = sigma_sq.clamp(min=0.0).sqrt()
+        guidance_weight = self._compute_guidance_weight(sigma, residual_norm)
+        d = d_prior + guidance_weight * grad
 
-        # DDIM step
-        pred_dir = (1 - ab_prev - sigma**2).clamp(min=0.0).sqrt() * noise_pred
-        x_prev = ab_prev.sqrt() * x0_pred + pred_dir
+        dt = sigma_next - sigma
+        x_next = x + dt * d
 
-        if cfg.eta > 0 and t_prev[0] > 1e-8:
-            noise = _create_noise(x.shape, kind, x.device, x.dtype)
-            x_prev = x_prev + sigma * noise
+        if self.callback is not None:
+            with torch.no_grad():
+                info = DPSStepInfo(
+                    step=step_idx,
+                    sigma=sigma,
+                    dc_loss=float(loss),
+                    residual_norm=float(residual_norm.mean()),
+                    x0_absmax=float(x0_hat.abs().max()),
+                    grad_norm=float(grad_norm_raw.mean()),
+                )
+            self.callback(info)
 
-        # Apply DPS guidance correction (in normalized space)
-        x_prev = x_prev - cfg.guidance_scale * grad
-
-        x_prev = _apply_kind_constraints(x_prev, kind)
-
-        return x_prev, x0_pred
+        return _apply_kind_constraints(x_next, kind)

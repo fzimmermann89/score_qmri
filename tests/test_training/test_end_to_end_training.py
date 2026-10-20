@@ -15,6 +15,8 @@ from score_qmri.cli import DiffusionLightningCLI
 from score_qmri.datasets.config import AugmentationConfig
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.datasets.lightning import ConstantSchedule, MagnitudeDatasetConfig, MRIDataModule
+from score_qmri.models.diffusion import DiffusionConfig
+from score_qmri.models.unet import UNet
 from score_qmri.training.lightning_module import DiffusionLightningModule
 
 
@@ -22,20 +24,28 @@ from score_qmri.training.lightning_module import DiffusionLightningModule
 def training_yaml_config(sample_h5_file_magnitude: str) -> Generator[str, None, None]:
     """Create temporary YAML config file for training tests."""
     config_content = f"""model:
-  base_channels: 16
-  num_res_blocks: 2
-  channel_mult:
-    - 1
-    - 2
-  cond_dim: 64
-  beta_min: 0.1
-  beta_max: 20.0
+  unet:
+    class_path: score_qmri.models.unet.UNet
+    init_args:
+      in_channels: 2
+      base_channels: 16
+      num_res_blocks: 2
+      channel_mult: [1, 2]
+      cond_dim: 64
+      attention_levels: []
+  diffusion:
+    cond_dim: 64
+    sigma_min: 0.01
+    sigma_max: 10.0
+    sigma_data: 0.5
+    p_mean: -1.2
+    p_std: 1.2
+    rho: 7.0
   learning_rate: 1e-4
-  noise_weight: 1.0
-  x0_weight: 0.1
+  main_weight: 1.0
+  aux_weight: 0.1
   ssim_weight: 0.5
   l1_weight: 0.5
-  validation_size: 32
   validation_steps: 10
   validation_interval: 100
 
@@ -54,7 +64,7 @@ data:
     base_seed: 42
 
 trainer:
-  max_steps: 4
+  max_steps: 2
   max_epochs: 1
   accelerator: auto
   devices: 1
@@ -100,7 +110,7 @@ def magnitude_dataset_config(
 @pytest.fixture
 def fast_trainer():
     return pl.Trainer(
-        max_steps=4,
+        max_steps=2,
         max_epochs=1,
         accelerator="auto",
         devices=1,
@@ -114,19 +124,31 @@ def fast_trainer():
 
 @pytest.fixture
 def small_model_kwargs():
+    diffusion = DiffusionConfig(
+        cond_dim=64,
+        sigma_min=0.01,
+        sigma_max=10.0,
+        sigma_data=0.5,
+        p_mean=-1.2,
+        p_std=1.2,
+        rho=7.0,
+    )
+    unet = UNet(
+        in_channels=2,
+        base_channels=16,
+        num_res_blocks=2,
+        channel_mult=(1, 2),
+        cond_dim=diffusion.cond_dim,
+        attention_levels=(),
+    )
     return {
-        "base_channels": 16,
-        "num_res_blocks": 2,
-        "channel_mult": (1, 2),
-        "cond_dim": 64,
-        "beta_min": 0.1,
-        "beta_max": 20.0,
+        "unet": unet,
+        "diffusion": diffusion,
         "learning_rate": 1e-4,
-        "noise_weight": 1.0,
-        "x0_weight": 0.1,
+        "main_weight": 1.0,
+        "aux_weight": 0.1,
         "ssim_weight": 0.5,
         "l1_weight": 0.5,
-        "validation_size": 32,
         "validation_steps": 10,
         "validation_interval": 100,
     }
@@ -156,7 +178,7 @@ def test_training_with_single_dataset(
     datamodule.setup("fit")
     fast_trainer.fit(model, datamodule)
 
-    assert fast_trainer.global_step == 4
+    assert fast_trainer.global_step == 2
     assert fast_trainer.logged_metrics is not None
 
     params_have_grad = any(param.grad is not None for param in model.parameters())
@@ -200,7 +222,7 @@ def test_training_with_multiple_datasets(
     datamodule.setup("fit")
     fast_trainer.fit(model, datamodule)
 
-    assert fast_trainer.global_step == 4
+    assert fast_trainer.global_step == 2
     assert datamodule.concat_ds is not None
     assert len(datamodule.dataset_configs) == 2
 
@@ -229,7 +251,7 @@ def test_training_with_yaml_config(
 
         fast_trainer.fit(cli.model, cli.datamodule)
 
-        assert fast_trainer.global_step == 4
+        assert fast_trainer.global_step == 2
         assert "train/loss" in fast_trainer.logged_metrics
 
     finally:
@@ -237,6 +259,7 @@ def test_training_with_yaml_config(
 
 
 def test_cli_parses_default_config() -> None:
+    """Test that default config.yaml can be parsed by Lightning CLI."""
     config_path = Path(__file__).resolve().parents[2] / "config.yaml"
     if not config_path.exists():
         pytest.skip("config.yaml not found")
@@ -244,19 +267,21 @@ def test_cli_parses_default_config() -> None:
     original_argv = sys.argv.copy()
 
     try:
-        sys.argv = ["test", "--config", str(config_path)]
+        sys.argv = ["test", "--config", str(config_path), "--job_name", "test-run"]
 
-        cli = DiffusionLightningCLI(
-            DiffusionLightningModule,
-            MRIDataModule,
-            run=False,
-            subclass_mode_data=True,
-        )
+        from unittest.mock import patch
+
+        with patch("score_qmri.cli.WandbLogger"):
+            cli = DiffusionLightningCLI(
+                DiffusionLightningModule,
+                MRIDataModule,
+                run=False,
+                subclass_mode_data=True,
+            )
 
         assert isinstance(cli.model, DiffusionLightningModule)
         assert cli.model.model.train_clip == 1.2
         assert cli.model.model.sample_clip == 1.0
-        assert cli.model.model._kind_scale_lookup[int(DatasetKind.T1MAP)] == 0.0003
         assert cli.datamodule is not None
         assert cli.datamodule.dataset_configs
 

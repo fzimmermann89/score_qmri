@@ -9,13 +9,11 @@ from torch import Tensor
 from score_qmri.datasets.kind import is_complex_kind
 
 
-def create_channel_mask(kind: Tensor, device: torch.device) -> Tensor:
+def create_channel_mask(kind: Tensor) -> Tensor:
     """Create (B, 2, 1, 1) channel mask: [1,1] for complex kinds, [1,0] for real kinds."""
-    B = kind.shape[0]
-    mask = torch.ones(B, 2, 1, 1, device=device)
-    for i in range(B):
-        if not is_complex_kind(int(kind[i].item())):
-            mask[i, 1] = 0.0
+    complex_mask = is_complex_kind(kind)
+    mask = torch.ones(kind.shape[0], 2, 1, 1, device=kind.device)
+    mask[:, 1] = complex_mask.to(dtype=mask.dtype).view(-1, 1, 1)
     return mask
 
 
@@ -94,6 +92,7 @@ def _sliding_window(
     return x.as_strided(size=out_shape, stride=out_stride)
 
 
+@torch.compile
 def noise_loss(
     pred: Tensor,
     target: Tensor,
@@ -141,6 +140,7 @@ def noise_loss(
         raise ValueError(f"Invalid reduction: {reduction}. Must be 'mean' or 'none'")
 
 
+@torch.compile
 def l1_loss(
     pred: Tensor,
     target: Tensor,
@@ -188,6 +188,7 @@ def l1_loss(
         raise ValueError(f"Invalid reduction: {reduction}. Must be 'mean' or 'none'")
 
 
+@torch.compile
 def _ssim_loss_real(
     pred: Tensor,
     target: Tensor,
@@ -288,7 +289,7 @@ def ssim_loss(
 
     if channel_mask is not None:
         ch_weights = channel_mask[:, :, 0, 0]
-        loss = (loss_ch0 * ch_weights[:, 0:1] + loss_ch1 * ch_weights[:, 1:2]) / ch_weights.sum(dim=1, keepdim=True).clamp(min=1)
+        loss = (loss_ch0 * ch_weights[:, 0] + loss_ch1 * ch_weights[:, 1]) / ch_weights.sum(dim=1).clamp(min=1)
     else:
         loss = (loss_ch0 + loss_ch1) / 2
 
