@@ -50,9 +50,9 @@ class DAPSSampler:
     The conditional score is score_prior(x0)+(x_sigma-x0)/sigma² minus the
     Gaussian likelihood gradient. The driving noise has covariance
     2*step*preconditioner; the same increment is reused in the Heun corrector.
-    The probability-flow endpoint initializes the inner chain. The conditional
-    prior score is evaluated at every update; a fixed Gaussian prior score is
-    not substituted for it.
+    The first chain starts at a probability-flow endpoint; subsequent chains
+    retain x0 for Gibbs updates. The conditional prior score is evaluated at
+    every update.
     """
 
     def __init__(self, model: DiffusionModel, cfg: DAPSConfig) -> None:
@@ -67,10 +67,11 @@ class DAPSSampler:
         measurement: Tensor,
         sigma: float,
         generator: torch.Generator | None,
+        initial: Tensor | None = None,
     ) -> Tensor:
         cfg = self.cfg
         sigmas = xt.real.new_full((xt.shape[0],), sigma)
-        initial = to_2ch(xt)
+        noisy = to_2ch(xt)
         if sigma > self.model.sigma_min:
             flow = EDMSampler(
                 self.model,
@@ -80,9 +81,9 @@ class DAPSSampler:
                 rho=cfg.rho,
                 clamp_denoised=False,
             )
-            center = to_complex(flow.sample(initial.shape, kind=kind, initial_noise=initial / sigma))
+            center = to_complex(flow.sample(noisy.shape, kind=kind, initial_noise=noisy / sigma))
         else:
-            center = to_complex(self.model.denoise(initial, sigmas, kind))
+            center = to_complex(self.model.denoise(noisy, sigmas, kind))
         prior_sigmas = sigmas.new_full(sigmas.shape, cfg.prior_sigma)
         # Estimate score stiffness once at the PF endpoint, then freeze Q for
         # the entire conditional chain. Using prior_sigma^-2 everywhere makes
@@ -103,7 +104,7 @@ class DAPSSampler:
             prior = to_complex(self.model.score(to_2ch(x), prior_sigmas, kind))
             return prior + (xt - x) / sigma**2 - operator.H(residual)[0] / cfg.tau**2
 
-        x = center
+        x = center if initial is None else initial
         for _ in range(cfg.langevin_steps):
             score = conditional_score(x)
             # Cov(innovation)=Q, hence Cov(Q^-1 innovation)=Q^-1.
@@ -147,7 +148,10 @@ class DAPSSampler:
         xt = start * epsilon
         grid = karras_sigmas(cfg.num_steps, sigma_min=cfg.sigma_min, sigma_max=start, rho=cfg.rho, device=xt.device)
         grid = torch.cat([grid, grid.new_zeros(1)])
+        x = None
         for sigma, following in zip(grid[:-1], grid[1:], strict=True):
-            x = self._conditional(xt, kinds, forward_op, measurement, float(sigma), generator)
+            # Re-noising and a conditional invariant kernel form a Gibbs step.
+            # Retain x0 so a finite inner chain preserves its conditioning.
+            x = self._conditional(xt, kinds, forward_op, measurement, float(sigma), generator, initial=x)
             xt = x + float(following) * normal_like(x, generator)
         return xt

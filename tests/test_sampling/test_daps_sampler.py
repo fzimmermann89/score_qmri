@@ -21,6 +21,35 @@ def test_daps_recovers_gaussian_posterior_and_cross_covariance(correlated):
     assert_gaussian_posterior(draws, model.covariance, op, y, cfg.tau)
 
 
+def test_finite_conditional_kernel_preserves_posterior_draws():
+    model = GaussianPrior(torch.tensor([[0.04, 0.012], [0.012, 0.07]], dtype=torch.float64))
+    op = MatrixOperator(torch.tensor([[1.0, 0.4], [0.0, 0.0]], dtype=torch.float64))
+    y = torch.tensor([0.15 + 0.05j, 0j], dtype=torch.complex128).reshape(1, 1, 1, 1, 2)
+    cfg = DAPSConfig(tau=0.05, langevin_steps=2, langevin_step=0.05, cg_rtol=1e-10)
+    covariance = torch.linalg.inv(torch.linalg.inv(model.covariance) + op.matrix.mT @ op.matrix / cfg.tau**2)
+    mean = covariance.to(y) @ op.matrix.mT.to(y) @ y.flatten() / cfg.tau**2
+    generator = torch.Generator().manual_seed(91)
+    noise = torch.complex(
+        torch.randn(8192, 2, generator=generator, dtype=torch.float64), torch.randn(8192, 2, generator=generator, dtype=torch.float64)
+    )
+    initial = (noise @ torch.linalg.cholesky(covariance).to(y).mT + mean).reshape(8192, 1, 1, 1, 2)
+    epsilon = torch.complex(
+        torch.randn(initial.shape, generator=generator, dtype=torch.float64),
+        torch.randn(initial.shape, generator=generator, dtype=torch.float64),
+    )
+    sigma = 0.5
+    draws = DAPSSampler(model, cfg)._conditional(
+        initial + sigma * epsilon,
+        torch.ones(8192, dtype=torch.long),
+        op,
+        y.expand(8192, -1, -1, -1, -1),
+        sigma,
+        generator,
+        initial=initial,
+    )
+    assert_gaussian_posterior(draws, model.covariance, op, y, cfg.tau)
+
+
 def test_daps_is_invariant_to_measurement_units_and_retains_randomness():
     model = GaussianPrior()
     matrix = torch.tensor([[1.0, 0.4], [0.0, 0.2]], dtype=torch.float64)
