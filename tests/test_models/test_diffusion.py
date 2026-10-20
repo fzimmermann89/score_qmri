@@ -1,5 +1,8 @@
 """Tests for VE/EDM DiffusionModel."""
 
+from math import erf, log, sqrt
+
+import pytest
 import torch
 
 from score_qmri.datasets.kind import DatasetKind, is_complex_kind
@@ -7,7 +10,7 @@ from score_qmri.models.diffusion import DenoiseOutput, DenoiseOutputList, Diffus
 from score_qmri.models.unet import UNet
 
 
-def make_model(cond_dim: int = 128) -> DiffusionModel:
+def make_model(cond_dim: int = 128, *, diffusion: DiffusionConfig | None = None) -> DiffusionModel:
     unet = UNet(
         base_channels=16,
         num_res_blocks=1,
@@ -15,8 +18,52 @@ def make_model(cond_dim: int = 128) -> DiffusionModel:
         attention_levels=(),
         cond_dim=cond_dim,
     )
-    diffusion = DiffusionConfig(cond_dim=cond_dim)
+    diffusion = DiffusionConfig(cond_dim=cond_dim) if diffusion is None else diffusion
     return DiffusionModel(unet=unet, diffusion=diffusion)
+
+
+def test_default_sigmas_preserve_edm_distribution_and_generator_state():
+    model = make_model()
+    actual_rng = torch.Generator().manual_seed(19)
+    expected_rng = torch.Generator().manual_seed(19)
+    actual = model.sample_sigmas(4096, generator=actual_rng)
+    expected = (torch.randn(4096, generator=expected_rng) * model.p_std + model.p_mean).exp()
+    expected = expected.clamp(model.sigma_min, model.sigma_max)
+    assert torch.equal(actual, expected)
+    assert torch.equal(actual_rng.get_state(), expected_rng.get_state())
+
+
+@pytest.mark.parametrize("fraction", [0.1, 1.0])
+def test_low_noise_sigmas_match_mixture_cdf_and_are_reproducible(fraction: float):
+    config = DiffusionConfig(low_noise_fraction=fraction, low_noise_max=0.05)
+    model = make_model(diffusion=config)
+    sigmas = model.sample_sigmas(100_000, generator=torch.Generator().manual_seed(37))
+    repeated = model.sample_sigmas(100_000, generator=torch.Generator().manual_seed(37))
+    assert torch.equal(sigmas, repeated)
+    assert sigmas.min() >= config.sigma_min
+    assert sigmas.max() <= (config.low_noise_max if fraction == 1 else config.sigma_max)
+    for threshold in (0.002, 0.005, 0.02, 0.05, 0.2, 2.0):
+        edm_cdf = 0.5 * (1 + erf((log(threshold) - config.p_mean) / (config.p_std * sqrt(2))))
+        low_cdf = min(1.0, log(threshold / config.sigma_min) / log(config.low_noise_max / config.sigma_min))
+        expected = (1 - fraction) * edm_cdf + fraction * low_cdf
+        assert (sigmas < threshold).float().mean().item() == pytest.approx(expected, abs=0.005)
+
+
+@pytest.mark.parametrize("fraction", [-0.1, 1.1, float("nan"), float("inf")])
+def test_invalid_low_noise_fraction(fraction: float):
+    with pytest.raises(ValueError, match="low_noise_fraction"):
+        DiffusionConfig(low_noise_fraction=fraction)
+
+
+@pytest.mark.parametrize("maximum", [0.0, 0.001, 21.0, float("nan"), float("inf")])
+def test_invalid_enabled_low_noise_range(maximum: float):
+    with pytest.raises(ValueError, match="Low-noise sampling"):
+        DiffusionConfig(low_noise_fraction=0.1, low_noise_max=maximum)
+
+
+def test_disabled_mixture_accepts_legacy_sigma_range():
+    model = make_model(diffusion=DiffusionConfig(sigma_min=0.1))
+    assert model.sample_sigmas(32).min() >= 0.1
 
 
 def test_diffusion_init_has_sigma_config():

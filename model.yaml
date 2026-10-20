@@ -1,5 +1,8 @@
 memory_budget: 0.99
 
+trainer:
+  precision: 32-true
+
 data:
   init_args:
     batch_size: 128
@@ -14,6 +17,8 @@ model:
       channel_mult: [1, 1, 2, 2, 4, 4]
       attention_levels: [-1, -2, -3]
   diffusion:
+    low_noise_fraction: 0.1
+    low_noise_max: 0.05
     normalization:
       kind_scales:
         T1MAP: 0.25
@@ -21,5 +26,6 @@ model:
         T2STARMAP: 8
   learning_rate: 0.8e-4
   weight_decay: 0.02
+  aux_weight: 0.0
   cond_dropout_rate: 0.2
   ema_decay: 0.999

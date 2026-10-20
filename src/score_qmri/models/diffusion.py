@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum, auto
+from math import isfinite, log
 from pathlib import Path
 from typing import Any, cast, overload
 
@@ -67,6 +68,9 @@ class DiffusionConfig:
         Characteristic standard deviation of normalized training data.
     p_mean, p_std
         Log-normal sigma sampling distribution for training.
+    low_noise_fraction, low_noise_max
+        Fraction of training sigmas instead drawn log-uniformly between
+        sigma_min and low_noise_max. Zero retains the original EDM distribution.
     rho
         Exponent for Karras (poly-rho) sigma schedule in sampling.
     normalization
@@ -88,8 +92,19 @@ class DiffusionConfig:
     sigma_data: float = 0.2
     p_mean: float = -1.6
     p_std: float = 1.4
+    low_noise_fraction: float = 0.0
+    low_noise_max: float = 0.05
     rho: float = 7.0
     normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.low_noise_fraction) or not 0 <= self.low_noise_fraction <= 1:
+            raise ValueError("low_noise_fraction must be finite and between 0 and 1")
+        if self.low_noise_fraction > 0 and not (
+            all(isfinite(value) for value in (self.sigma_min, self.low_noise_max, self.sigma_max))
+            and 0 < self.sigma_min < self.low_noise_max <= self.sigma_max
+        ):
+            raise ValueError("Low-noise sampling requires finite 0 < sigma_min < low_noise_max <= sigma_max")
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> DiffusionConfig:
@@ -266,6 +281,8 @@ class DiffusionModel(torch.nn.Module):
     sigma_data: float
     p_mean: float
     p_std: float
+    low_noise_fraction: float
+    low_noise_max: float
     rho: float
     train_clip: float
     sample_clip: float
@@ -295,6 +312,8 @@ class DiffusionModel(torch.nn.Module):
         self.sigma_data = float(diffusion.sigma_data)
         self.p_mean = float(diffusion.p_mean)
         self.p_std = float(diffusion.p_std)
+        self.low_noise_fraction = float(diffusion.low_noise_fraction)
+        self.low_noise_max = float(diffusion.low_noise_max)
         self.rho = float(diffusion.rho)
 
         norm = diffusion.normalization
@@ -320,10 +339,19 @@ class DiffusionModel(torch.nn.Module):
         return self.sigma_max
 
     def sample_sigmas(self, batch_size: int, device: torch.device | None = None, *, generator: torch.Generator | None = None) -> Tensor:
-        """Sample training sigmas from EDM log-normal distribution."""
+        """Sample EDM training sigmas with an optional low-noise mixture.
+
+        Reweighting sigma alone preserves the per-sigma conditional-mean
+        objective; no clean-image-dependent selection is introduced.
+        """
         device = self.device if device is None else device
         log_sigma = torch.randn(batch_size, device=device, generator=generator) * self.p_std + self.p_mean
         sigma = log_sigma.exp().clamp(min=self.sigma_min, max=self.sigma_max)
+        if self.low_noise_fraction > 0:
+            use_low_noise = torch.rand(batch_size, device=device, generator=generator) < self.low_noise_fraction
+            low_log_sigma = torch.rand(batch_size, device=device, generator=generator)
+            low_sigma = (log(self.sigma_min) + low_log_sigma * log(self.low_noise_max / self.sigma_min)).exp()
+            sigma = torch.where(use_low_noise, low_sigma.clamp(min=self.sigma_min, max=self.low_noise_max), sigma)
         return sigma
 
     def _edm_preconditioning(self, sigma: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:

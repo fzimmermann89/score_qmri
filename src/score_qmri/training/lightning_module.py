@@ -245,16 +245,18 @@ class DiffusionLightningModule(LightningModule):
         main_mse = noise_loss(x0_main_v, x0_v, None, channel_mask, reduction="none")
         loss_main = (main_mse * w).mean()
 
-        # Auxiliary SSIM+L1 (weighted towards low sigma)
-        sigma_floor = float(self.model.sigma_min)
-        aux_w = 1.0 / (sigma_f.square() + sigma_floor**2)
-
-        loss_l1 = l1_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
-        loss_ssim = ssim_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
-        aux_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
-        loss_aux = (aux_loss * aux_w).mean()
-
-        total_loss = self.hparams.main_weight * loss_main + self.hparams.aux_weight * loss_aux
+        total_loss = self.hparams.main_weight * loss_main
+        metrics = {"train/main_l2": loss_main}
+        if self.hparams.aux_weight != 0:
+            # Auxiliary SSIM+L1 is optional: its shared-trunk gradients can
+            # compete with the conditional-mean objective at low sigma.
+            sigma_floor = float(self.model.sigma_min)
+            aux_w = 1.0 / (sigma_f.square() + sigma_floor**2)
+            loss_l1 = l1_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
+            loss_ssim = ssim_loss(x0_aux_v, x0_v, loss_weight, channel_mask, reduction="none")
+            aux_loss = self.hparams.ssim_weight * loss_ssim + self.hparams.l1_weight * loss_l1
+            total_loss = total_loss + self.hparams.aux_weight * (aux_loss * aux_w).mean()
+            metrics.update({"train/aux_l1": loss_l1.mean(), "train/aux_ssim": 1.0 - loss_ssim.mean()})
 
         if not torch.isfinite(total_loss) or total_loss > LOSS_ANOMALY_THRESHOLD:
             loss_val = total_loss.item() if torch.isfinite(total_loss) else float("nan")
@@ -263,11 +265,7 @@ class DiffusionLightningModule(LightningModule):
 
         self.log("train/loss", total_loss, prog_bar=True, sync_dist=False)
         self.log_dict(
-            {
-                "train/main_l2": loss_main,
-                "train/aux_l1": loss_l1.mean(),
-                "train/aux_ssim": 1.0 - loss_ssim.mean(),
-            },
+            metrics,
             prog_bar=True,
             rank_zero_only=True,
         )

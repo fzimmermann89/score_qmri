@@ -180,3 +180,22 @@ def test_main_score_loss_is_independent_of_foreground_weights(module):
     torch.manual_seed(123)
     uniform_aux = module.training_step(batch, 0)
     torch.testing.assert_close(weighted_aux, uniform_aux, rtol=1e-6, atol=1e-8)
+
+
+def test_disabled_auxiliary_loss_is_not_evaluated(module, monkeypatch):
+    def fail_aux(*args, **kwargs):
+        raise AssertionError("Disabled auxiliary loss must not be evaluated")
+
+    monkeypatch.setattr("score_qmri.training.lightning_module.ssim_loss", fail_aux)
+    monkeypatch.setattr("score_qmri.training.lightning_module.l1_loss", fail_aux)
+    module.hparams.aux_weight = 0.0
+    batch = {
+        "image": 0.1 * torch.randn(1, 2, 64, 64),
+        "background_mask": torch.zeros(1, 64, 64, dtype=torch.bool),
+        "penumbra_mask": torch.zeros(1, 64, 64, dtype=torch.bool),
+        "kind": torch.tensor([1]),
+    }
+    loss = module.training_step(batch, 0)
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert any(parameter.grad is not None for parameter in module.model.parameters())
