@@ -6,7 +6,7 @@ Independent scripts for each dataset family, cleaned from the original `datachec
 uv venv --python 3.12 .prep-venv
 source .prep-venv/bin/activate
 uv pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
-uv pip install -r dataset_preparation/requirements.txt pytest
+uv pip install -r dataset_preparation/requirements.txt
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 python dataset_preparation/ds000221.py \
   --input-root /path/to/ds000221 --output-dir /path/to/new/ds000221 --limit 1
@@ -112,9 +112,3 @@ Six outputs retain numerical differences in the checked subjects; maximum absolu
 The recovered IBC T1/M0 functions reproduce execution of the original functions exactly; their drift from historical H5 is unresolved. WAND T1/T1w and IBC T2*/S0 match their checked subjects exactly.
 
 The exact CC/fastMRI/M4Raw comparisons use archived prepared H5 inputs followed by the original slice filter. Raw fastMRI T1 has combined/coilwise maximum differences of 1.36e-5 / 7.07e-4; other raw contrasts are unchecked. Raw M4Raw GRE retains a meaningful mismatch (MAE about 0.0041, maximum 0.488), despite matching execution of the recovered producer. Raw CC is unverified. The missing original RNG seed prevents regeneration of the historical synthetic draws. No tolerances or reference-derived corrections conceal these limits.
-
-```bash
-python -m pytest dataset_preparation/tests -q
-```
-
-The existing CI test matrix installs the preparation test dependencies and runs these tests on Python 3.10, 3.11 and 3.12.
