@@ -177,6 +177,9 @@ class DiffusionLightningModule(LightningModule):
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
         finite_gradients = [torch.isfinite(p.grad).all() for p in self.model.parameters() if p.grad is not None]
         if finite_gradients and not torch.stack(finite_gradients).all():
+            scaler = getattr(getattr(self._trainer, "precision_plugin", None), "scaler", None)
+            if scaler is not None and scaler.is_enabled():
+                return
             raise FloatingPointError("Nonfinite training gradients; optimizer update aborted")
         if self.global_step % 100 != 0:
             return
@@ -217,8 +220,6 @@ class DiffusionLightningModule(LightningModule):
 
         signal_mask = ~background_mask
         valid_samples = signal_mask.sum(dim=(-2, -1)) >= 1000
-        if not valid_samples.any():
-            raise ValueError("Training batch contains no image with at least 1000 signal pixels")
 
         x0_norm = self.model.normalize(x0_raw, kind)
         x0_norm = torch.where(signal_mask.unsqueeze(1), x0_norm, torch.zeros_like(x0_norm))
@@ -237,6 +238,9 @@ class DiffusionLightningModule(LightningModule):
             cond_mask = torch.bernoulli(torch.full((x0.shape[0],), keep_prob, device=self.device)).unsqueeze(1)
 
         output = self.model(x_sigma, sigma, kind, cond_mask=cond_mask)
+        self.log("train/skipped_batch", (~valid_samples.any()).float(), sync_dist=False)
+        if not valid_samples.any():
+            return torch.nan_to_num(output.x0_main.sum() + output.x0_aux.sum()) * 0.0
 
         x0_v = x0[valid_samples]
         x_sigma_v = x_sigma[valid_samples]

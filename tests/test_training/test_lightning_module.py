@@ -137,8 +137,10 @@ def test_training_step_all_invalid_samples(module):
         "kind": torch.tensor([0, 1, 0, 1]),
     }
 
-    with pytest.raises(ValueError, match="no image"):
-        module.training_step(batch, 0)
+    loss = module.training_step(batch, 0)
+    assert loss.requires_grad and loss.item() == 0
+    loss.backward()
+    assert all(parameter.grad is None or torch.count_nonzero(parameter.grad) == 0 for parameter in module.model.parameters())
 
 
 def test_main_score_loss_is_independent_of_foreground_weights(module):
@@ -209,12 +211,27 @@ def test_large_finite_loss_is_trained_instead_of_silently_rejected(module, monke
     assert loss.requires_grad and loss > 100
 
 
-def test_nonfinite_gradients_abort_before_adamw_update(module):
+@pytest.mark.parametrize("scaled", [False, True])
+def test_nonfinite_gradients_do_not_reach_adamw(module, scaled):
+    from types import SimpleNamespace
+
     optimizer = module.configure_optimizers()["optimizer"]
     parameter = next(module.model.parameters())
     before = parameter.detach().clone()
+    scaler = torch.amp.GradScaler("cpu") if scaled else None
+    module._trainer = SimpleNamespace(precision_plugin=SimpleNamespace(scaler=scaler))
+    if scaler is not None:
+        scaler.scale(parameter.sum()).backward()
     parameter.grad = torch.full_like(parameter, float("nan"))
-    with pytest.raises(FloatingPointError, match="training gradients"):
+    if scaler is None:
+        with pytest.raises(FloatingPointError, match="training gradients"):
+            module.on_before_optimizer_step(optimizer)
+    else:
+        scale = scaler.get_scale()
+        scaler.unscale_(optimizer)
         module.on_before_optimizer_step(optimizer)
+        scaler.step(optimizer)
+        scaler.update()
+        assert scaler.get_scale() < scale
     assert torch.equal(parameter, before)
     assert not optimizer.state
