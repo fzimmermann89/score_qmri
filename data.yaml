@@ -17,6 +17,7 @@ data:
 
       - type: complex
         h5_path: ./datasets/fastmri_t1.h5
+        validation_samples: [8, 16]
         mode: combined
         kind: COMPLEX_T1W_COIL_COMBINED
         augmentation_config:
@@ -38,6 +39,7 @@ data:
 
       - type: complex
         h5_path: ./datasets/fastmri_t2.h5
+        validation_samples: [8, 16]
         mode: combined
         kind: COMPLEX_T2W_COIL_COMBINED
         augmentation_config:
@@ -307,6 +309,7 @@ data:
 
       - type: mapping
         h5_path: ./datasets/delics_t1map.h5
+        validation_samples: [8, 16]
         kind: T1MAP
         schedule:
           type: constant
@@ -348,6 +351,7 @@ data:
 
       - type: mapping
         h5_path: ./datasets/delics_t2map.h5
+        validation_samples: [8, 16]
         kind: T2MAP
         schedule:
           type: constant
