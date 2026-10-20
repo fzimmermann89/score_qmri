@@ -56,9 +56,9 @@ def main() -> None:
     torch.set_num_threads(2)
     model = cast(DiffusionModel, GaussianOracle())
     cfg = DPSConfig(tau=0.01) if args.sampler == "dps" else DAPSConfig(tau=0.01)
-    sampler = DPSSampler(model, cfg) if args.sampler == "dps" else DAPSSampler(model, cfg)
+    sampler = DPSSampler(model, cfg) if isinstance(cfg, DPSConfig) else DAPSSampler(model, cfg)
     y = torch.zeros(args.draws, 1, 1, 1, 2, dtype=torch.complex128)
-    y[..., 0] = 0.15 + 0.05j
+    y[..., 0] = y.new_tensor(0.15 + 0.05j)
     sample = sampler.sample(Mask(), y, DatasetKind.COMPLEX_T1W_COIL_COMBINED, generator=torch.Generator().manual_seed(args.seed))[
         :, 0, 0, 0
     ]

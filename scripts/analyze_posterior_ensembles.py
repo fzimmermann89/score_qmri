@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import matplotlib
 import numpy as np
@@ -75,12 +76,14 @@ def main() -> None:
         case = np.load(run / "case.npz")
         if truth is None:
             truth, measurement, mask = case["truth"].squeeze(), case["measurement"].squeeze(), case["mask"].squeeze()
-        elif (
-            not np.array_equal(truth, case["truth"].squeeze())
-            or not np.array_equal(measurement, case["measurement"].squeeze())
-            or not np.array_equal(mask, case["mask"].squeeze())
-        ):
-            raise ValueError("Comparison requires identical reference and measurement")
+        else:
+            assert measurement is not None and mask is not None
+            if (
+                not np.array_equal(truth, case["truth"].squeeze())
+                or not np.array_equal(measurement, case["measurement"].squeeze())
+                or not np.array_equal(mask, case["mask"].squeeze())
+            ):
+                raise ValueError("Comparison requires identical reference and measurement")
         paths = sorted(run.glob("draw-*.npz"))
         if len(paths) != report["arguments"]["draws"]:
             raise ValueError(f"Incomplete ensemble: {run}")
@@ -119,7 +122,9 @@ def main() -> None:
             entry["kspace"][name] = diagnostic(spectral_maps["error_complex"], spectral_maps["std_complex"], selected)
         reports.append(entry)
         entries.append((label, maps, samples))
-        np.savez_compressed(args.output / f"maps-{len(entries) - 1:02d}-{report['arguments']['sampler']}.npz", **maps, roi=roi)
+        np.savez_compressed(
+            args.output / f"maps-{len(entries) - 1:02d}-{report['arguments']['sampler']}.npz", **cast(dict[str, Any], maps), roi=roi
+        )
     assert truth is not None and measurement is not None and mask is not None
     zero_filled = np.fft.ifft2(measurement * mask, norm="ortho")
     plt.imsave(args.output / "reference.png", np.abs(truth), cmap="gray", vmin=0, vmax=float(np.abs(truth).max()))

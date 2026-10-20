@@ -7,6 +7,7 @@ import json
 import time
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -84,9 +85,9 @@ def main() -> None:
             langevin_steps=args.langevin_steps,
         )
     )
-    sampler = DPSSampler(model, cfg) if args.sampler == "dps" else DAPSSampler(model, cfg)
+    sampler = DPSSampler(model, cfg) if isinstance(cfg, DPSConfig) else DAPSSampler(model, cfg)
     source = Path(__file__).resolve().parents[1] / "src/score_qmri/sampling"
-    report = {
+    report: dict[str, Any] = {
         "scope": "retrospective same-measurement ensemble; training-store overlap; no calibration claim",
         "arguments": vars(args),
         "configuration": asdict(cfg),
