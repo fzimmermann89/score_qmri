@@ -160,6 +160,9 @@ class FullScoreDAPSSampler:
             raise ValueError("DAPS schedule must stay within the model's supported sigma range")
         if not self.model.sigma_min <= self.prior_sigma <= self.model.sigma_max:
             raise ValueError("Prior score sigma must be within the model's supported range")
+        if isinstance(self.model, torch.nn.Module):
+            dtype = next(self.model.parameters()).dtype
+            measurement = measurement.to(dtype=torch.complex128 if dtype == torch.float64 else torch.complex64)
         measurement = measurement.to(self.model.device)
         template = forward_op.H(measurement)[0]
         kinds = torch.full((template.shape[0],), int(kind), device=template.device, dtype=torch.long)

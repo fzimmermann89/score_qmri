@@ -178,9 +178,9 @@ def test_sampler_with_masking_operator(sampler_name):
         sampler = FullScoreDAPSSampler(model, FullScoreDAPSConfig(tau=0.1, num_steps=3, sigma_min=0.02, reverse_steps=2, langevin_steps=2))
     measurement = operator(torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64))[0]
     noise = None
-    if sampler_name == "full-score-daps":
-        sampler = FullScoreDAPSSampler(model, FullScoreDAPSConfig(tau=0.1, num_steps=3, sigma_min=0.02, reverse_steps=2, langevin_steps=2))
-        noise = torch.randn_like(measurement, dtype=torch.complex128)
+    if sampler_name != "dps":
+        measurement = measurement.to(torch.complex128)
+        noise = torch.randn_like(measurement)
     image = sampler.sample(operator, measurement, 1, noise=noise, generator=torch.Generator().manual_seed(3))
     assert image.shape == measurement.shape
-    assert image.dtype == measurement.dtype and image.isfinite().all()
+    assert image.dtype == torch.complex64 and image.isfinite().all()
