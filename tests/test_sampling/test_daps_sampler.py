@@ -75,6 +75,8 @@ def test_daps_measurement_units_and_randomness(sampler_type, cfg):
     torch.testing.assert_close(first, scaled, rtol=1e-9, atol=1e-10)
     torch.testing.assert_close(first, repeated, rtol=0, atol=0)
     assert not torch.equal(first, other)
+    with pytest.raises(ValueError, match="noise must be complex"):
+        sampler_type(model, cfg).sample(MatrixOperator(matrix), y, 1, noise=torch.ones_like(y.real))
 
 
 def test_daps_requires_physical_measurement_noise():

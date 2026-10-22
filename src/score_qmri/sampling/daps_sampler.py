@@ -20,7 +20,7 @@ class DAPSConfig:
 
     Langevin step is a physical step size in squared image units, decayed
     linearly over the outer iterations. Step size and minimum noise levels
-    scale the published FFHQ settings from sigma_data=0.5 to sigma_data=0.2.
+    scale the InverseBench defaults from sigma_data=0.5 to sigma_data=0.2.
     The starting noise is limited to the model's supported maximum.
     Step size assumes a normalized operator; stronger operators need smaller steps.
     """
@@ -84,8 +84,8 @@ class DAPSSampler:
             residual = operator(x)[0] - measurement
             score = (center - x) / sigma**2 - operator.H(residual)[0] / cfg.tau**2
             x = x + step * score + sqrt(2 * step) * normal_like(x, generator)
-            if not x.isfinite().all():
-                raise RuntimeError("Nonfinite DAPS trajectory; reduce langevin_step")
+        if not x.isfinite().all():
+            raise RuntimeError("Nonfinite DAPS trajectory; reduce langevin_step")
         return x
 
     @torch.no_grad()
@@ -102,6 +102,8 @@ class DAPSSampler:
         """Draw a complex reconstruction, optionally re-noising an initial image."""
         if not is_complex_kind(int(kind)):
             raise NotImplementedError("DAPS currently supports complex image kinds")
+        if noise is not None and not noise.is_complex():
+            raise ValueError("Initial noise must be complex with unit variance per real coordinate")
         cfg = self.cfg
         start = self.model.sigma_max if cfg.sigma_start is None else cfg.sigma_start
         if not isfinite(start) or not self.model.sigma_min <= cfg.reverse_sigma_min < cfg.sigma_min < start <= self.model.sigma_max:

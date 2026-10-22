@@ -152,6 +152,8 @@ class FullScoreDAPSSampler:
         """
         if not is_complex_kind(int(kind)):
             raise NotImplementedError("DAPS currently supports complex image kinds")
+        if noise is not None and not noise.is_complex():
+            raise ValueError("Initial noise must be complex with unit variance per real coordinate")
         cfg = self.cfg
         start = self.model.sigma_max if cfg.sigma_start is None else cfg.sigma_start
         if not isfinite(start) or not self.model.sigma_min <= cfg.sigma_min < start <= self.model.sigma_max:

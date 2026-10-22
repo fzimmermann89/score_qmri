@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +63,10 @@ def main() -> None:
     parser.add_argument("--langevin-steps", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
+    if args.prior_sigma is not None and args.sampler != "full-score-daps":
+        parser.error("--prior-sigma requires --sampler full-score-daps")
+    if args.sampler == "dps" and (args.langevin_step is not None or args.langevin_steps is not None):
+        parser.error("--langevin-step and --langevin-steps require a DAPS sampler")
     if args.draws < 2 or args.batch_size < 1:
         raise ValueError("Require at least two draws and positive batch size")
     args.output.mkdir(parents=True, exist_ok=False)
@@ -77,26 +81,26 @@ def main() -> None:
     op = MaskedFourier(mask)
     model = DiffusionModel.from_checkpoint(args.checkpoint, map_location="cpu", compile_model=False, weights="ema").to(args.device)
     cfg: DPSConfig | DAPSConfig | FullScoreDAPSConfig
-    sampler: DPSSampler | DAPSSampler | FullScoreDAPSSampler
     if args.sampler == "dps":
-        cfg = DPSConfig(tau=args.tau, num_steps=args.steps or 1000, guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
-        sampler = DPSSampler(model, cfg)
+        cfg = DPSConfig(tau=args.tau, guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
     elif args.sampler == "daps":
-        cfg = DAPSConfig(
-            tau=args.tau,
-            num_steps=args.steps or 200,
-            langevin_step=1.6e-5 if args.langevin_step is None else args.langevin_step,
-            langevin_steps=100 if args.langevin_steps is None else args.langevin_steps,
+        cfg = DAPSConfig(tau=args.tau)
+    else:
+        cfg = FullScoreDAPSConfig(tau=args.tau, prior_sigma=args.prior_sigma)
+    if args.steps is not None:
+        cfg = replace(cfg, num_steps=args.steps)
+    if isinstance(cfg, (DAPSConfig, FullScoreDAPSConfig)):
+        cfg = replace(
+            cfg,
+            langevin_step=cfg.langevin_step if args.langevin_step is None else args.langevin_step,
+            langevin_steps=cfg.langevin_steps if args.langevin_steps is None else args.langevin_steps,
         )
+    sampler: DPSSampler | DAPSSampler | FullScoreDAPSSampler
+    if isinstance(cfg, DPSConfig):
+        sampler = DPSSampler(model, cfg)
+    elif isinstance(cfg, DAPSConfig):
         sampler = DAPSSampler(model, cfg)
     else:
-        cfg = FullScoreDAPSConfig(
-            tau=args.tau,
-            num_steps=args.steps or 32,
-            prior_sigma=args.prior_sigma,
-            langevin_step=0.1 if args.langevin_step is None else args.langevin_step,
-            langevin_steps=200 if args.langevin_steps is None else args.langevin_steps,
-        )
         sampler = FullScoreDAPSSampler(model, cfg)
     source = Path(__file__).resolve().parents[1] / "src/score_qmri/sampling"
     report: dict[str, Any] = {

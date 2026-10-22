@@ -76,7 +76,7 @@ def main() -> None:
         prior_variance += sampler.prior_sigma**2
     variance = torch.tensor([prior_variance * 0.0001 / (prior_variance + 0.0001), prior_variance], dtype=torch.float64)
     report = {
-        "scope": "analytic Gaussian posterior control, no learned prior or dataset",
+        "scope": "analytic Gaussian posterior comparison; target_* is the exact posterior, not the Gaussian DAPS approximation",
         "draws": args.draws,
         "seed": args.seed,
         "configuration": asdict(cfg),
