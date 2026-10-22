@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,7 @@ from pytorch_msssim import ssim
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
 
 
 class MaskedFourier:
@@ -50,7 +50,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--case-index", type=int, required=True)
     parser.add_argument("--kind", type=str, required=True)
-    parser.add_argument("--sampler", choices=["dps", "daps"], required=True)
+    parser.add_argument("--sampler", choices=["dps", "daps", "full-score-daps"], required=True)
     parser.add_argument("--draws", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--seed", type=int, default=20261020)
@@ -58,11 +58,15 @@ def main() -> None:
     parser.add_argument("--tau", type=float, default=0.01)
     parser.add_argument("--dps-guidance", choices=["covariance", "dps"], default="covariance")
     parser.add_argument("--guidance-scale", type=float, default=0.3)
-    parser.add_argument("--prior-sigma", type=float, default=None)
-    parser.add_argument("--langevin-step", type=float, default=0.1)
-    parser.add_argument("--langevin-steps", type=int, default=200)
+    parser.add_argument("--prior-sigma", type=float, default=None, help="Prior smoothing for full-score DAPS only")
+    parser.add_argument("--langevin-step", type=float, default=None, help="Physical step for DAPS; dimensionless for full-score DAPS")
+    parser.add_argument("--langevin-steps", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
+    if args.prior_sigma is not None and args.sampler != "full-score-daps":
+        parser.error("--prior-sigma requires --sampler full-score-daps")
+    if args.sampler == "dps" and (args.langevin_step is not None or args.langevin_steps is not None):
+        parser.error("--langevin-step and --langevin-steps require a DAPS sampler")
     if args.draws < 2 or args.batch_size < 1:
         raise ValueError("Require at least two draws and positive batch size")
     args.output.mkdir(parents=True, exist_ok=False)
@@ -76,24 +80,34 @@ def main() -> None:
     mask = torch.from_numpy(arrays["mask"]).to(args.device)
     op = MaskedFourier(mask)
     model = DiffusionModel.from_checkpoint(args.checkpoint, map_location="cpu", compile_model=False, weights="ema").to(args.device)
-    cfg = (
-        DPSConfig(tau=args.tau, num_steps=args.steps or 1000, guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
-        if args.sampler == "dps"
-        else DAPSConfig(
-            tau=args.tau,
-            num_steps=args.steps or 32,
-            prior_sigma=args.prior_sigma,
-            langevin_step=args.langevin_step,
-            langevin_steps=args.langevin_steps,
+    cfg: DPSConfig | DAPSConfig | FullScoreDAPSConfig
+    if args.sampler == "dps":
+        cfg = DPSConfig(tau=args.tau, guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
+    elif args.sampler == "daps":
+        cfg = DAPSConfig(tau=args.tau)
+    else:
+        cfg = FullScoreDAPSConfig(tau=args.tau, prior_sigma=args.prior_sigma)
+    if args.steps is not None:
+        cfg = replace(cfg, num_steps=args.steps)
+    if isinstance(cfg, (DAPSConfig, FullScoreDAPSConfig)):
+        cfg = replace(
+            cfg,
+            langevin_step=cfg.langevin_step if args.langevin_step is None else args.langevin_step,
+            langevin_steps=cfg.langevin_steps if args.langevin_steps is None else args.langevin_steps,
         )
-    )
-    sampler = DPSSampler(model, cfg) if isinstance(cfg, DPSConfig) else DAPSSampler(model, cfg)
+    sampler: DPSSampler | DAPSSampler | FullScoreDAPSSampler
+    if isinstance(cfg, DPSConfig):
+        sampler = DPSSampler(model, cfg)
+    elif isinstance(cfg, DAPSConfig):
+        sampler = DAPSSampler(model, cfg)
+    else:
+        sampler = FullScoreDAPSSampler(model, cfg)
     source = Path(__file__).resolve().parents[1] / "src/score_qmri/sampling"
     report: dict[str, Any] = {
         "scope": "retrospective same-measurement ensemble; training-store overlap; no calibration claim",
         "arguments": vars(args),
         "configuration": asdict(cfg),
-        "resolved_prior_sigma": sampler.prior_sigma if isinstance(sampler, DAPSSampler) else None,
+        "resolved_prior_sigma": sampler.prior_sigma if isinstance(sampler, FullScoreDAPSSampler) else None,
         "model": model.checkpoint_info,
         "case_file_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
         "source_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(source.glob("*.py"))},
