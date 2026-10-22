@@ -9,7 +9,7 @@ import torch
 
 from score_qmri.models.diffusion import DiffusionConfig, DiffusionModel
 from score_qmri.models.unet import UNet
-from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
 from score_qmri.sampling._utils import conjugate_gradient, to_2ch, to_complex
 
 
@@ -156,7 +156,7 @@ def test_dps_requires_physical_measurement_noise():
         DPSConfig(tau=tau)
 
 
-@pytest.mark.parametrize("sampler_name", ["dps", "daps"])
+@pytest.mark.parametrize("sampler_name", ["dps", "daps", "full-score-daps"])
 def test_sampler_with_masking_operator(sampler_name):
     operator_type = run_path(str(Path(__file__).parents[2] / "scripts/sample_posterior_ensemble.py"))["MaskedFourier"]
     mask = torch.zeros(1, 1, 1, 32, 32)
@@ -167,12 +167,20 @@ def test_sampler_with_masking_operator(sampler_name):
         diffusion=DiffusionConfig(cond_dim=16, sigma_min=0.01, sigma_max=1.0),
         compile_model=False,
     ).eval()
-    sampler = (
-        DPSSampler(model, DPSConfig(tau=0.1, num_steps=3))
-        if sampler_name == "dps"
-        else DAPSSampler(model, DAPSConfig(tau=0.1, num_steps=3, sigma_min=0.02, reverse_sigma_min=0.01, reverse_steps=2, langevin_steps=2))
-    )
+    sampler: DPSSampler | DAPSSampler | FullScoreDAPSSampler
+    if sampler_name == "dps":
+        sampler = DPSSampler(model, DPSConfig(tau=0.1, num_steps=3))
+    elif sampler_name == "daps":
+        sampler = DAPSSampler(
+            model, DAPSConfig(tau=0.1, num_steps=3, sigma_min=0.02, reverse_sigma_min=0.01, reverse_steps=2, langevin_steps=2)
+        )
+    else:
+        sampler = FullScoreDAPSSampler(model, FullScoreDAPSConfig(tau=0.1, num_steps=3, sigma_min=0.02, reverse_steps=2, langevin_steps=2))
     measurement = operator(torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64))[0]
-    image = sampler.sample(operator, measurement, 1, generator=torch.Generator().manual_seed(3))
+    noise = None
+    if sampler_name == "full-score-daps":
+        sampler = FullScoreDAPSSampler(model, FullScoreDAPSConfig(tau=0.1, num_steps=3, sigma_min=0.02, reverse_steps=2, langevin_steps=2))
+        noise = torch.randn_like(measurement, dtype=torch.complex128)
+    image = sampler.sample(operator, measurement, 1, noise=noise, generator=torch.Generator().manual_seed(3))
     assert image.shape == measurement.shape
-    assert image.is_complex() and image.isfinite().all()
+    assert image.dtype == measurement.dtype and image.isfinite().all()

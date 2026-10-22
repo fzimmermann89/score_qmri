@@ -163,7 +163,7 @@ class FullScoreDAPSSampler:
         measurement = measurement.to(self.model.device)
         template = forward_op.H(measurement)[0]
         kinds = torch.full((template.shape[0],), int(kind), device=template.device, dtype=torch.long)
-        epsilon = normal_like(template, generator) if noise is None else noise.to(template.device)
+        epsilon = normal_like(template, generator) if noise is None else noise.to(device=template.device, dtype=template.dtype).detach()
         if epsilon.shape != template.shape:
             raise ValueError("Initial noise must match the image shape")
         x = None if initial is None else initial.to(device=template.device, dtype=template.dtype).detach()
