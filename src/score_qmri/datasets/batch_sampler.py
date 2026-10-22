@@ -168,7 +168,8 @@ class ScheduledBatchSampler(BatchSampler):
 
     def reset_step(self, step: int = 0) -> None:
         self.step = step
+        self.set_epoch(0)
 
     def set_epoch(self, epoch: int) -> None:
         """Called by Lightning at epoch boundaries. Reseeds RNG but preserves step for schedule continuity."""
-        self.rng.manual_seed(self.base_seed + self.rank + epoch * 10000)
+        self.rng.manual_seed(self.base_seed + self.rank + epoch * 10000 + self.step * 1000003)

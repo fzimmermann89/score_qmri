@@ -485,6 +485,9 @@ class MRIDataModule(LightningDataModule):
             max_steps=max_steps,
         )
 
+        if self.trainer is not None:
+            batch_sampler.reset_step(self.trainer.global_step * self.trainer.accumulate_grad_batches)
+
         return DataLoader(
             self.concat_ds,
             batch_sampler=batch_sampler,

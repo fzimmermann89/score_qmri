@@ -463,3 +463,20 @@ def test_schedule_continues_across_epochs():
 
     # then: steps should be continuous 0..9
     assert steps_seen == list(range(10))
+
+
+def test_resume_reseeds_without_restarting_schedule():
+    dataset = ConcatDataset([TensorDataset(torch.arange(1000))])
+    seen = []
+    sampler = ScheduledBatchSampler(
+        dataset, [1000], [DatasetKind.T1MAP], [lambda step: seen.append(step) or 1.0], batch_size=16, max_steps=100
+    )
+    original = next(iter(sampler))
+    sampler.reset_step(50)
+    sampler.set_epoch(0)
+    resumed = next(iter(sampler))
+    assert seen == [0, 50]
+    assert resumed != original
+    sampler.reset_step(50)
+    sampler.set_epoch(0)
+    assert next(iter(sampler)) == resumed
