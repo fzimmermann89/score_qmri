@@ -12,7 +12,7 @@ from jsonargparse import ArgumentParser
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
 
 
 class GaussianOracle:
@@ -47,7 +47,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--draws", type=int, default=4096)
     parser.add_argument("--seed", type=int, default=777)
-    parser.add_argument("--sampler", choices=["dps", "daps"], required=True)
+    parser.add_argument("--sampler", choices=["dps", "daps", "full-score-daps"], required=True)
     args = parser.parse_args()
     if args.draws < 2:
         raise ValueError("At least two draws are needed for a variance estimate")
@@ -55,14 +55,25 @@ def main() -> None:
         raise FileExistsError(args.output)
     torch.set_num_threads(2)
     model = cast(DiffusionModel, GaussianOracle())
-    cfg = DPSConfig(tau=0.01) if args.sampler == "dps" else DAPSConfig(tau=0.01)
-    sampler = DPSSampler(model, cfg) if isinstance(cfg, DPSConfig) else DAPSSampler(model, cfg)
+    cfg: DPSConfig | DAPSConfig | FullScoreDAPSConfig
+    sampler: DPSSampler | DAPSSampler | FullScoreDAPSSampler
+    if args.sampler == "dps":
+        cfg = DPSConfig(tau=0.01)
+        sampler = DPSSampler(model, cfg)
+    elif args.sampler == "daps":
+        cfg = DAPSConfig(tau=0.01)
+        sampler = DAPSSampler(model, cfg)
+    else:
+        cfg = FullScoreDAPSConfig(tau=0.01)
+        sampler = FullScoreDAPSSampler(model, cfg)
     y = torch.zeros(args.draws, 1, 1, 1, 2, dtype=torch.complex128)
     y[..., 0] = y.new_tensor(0.15 + 0.05j)
     sample = sampler.sample(Mask(), y, DatasetKind.COMPLEX_T1W_COIL_COMBINED, generator=torch.Generator().manual_seed(args.seed))[
         :, 0, 0, 0
     ]
     prior_variance = 0.04
+    if isinstance(sampler, FullScoreDAPSSampler):
+        prior_variance += sampler.prior_sigma**2
     variance = torch.tensor([prior_variance * 0.0001 / (prior_variance + 0.0001), prior_variance], dtype=torch.float64)
     report = {
         "scope": "analytic Gaussian posterior control, no learned prior or dataset",

@@ -16,7 +16,7 @@ from pytorch_msssim import ssim
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
 
 
 class MaskedFourier:
@@ -50,7 +50,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--case-index", type=int, required=True)
     parser.add_argument("--kind", type=str, required=True)
-    parser.add_argument("--sampler", choices=["dps", "daps"], required=True)
+    parser.add_argument("--sampler", choices=["dps", "daps", "full-score-daps"], required=True)
     parser.add_argument("--draws", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--seed", type=int, default=20261020)
@@ -58,8 +58,9 @@ def main() -> None:
     parser.add_argument("--tau", type=float, default=0.01)
     parser.add_argument("--dps-guidance", choices=["covariance", "dps"], default="covariance")
     parser.add_argument("--guidance-scale", type=float, default=0.3)
-    parser.add_argument("--langevin-step", type=float, default=1.6e-5)
-    parser.add_argument("--langevin-steps", type=int, default=100)
+    parser.add_argument("--prior-sigma", type=float, default=None, help="Prior smoothing for full-score DAPS only")
+    parser.add_argument("--langevin-step", type=float, default=None, help="Physical step for DAPS; dimensionless for full-score DAPS")
+    parser.add_argument("--langevin-steps", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
     if args.draws < 2 or args.batch_size < 1:
@@ -75,22 +76,34 @@ def main() -> None:
     mask = torch.from_numpy(arrays["mask"]).to(args.device)
     op = MaskedFourier(mask)
     model = DiffusionModel.from_checkpoint(args.checkpoint, map_location="cpu", compile_model=False, weights="ema").to(args.device)
-    cfg = (
-        DPSConfig(tau=args.tau, num_steps=args.steps or 1000, guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
-        if args.sampler == "dps"
-        else DAPSConfig(
+    cfg: DPSConfig | DAPSConfig | FullScoreDAPSConfig
+    sampler: DPSSampler | DAPSSampler | FullScoreDAPSSampler
+    if args.sampler == "dps":
+        cfg = DPSConfig(tau=args.tau, num_steps=args.steps or 1000, guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
+        sampler = DPSSampler(model, cfg)
+    elif args.sampler == "daps":
+        cfg = DAPSConfig(
             tau=args.tau,
             num_steps=args.steps or 200,
-            langevin_step=args.langevin_step,
-            langevin_steps=args.langevin_steps,
+            langevin_step=1.6e-5 if args.langevin_step is None else args.langevin_step,
+            langevin_steps=100 if args.langevin_steps is None else args.langevin_steps,
         )
-    )
-    sampler = DPSSampler(model, cfg) if isinstance(cfg, DPSConfig) else DAPSSampler(model, cfg)
+        sampler = DAPSSampler(model, cfg)
+    else:
+        cfg = FullScoreDAPSConfig(
+            tau=args.tau,
+            num_steps=args.steps or 32,
+            prior_sigma=args.prior_sigma,
+            langevin_step=0.1 if args.langevin_step is None else args.langevin_step,
+            langevin_steps=200 if args.langevin_steps is None else args.langevin_steps,
+        )
+        sampler = FullScoreDAPSSampler(model, cfg)
     source = Path(__file__).resolve().parents[1] / "src/score_qmri/sampling"
     report: dict[str, Any] = {
         "scope": "retrospective same-measurement ensemble; training-store overlap; no calibration claim",
         "arguments": vars(args),
         "configuration": asdict(cfg),
+        "resolved_prior_sigma": sampler.prior_sigma if isinstance(sampler, FullScoreDAPSSampler) else None,
         "model": model.checkpoint_info,
         "case_file_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
         "source_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(source.glob("*.py"))},

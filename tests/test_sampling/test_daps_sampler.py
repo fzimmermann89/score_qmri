@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 import torch
 
-from score_qmri.sampling import DAPSConfig, DAPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
 from score_qmri.sampling.edm_sampler import karras_sigmas
 
 from .test_dps_sampler import GaussianPrior, MatrixOperator
@@ -55,17 +55,23 @@ def test_daps_matches_finite_algorithm_moments():
     assert not draws.requires_grad
 
 
-def test_daps_measurement_units_and_randomness():
+@pytest.mark.parametrize(
+    "sampler_type,cfg",
+    [
+        (DAPSSampler, DAPSConfig(tau=0.05, num_steps=3, reverse_steps=2, langevin_steps=3)),
+        (FullScoreDAPSSampler, FullScoreDAPSConfig(tau=0.05, num_steps=3, reverse_steps=2, langevin_steps=3, cg_rtol=1e-10)),
+    ],
+)
+def test_daps_measurement_units_and_randomness(sampler_type, cfg):
     model = GaussianPrior()
     matrix = torch.tensor([[1.0, 0.4], [0.0, 0.2]], dtype=torch.float64)
     y = torch.full((2, 1, 1, 1, 2), 0.15 + 0.05j, dtype=torch.complex128)
-    cfg = DAPSConfig(tau=0.05, num_steps=3, reverse_steps=2, langevin_steps=3)
-    first = DAPSSampler(model, cfg).sample(MatrixOperator(matrix), y, 1, generator=torch.Generator().manual_seed(8))
-    scaled = DAPSSampler(model, replace(cfg, tau=cfg.tau * 10)).sample(
+    first = sampler_type(model, cfg).sample(MatrixOperator(matrix), y, 1, generator=torch.Generator().manual_seed(8))
+    scaled = sampler_type(model, replace(cfg, tau=cfg.tau * 10)).sample(
         MatrixOperator(matrix * 10), y * 10, 1, generator=torch.Generator().manual_seed(8)
     )
-    repeated = DAPSSampler(model, cfg).sample(MatrixOperator(matrix), y, 1, generator=torch.Generator().manual_seed(8))
-    other = DAPSSampler(model, cfg).sample(MatrixOperator(matrix), y, 1, generator=torch.Generator().manual_seed(9))
+    repeated = sampler_type(model, cfg).sample(MatrixOperator(matrix), y, 1, generator=torch.Generator().manual_seed(8))
+    other = sampler_type(model, cfg).sample(MatrixOperator(matrix), y, 1, generator=torch.Generator().manual_seed(9))
     torch.testing.assert_close(first, scaled, rtol=1e-9, atol=1e-10)
     torch.testing.assert_close(first, repeated, rtol=0, atol=0)
     assert not torch.equal(first, other)
