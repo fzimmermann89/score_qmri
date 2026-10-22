@@ -43,6 +43,7 @@ if [[ -z "${PYTHON:-}" ]]; then
     exit 1
 fi
 echo "Python: ${PYTHON}"
+export PYTHONPATH="${SCRIPT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 # Proxy (proxychains for outbound connections)
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
@@ -63,6 +64,7 @@ echo "Run: ${RUN_NAME}, Array Task: ${SLURM_ARRAY_TASK_ID}"
 srun --unbuffered "${PYTHON}" -u -m score_qmri.cli fit \
     --trainer.num_nodes="${SLURM_JOB_NUM_NODES}" \
     --trainer.devices="${SLURM_NTASKS_PER_NODE}" \
+    --seed_everything="$((42 + SLURM_ARRAY_TASK_ID - 1))" \
     --job_name "${RUN_NAME}" \
     --config data.yaml \
     --config model.yaml "$@"
