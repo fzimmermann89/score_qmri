@@ -58,9 +58,8 @@ def main() -> None:
     parser.add_argument("--tau", type=float, default=0.01)
     parser.add_argument("--dps-guidance", choices=["covariance", "dps"], default="covariance")
     parser.add_argument("--guidance-scale", type=float, default=0.3)
-    parser.add_argument("--prior-sigma", type=float, default=None)
-    parser.add_argument("--langevin-step", type=float, default=0.1)
-    parser.add_argument("--langevin-steps", type=int, default=200)
+    parser.add_argument("--langevin-step", type=float, default=1.6e-5)
+    parser.add_argument("--langevin-steps", type=int, default=100)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
     if args.draws < 2 or args.batch_size < 1:
@@ -81,8 +80,7 @@ def main() -> None:
         if args.sampler == "dps"
         else DAPSConfig(
             tau=args.tau,
-            num_steps=args.steps or 32,
-            prior_sigma=args.prior_sigma,
+            num_steps=args.steps or 200,
             langevin_step=args.langevin_step,
             langevin_steps=args.langevin_steps,
         )
@@ -93,7 +91,6 @@ def main() -> None:
         "scope": "retrospective same-measurement ensemble; training-store overlap; no calibration claim",
         "arguments": vars(args),
         "configuration": asdict(cfg),
-        "resolved_prior_sigma": sampler.prior_sigma if isinstance(sampler, DAPSSampler) else None,
         "model": model.checkpoint_info,
         "case_file_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
         "source_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(source.glob("*.py"))},

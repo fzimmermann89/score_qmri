@@ -63,9 +63,6 @@ def main() -> None:
         :, 0, 0, 0
     ]
     prior_variance = 0.04
-    if isinstance(cfg, DAPSConfig):
-        prior_sigma = model.sigma_min if cfg.prior_sigma is None else cfg.prior_sigma
-        prior_variance += prior_sigma**2
     variance = torch.tensor([prior_variance * 0.0001 / (prior_variance + 0.0001), prior_variance], dtype=torch.float64)
     report = {
         "scope": "analytic Gaussian posterior control, no learned prior or dataset",

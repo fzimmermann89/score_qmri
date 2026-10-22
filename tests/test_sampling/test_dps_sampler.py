@@ -170,7 +170,7 @@ def test_sampler_with_masking_operator(sampler_name):
     sampler = (
         DPSSampler(model, DPSConfig(tau=0.1, num_steps=3))
         if sampler_name == "dps"
-        else DAPSSampler(model, DAPSConfig(tau=0.1, num_steps=3, sigma_min=0.02, reverse_steps=2, langevin_steps=2))
+        else DAPSSampler(model, DAPSConfig(tau=0.1, num_steps=3, sigma_min=0.02, reverse_sigma_min=0.01, reverse_steps=2, langevin_steps=2))
     )
     measurement = operator(torch.randn(1, 1, 1, 32, 32, dtype=torch.complex64))[0]
     image = sampler.sample(operator, measurement, 1, generator=torch.Generator().manual_seed(3))
