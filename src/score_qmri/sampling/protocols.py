@@ -1,8 +1,15 @@
-"""Protocols for linear operators used in posterior sampling."""
+"""Tuple-returning operators compatible with mr2/mrpro."""
 
 from typing import Protocol, runtime_checkable
 
 from torch import Tensor
+
+
+@runtime_checkable
+class OperatorProtocol(Protocol):
+    """A differentiable forward model with one tensor input and output."""
+
+    def __call__(self, x: Tensor) -> tuple[Tensor, ...]: ...
 
 
 @runtime_checkable

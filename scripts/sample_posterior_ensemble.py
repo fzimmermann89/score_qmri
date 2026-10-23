@@ -82,11 +82,11 @@ def main() -> None:
     model = DiffusionModel.from_checkpoint(args.checkpoint, map_location="cpu", compile_model=False, weights="ema").to(args.device)
     cfg: DPSConfig | DAPSConfig | FullScoreDAPSConfig
     if args.sampler == "dps":
-        cfg = DPSConfig(tau=args.tau, guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
+        cfg = DPSConfig(guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
     elif args.sampler == "daps":
-        cfg = DAPSConfig(tau=args.tau)
+        cfg = DAPSConfig()
     else:
-        cfg = FullScoreDAPSConfig(tau=args.tau, prior_sigma=args.prior_sigma)
+        cfg = FullScoreDAPSConfig(prior_sigma=args.prior_sigma)
     if args.steps is not None:
         cfg = replace(cfg, num_steps=args.steps)
     if isinstance(cfg, (DAPSConfig, FullScoreDAPSConfig)):
@@ -120,8 +120,13 @@ def main() -> None:
         count = min(args.batch_size, args.draws - first)
         y = measurement.expand(count, *measurement.shape[1:])
         start = time.perf_counter()
-        draw = sampler.sample(
-            op, y, DatasetKind[args.kind], generator=torch.Generator(device=args.device).manual_seed(args.seed + batch_index)
+        (draw,) = sampler.sample(
+            op,
+            y,
+            noise_std=args.tau,
+            template=op.H(y)[0],
+            kind=DatasetKind[args.kind],
+            generator=torch.Generator(device=args.device).manual_seed(args.seed + batch_index),
         )
         if args.device.startswith("cuda"):
             torch.cuda.synchronize()
