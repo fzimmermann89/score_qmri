@@ -34,6 +34,7 @@ def test_ir_gradient_and_jacobian_include_scaling_and_time_axis():
     y = operator(template)[0].to(torch.complex128) + 0.03 + 0.02j
     problem = SamplingProblem(model, operator, y, template, 6, 0.1, 1)
     point = problem.encode(template).requires_grad_(True)
+    assert problem.forward(point.float()).dtype == torch.complex64
     loss = problem.residual(point).abs().square().sum() / (2 * 0.1**2)
     expected = torch.autograd.grad(loss, point)[0]
     torch.testing.assert_close(problem.gradient(point), expected)
@@ -102,3 +103,24 @@ def test_nonlinear_dps_step_keeps_independent_batches():
     batched = sampler._step(x, problem, 0.4, 0.3, torch.zeros_like(x))
     individual = sampler._step(x[1:], single, 0.4, 0.3, torch.zeros_like(x[1:]))
     torch.testing.assert_close(batched[1:], individual, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("dtype,cg_dtype", [(torch.float64, None), (torch.float32, torch.float64)])
+def test_nonlinear_dps_correction_matches_dense_covariance(dtype, cg_dtype):
+    model, operator = MapPrior(), NonlinearEncoding()
+    template = torch.tensor([[[1.0, 1.3]]], dtype=dtype)
+    problem = SamplingProblem(model, operator, operator(template)[0], template, 6, 0.1, 1)
+    x = problem.encode(template * 0.8)
+    sigma, following = 0.4, 0.3
+    denoised = model.denoise(x, x.new_tensor([sigma]), problem.kind)
+    residual = torch.view_as_real(problem.residual(denoised)).flatten()
+    jacobian = torch.func.jacrev(lambda z: torch.view_as_real(problem.forward(z)).flatten())(denoised).flatten(1)
+    gain = 0.04 / (0.04 + sigma**2)
+    variance = sigma**2 * gain
+    covariance = 0.1**2 * torch.eye(len(residual), dtype=x.dtype) + variance * jacobian @ jacobian.T
+    gradient = gain * (jacobian.T @ torch.linalg.solve(covariance, residual)).reshape_as(x)
+    ratio = (following / sigma) ** 2
+    expected = ratio * x + (1 - ratio) * denoised - (sigma**2 - following**2) * gradient
+    actual = DPSSampler(model, DPSConfig(cg_rtol=1e-12, cg_dtype=cg_dtype))._step(x, problem, sigma, following, torch.zeros_like(x))
+    tolerance = 1e-12 if dtype == torch.float64 else 1e-5
+    torch.testing.assert_close(actual, expected, rtol=tolerance, atol=tolerance)

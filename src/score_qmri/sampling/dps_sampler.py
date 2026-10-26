@@ -30,6 +30,9 @@ class DPSConfig:
     gradient once per step, following the official DPS conditioning code.
     This remains a VE/EDM adaptation of its VP-DDPM update, not an exact
     posterior sampler. Its tuned strength does not use noise_std.
+
+    cg_dtype optionally changes only the physics solve precision; the operator
+    must support that dtype. The denoiser keeps its own precision.
     """
 
     num_steps: int = 1000
@@ -39,10 +42,13 @@ class DPSConfig:
     cg_rtol: float = 1e-4
     guidance: Literal["covariance", "dps"] = "covariance"
     guidance_scale: float = 0.3
+    cg_dtype: torch.dtype | None = None
 
     def __post_init__(self) -> None:
         if self.num_steps < 2 or self.cg_max_iter < 1:
             raise ValueError("Require >=2 diffusion steps and positive CG iterations")
+        if self.cg_dtype not in (None, torch.float32, torch.float64):
+            raise ValueError("CG dtype must be float32, float64 or None (model precision)")
         if not all(isfinite(x) and x > 0 for x in (self.rho, self.cg_rtol)):
             raise ValueError("rho and CG tolerance must be finite and positive")
         if self.guidance not in ("covariance", "dps") or not isfinite(self.guidance_scale) or self.guidance_scale < 0:
@@ -76,8 +82,9 @@ class DPSSampler:
             else:
                 (gradient,) = torch.autograd.grad(residual_norm.sum(), x)
             return problem.constrain(self._ancestral(x, denoised, cfg.guidance_scale * gradient, sigma, sigma_next, noise))
-        residual = problem.residual(denoised).detach()
-        jacobian, adjoint = problem.linearize(denoised.detach())
+        point = denoised.detach() if cfg.cg_dtype is None else denoised.detach().to(cfg.cg_dtype)
+        residual = problem.residual(point).detach()
+        jacobian, adjoint = problem.linearize(point)
         direction = adjoint(residual).detach()
         (response,) = torch.autograd.grad(denoised, x, direction, retain_graph=True)
         # Tweedie's covariance identity: Cov(x0|x_sigma) = sigma² * J_D.
@@ -89,13 +96,14 @@ class DPSSampler:
         rayleigh = (direction * response).flatten(1).sum(1) / squared.clamp_min(torch.finfo(x.dtype).tiny)
         baseline = self.model.sigma_data**2 / (sigma**2 + self.model.sigma_data**2)
         variance = sigma**2 * torch.where(rayleigh > 0, rayleigh, baseline).detach()
-        variance = variance.reshape((x.shape[0],) + (1,) * (residual.ndim - 1))
+        variance = variance.reshape((x.shape[0],) + (1,) * (direction.ndim - 1))
 
-        def covariance(v: Tensor) -> Tensor:
-            return problem.noise_std**2 * v + variance * jacobian(adjoint(v))
+        def precision(v: Tensor) -> Tensor:
+            return problem.noise_std**2 * v + variance * adjoint(jacobian(v))
 
-        weighted = conjugate_gradient(covariance, residual, cfg.cg_max_iter, cfg.cg_rtol)
-        (gradient,) = torch.autograd.grad(denoised, x, adjoint(weighted).detach())
+        # J* (tau² I + v J J*)^-1 r = (tau² I + v J* J)^-1 J* r.
+        pullback = conjugate_gradient(precision, direction, cfg.cg_max_iter, cfg.cg_rtol)
+        (gradient,) = torch.autograd.grad(denoised, x, pullback.detach().to(denoised))
         return problem.constrain(self._ancestral(x, denoised, (sigma**2 - sigma_next**2) * gradient, sigma, sigma_next, noise))
 
     @staticmethod

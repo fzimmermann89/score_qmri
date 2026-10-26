@@ -100,7 +100,8 @@ class SamplingProblem:
         result = self.operator(self.decode(x))[0].moveaxis(self.batch_dim, 0)
         if result.is_complex() and not self.measurement.is_complex():
             raise ValueError("Complex forward output requires complex measurements")
-        result = result.to(self.measurement.dtype)
+        dtype = (torch.complex128 if x.dtype == torch.float64 else torch.complex64) if self.measurement.is_complex() else x.dtype
+        result = result.to(dtype)
         if result.shape != self.measurement.shape:
             raise ValueError("Forward output must match measurements, including the explicit sample dimension")
         return result
