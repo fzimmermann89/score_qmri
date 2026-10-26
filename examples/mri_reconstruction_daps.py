@@ -13,7 +13,6 @@
 # %%
 
 from pathlib import Path
-from typing import cast
 
 import mrpro
 import torch
@@ -51,7 +50,7 @@ fourier_op = FourierOp.from_kdata(k_us)
 op = fourier_op @ csm.as_operator()
 
 # %% Load the model
-model = cast(DiffusionModel, torch.compile(DiffusionModel.from_checkpoint(CHECKPOINT_PATH).cuda().eval()))
+model = DiffusionModel.from_checkpoint(CHECKPOINT_PATH, compile_model=False).cuda().eval()
 
 # %%
 # Direct (zero-filled) reconstruction for reference.
@@ -61,8 +60,8 @@ model = cast(DiffusionModel, torch.compile(DiffusionModel.from_checkpoint(CHECKP
 (x_cg,) = mrpro.algorithms.optimizers.cg(op.gram + 0.01, x_zf)
 
 
-# Set tau from the measured noise after applying the k-space scaling above.
-cfg = DAPSConfig(tau=0.03)
+# Set noise_std from the measured noise after applying the k-space scaling above.
+cfg = DAPSConfig()
 
 # %%
 sampler = DAPSSampler(model, cfg)
@@ -70,10 +69,12 @@ sampler = DAPSSampler(model, cfg)
 y = k_us.data.repeat_interleave(BATCH, dim=0)
 
 with torch.no_grad():
-    recon = sampler.sample(
+    (recon,) = sampler.sample(
         op,
         y,
-        DatasetKind.COMPLEX_T1W_COIL_COMBINED,
+        noise_std=0.03,
+        template=x_zf.repeat_interleave(BATCH, dim=0),
+        kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED,
         noise=None,
     )
 # %%

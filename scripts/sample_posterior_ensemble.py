@@ -59,7 +59,12 @@ def main() -> None:
     parser.add_argument("--dps-guidance", choices=["covariance", "dps"], default="covariance")
     parser.add_argument("--guidance-scale", type=float, default=0.3)
     parser.add_argument("--prior-sigma", type=float, default=None, help="Prior smoothing for full-score DAPS only")
-    parser.add_argument("--langevin-step", type=float, default=None, help="Physical step for DAPS; dimensionless for full-score DAPS")
+    parser.add_argument(
+        "--langevin-step",
+        type=float,
+        default=None,
+        help="Step in squared normalized diffusion units for DAPS; dimensionless for full-score DAPS",
+    )
     parser.add_argument("--langevin-steps", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
@@ -82,11 +87,11 @@ def main() -> None:
     model = DiffusionModel.from_checkpoint(args.checkpoint, map_location="cpu", compile_model=False, weights="ema").to(args.device)
     cfg: DPSConfig | DAPSConfig | FullScoreDAPSConfig
     if args.sampler == "dps":
-        cfg = DPSConfig(tau=args.tau, guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
+        cfg = DPSConfig(guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
     elif args.sampler == "daps":
-        cfg = DAPSConfig(tau=args.tau)
+        cfg = DAPSConfig()
     else:
-        cfg = FullScoreDAPSConfig(tau=args.tau, prior_sigma=args.prior_sigma)
+        cfg = FullScoreDAPSConfig(prior_sigma=args.prior_sigma)
     if args.steps is not None:
         cfg = replace(cfg, num_steps=args.steps)
     if isinstance(cfg, (DAPSConfig, FullScoreDAPSConfig)):
@@ -116,12 +121,21 @@ def main() -> None:
         "batches": [],
     }
     np.savez_compressed(args.output / "case.npz", truth=truth.cpu().numpy(), measurement=measurement.cpu().numpy(), mask=mask.cpu().numpy())
+    kind = DatasetKind[args.kind]
     for batch_index, first in enumerate(range(0, args.draws, args.batch_size)):
         count = min(args.batch_size, args.draws - first)
         y = measurement.expand(count, *measurement.shape[1:])
+        template = op.H(y)[0]
+        if not kind.is_complex:
+            template = template.real
         start = time.perf_counter()
-        draw = sampler.sample(
-            op, y, DatasetKind[args.kind], generator=torch.Generator(device=args.device).manual_seed(args.seed + batch_index)
+        (draw,) = sampler.sample(
+            op,
+            y,
+            noise_std=args.tau,
+            template=template,
+            kind=kind,
+            generator=torch.Generator(device=args.device).manual_seed(args.seed + batch_index),
         )
         if args.device.startswith("cuda"):
             torch.cuda.synchronize()

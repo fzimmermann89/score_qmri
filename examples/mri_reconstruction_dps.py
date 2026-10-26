@@ -13,7 +13,6 @@
 # %%
 
 from pathlib import Path
-from typing import cast
 
 import mrpro
 import torch
@@ -52,11 +51,11 @@ op = fourier_op @ csm.as_operator()
 
 # %%
 # Load the diffusion model (VE/EDM framework)
-model = cast(DiffusionModel, torch.compile(DiffusionModel.from_checkpoint(CHECKPOINT_PATH).cuda().eval()))
+model = DiffusionModel.from_checkpoint(CHECKPOINT_PATH, compile_model=False).cuda().eval()
 
 # %% DPS config and sampler
-# Set tau from the measured noise after applying the k-space scaling above.
-cfg = DPSConfig(tau=0.03, num_steps=1000)
+# Set noise_std from the measured noise after applying the k-space scaling above.
+cfg = DPSConfig(num_steps=1000)
 sampler = DPSSampler(model, cfg)
 
 # Direct (zero-filled) reconstruction for reference.
@@ -70,10 +69,12 @@ sampler = DPSSampler(model, cfg)
 y = k_us.data.repeat_interleave(BATCH, dim=0)
 
 with torch.no_grad():
-    recon = sampler.sample(
+    (recon,) = sampler.sample(
         op,
         y,
-        DatasetKind.COMPLEX_T1W_COIL_COMBINED,
+        noise_std=0.03,
+        template=x_zf.repeat_interleave(BATCH, dim=0),
+        kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED,
         noise=None,
     )
 
