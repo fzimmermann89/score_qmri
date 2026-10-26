@@ -51,7 +51,7 @@ def test_real_linear_pullback_matches_autograd():
     model = MapPrior()
     operator = FastFourierOp(dim=(-2, -1))
     template = torch.ones(2, 1, 2, dtype=torch.float64)
-    y = operator(template)[0]
+    y = operator(template)[0] + 0.02j
     problem = SamplingProblem(model, operator, y, template, 6, 0.1, 0)
     x = problem.encode(template * 0.8).requires_grad_(True)
     objective = problem.residual(x).abs().square().sum() / (2 * 0.1**2)

@@ -121,16 +121,20 @@ def main() -> None:
         "batches": [],
     }
     np.savez_compressed(args.output / "case.npz", truth=truth.cpu().numpy(), measurement=measurement.cpu().numpy(), mask=mask.cpu().numpy())
+    kind = DatasetKind[args.kind]
     for batch_index, first in enumerate(range(0, args.draws, args.batch_size)):
         count = min(args.batch_size, args.draws - first)
         y = measurement.expand(count, *measurement.shape[1:])
+        template = op.H(y)[0]
+        if not kind.is_complex:
+            template = template.real
         start = time.perf_counter()
         (draw,) = sampler.sample(
             op,
             y,
             noise_std=args.tau,
-            template=op.H(y)[0],
-            kind=DatasetKind[args.kind],
+            template=template,
+            kind=kind,
             generator=torch.Generator(device=args.device).manual_seed(args.seed + batch_index),
         )
         if args.device.startswith("cuda"):
