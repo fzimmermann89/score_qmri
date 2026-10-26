@@ -124,7 +124,7 @@ class SamplingProblem:
         from mrpro.operators import Jacobian
 
         # Jacobian uses only __call__, despite its concrete Operator annotation.
-        jacobian = Jacobian(lambda z: (self.forward(z),), x.detach())  # type: ignore[arg-type]
+        jacobian = Jacobian(lambda z: (self.forward(z),), x.detach())  # type: ignore[arg-type, unused-ignore]
         return lambda v: jacobian(v)[0], lambda v: self.constrain(jacobian.H(v)[0])
 
     @torch.enable_grad()
