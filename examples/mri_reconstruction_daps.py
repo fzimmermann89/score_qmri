@@ -60,7 +60,7 @@ model = DiffusionModel.from_checkpoint(CHECKPOINT_PATH, compile_model=False).cud
 (x_cg,) = mrpro.algorithms.optimizers.cg(op.gram + 0.01, x_zf)
 
 
-# Set tau from the measured noise after applying the k-space scaling above.
+# Set noise_std from the measured noise after applying the k-space scaling above.
 cfg = DAPSConfig()
 
 # %%

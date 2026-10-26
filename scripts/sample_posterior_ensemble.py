@@ -59,7 +59,12 @@ def main() -> None:
     parser.add_argument("--dps-guidance", choices=["covariance", "dps"], default="covariance")
     parser.add_argument("--guidance-scale", type=float, default=0.3)
     parser.add_argument("--prior-sigma", type=float, default=None, help="Prior smoothing for full-score DAPS only")
-    parser.add_argument("--langevin-step", type=float, default=None, help="Physical step for DAPS; dimensionless for full-score DAPS")
+    parser.add_argument(
+        "--langevin-step",
+        type=float,
+        default=None,
+        help="Step in squared normalized diffusion units for DAPS; dimensionless for full-score DAPS",
+    )
     parser.add_argument("--langevin-steps", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()

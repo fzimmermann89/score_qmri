@@ -54,7 +54,7 @@ op = fourier_op @ csm.as_operator()
 model = DiffusionModel.from_checkpoint(CHECKPOINT_PATH, compile_model=False).cuda().eval()
 
 # %% DPS config and sampler
-# Set tau from the measured noise after applying the k-space scaling above.
+# Set noise_std from the measured noise after applying the k-space scaling above.
 cfg = DPSConfig(num_steps=1000)
 sampler = DPSSampler(model, cfg)
 

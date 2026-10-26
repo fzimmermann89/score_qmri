@@ -73,12 +73,11 @@ class NonlinearEncoding:
         (FullScoreDAPSSampler, FullScoreDAPSConfig(num_steps=3, reverse_steps=2, langevin_steps=2, cg_rtol=1e-8)),
     ],
 )
-def test_real_nonlinear_sampling_keeps_independent_batches(sampler_type, cfg):
+def test_real_nonlinear_sampling_returns_real_maps(sampler_type, cfg):
     model, operator = MapPrior(), NonlinearEncoding()
     template = torch.ones(2, 1, 2, dtype=torch.float64)
     measurement = operator(template)[0]
     sampler = sampler_type(model, cfg)
-    # Zero initial noise isolates the batching contract from random-number layout.
     (batched,) = sampler.sample(
         operator,
         measurement,
@@ -86,12 +85,20 @@ def test_real_nonlinear_sampling_keeps_independent_batches(sampler_type, cfg):
         template=template,
         kind=6,
         measurement_batch_dim=1,
-        noise=torch.zeros_like(template),
         generator=torch.Generator().manual_seed(4),
     )
     assert batched.shape == template.shape and batched.dtype == template.dtype
     assert batched.isfinite().all() and not batched.requires_grad
-    point = SamplingProblem(model, operator, measurement, template, 6, 0.1, 1)
-    gradient = point.gradient(point.encode(template * 0.8))
-    single = SamplingProblem(model, operator, measurement[:, :1], template[:1], 6, 0.1, 1)
-    torch.testing.assert_close(gradient[:1], single.gradient(single.encode(template[:1] * 0.8)))
+
+
+def test_nonlinear_dps_step_keeps_independent_batches():
+    model, operator = MapPrior(), NonlinearEncoding()
+    template = torch.tensor([[[1.0, 1.3]], [[0.7, 1.7]]], dtype=torch.float64)
+    measurement = operator(template)[0]
+    problem = SamplingProblem(model, operator, measurement, template, 6, 0.1, 1)
+    single = SamplingProblem(model, operator, measurement[:, 1:], template[1:], 6, 0.1, 1)
+    x = problem.encode(template * 0.8)
+    sampler = DPSSampler(model, DPSConfig(cg_rtol=1e-12))
+    batched = sampler._step(x, problem, 0.4, 0.3, torch.zeros_like(x))
+    individual = sampler._step(x[1:], single, 0.4, 0.3, torch.zeros_like(x[1:]))
+    torch.testing.assert_close(batched[1:], individual, rtol=1e-12, atol=1e-12)
