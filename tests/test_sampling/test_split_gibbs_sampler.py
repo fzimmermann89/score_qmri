@@ -436,3 +436,36 @@ def test_example_normalizes_archive_name_and_preserves_existing_data(tmp_path: P
     with pytest.raises(FileExistsError):
         epg_example(destination, draws=1, burn_in=0, image_size=8, epg_states=8)
     assert archive.read_bytes() == before
+
+
+def test_example_replay_restores_rng_and_loader_accepts_integer_widths(tmp_path: Path) -> None:
+    example = runpy.run_path(str(Path(__file__).resolve().parents[2] / "examples" / "epg_split_gibbs.py"))
+    original, replayed, fresh = (tmp_path / name for name in ("original.npz", "replayed.npz", "fresh.npz"))
+    settings = {"draws": 1, "burn_in": 1, "image_size": 8, "epg_states": 8, "dictionary_chunk": 1}
+    example["main"](original, seed=7, **settings)
+    with np.load(original, allow_pickle=False) as data:
+        saved = {name: data[name] for name in data.files}
+    saved["initial_indices"] = saved["initial_indices"].astype(np.int32)
+    acquisition = tmp_path / "int32.npz"
+    np.savez_compressed(acquisition, **saved)
+    loaded = example["load_acquisition"](acquisition, "cpu")
+    assert loaded["initial_indices"].dtype == torch.long
+    example["main"](replayed, acquisition=acquisition, seed=99, replay=True, **settings)
+    example["main"](fresh, acquisition=acquisition, seed=99, **settings)
+    with np.load(replayed, allow_pickle=False) as data:
+        np.testing.assert_array_equal(data["sampling_rng_state"], saved["sampling_rng_state"])
+        np.testing.assert_array_equal(data["samples"], saved["samples"])
+        assert data["replay"]
+    with np.load(fresh, allow_pickle=False) as data:
+        assert not np.array_equal(data["samples"], saved["samples"])
+        assert not data["replay"]
+    saved.pop("sampling_rng_state")
+    external = tmp_path / "external.npz"
+    np.savez_compressed(external, **saved)
+    with pytest.raises(ValueError, match="sampling_rng_state"):
+        example["main"](tmp_path / "missing.npz", acquisition=external, replay=True, **settings)
+    saved["initial_indices"] = saved["initial_indices"].astype(np.float32) + 0.5
+    invalid = tmp_path / "invalid.npz"
+    np.savez_compressed(invalid, **saved)
+    with pytest.raises(ValueError, match="integer dtype"):
+        example["load_acquisition"](invalid, "cpu")

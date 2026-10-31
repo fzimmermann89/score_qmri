@@ -17,6 +17,9 @@ sensitivities (C,H,W), mask (L,H,W), data (B,L,C,1,H,W), support (H,W), noise_st
 per real coordinate, initial_indices (B,H,W) and initial_m0 (B,H,W). Data use
 mrpro's centered orthonormal FFT. Sequence: inversion followed by FISP. Other
 sequences can construct SignalDictionary.from_model directly in Python.
+Loading an acquisition uses seed for fresh draws. Add --replay=true to restore
+an earlier output's sampling RNG state instead; use the same device and sampler
+settings, including dictionary_chunk, to reproduce its draws.
 
 Draws approximate a smoothed finite-dictionary posterior. SDE discretization,
 terminal noise, learned scores and incomplete mixing can each introduce error.
@@ -148,7 +151,10 @@ def load_acquisition(path: Path, device: str) -> dict[str, Tensor]:
         "initial_m0",
     )
     with np.load(path, allow_pickle=False) as stored:
+        if not np.issubdtype(stored["initial_indices"].dtype, np.integer):
+            raise ValueError("initial_indices must have an integer dtype")
         case = {name: torch.as_tensor(stored[name], device=device) for name in fields}
+        case["initial_indices"] = case["initial_indices"].long()
         if "truth" in stored:
             case["truth"] = torch.as_tensor(stored["truth"], device=device)
     if case["data"].ndim == 5:
@@ -173,6 +179,7 @@ def main(
     dictionary_chunk: int = 256,
     image_size: int = 32,
     seed: int = 42,
+    replay: bool = False,
     device: str = "cpu",
 ) -> None:
     """Save physical draws and complete acquisition/settings for reproducibility."""
@@ -183,6 +190,13 @@ def main(
     if checkpoint is not None and dataset_scales is None:
         raise ValueError("Specify dataset_scales explicitly when using a checkpoint")
     generator = torch.Generator(device=device).manual_seed(seed)
+    if replay:
+        if acquisition is None:
+            raise ValueError("Replay requires a saved acquisition with sampling_rng_state")
+        with np.load(acquisition, allow_pickle=False) as stored:
+            if "sampling_rng_state" not in stored:
+                raise ValueError("Replay requires a saved acquisition with sampling_rng_state")
+            generator.set_state(torch.from_numpy(stored["sampling_rng_state"].copy()))
     case = synthetic_case(device, generator, epg_states, image_size) if acquisition is None else load_acquisition(acquisition, device)
     dictionary = build_dictionary(case, epg_states)
     model = None
@@ -247,6 +261,7 @@ def main(
             burn_in=burn_in,
             thinning=thinning,
             seed=seed,
+            replay=replay,
             device=device,
             sampling_rng_state=sampling_rng_state,
             channels=np.asarray(["T1_seconds", "T2_seconds", "M0_real", "M0_imag"]),
