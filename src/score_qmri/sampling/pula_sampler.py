@@ -168,9 +168,9 @@ class PULASampler:
             Position of the independent sample axis in forward outputs.
         initial
             Optional physical starting state, used without additional re-noising.
-            Otherwise linear normal-metric pULA starts at the paper's flat-prior
-            Gaussian posterior with model variance sigma². A supplied diagonal
-            uses a zero-mean model Gaussian start with that variance instead.
+            Otherwise linear normal-metric pULA uses a Gaussian surrogate start
+            with N(0, sigma² I) regularization in model coordinates. A supplied
+            diagonal uses a zero-mean model Gaussian start with that variance.
         diagonal
             Optional fixed positive diagonal of M in model coordinates, scalar
             or broadcastable to (B, 2, H, W). An estimated metric must be estimated
