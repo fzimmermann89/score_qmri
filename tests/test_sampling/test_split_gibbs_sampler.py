@@ -470,6 +470,29 @@ def test_example_normalizes_archive_name_and_preserves_existing_data(tmp_path: P
     assert archive.read_bytes() == before
 
 
+@pytest.mark.parametrize("stage", ["prepare", "write"])
+def test_example_failed_save_leaves_no_archive_and_can_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
+    example = runpy.run_path(str(Path(__file__).resolve().parents[2] / "examples" / "epg_split_gibbs.py"))["main"]
+    destination = tmp_path / "result.npz"
+    settings = {"draws": 1, "burn_in": 0, "image_size": 8, "epg_states": 8}
+
+    def fail(*args: object, **kwargs: object) -> None:
+        assert destination.exists() == (stage == "write")
+        if stage == "write":
+            destination.write_bytes(b"partial archive")
+        raise OSError("Injected save failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("json.dumps" if stage == "prepare" else "numpy.savez_compressed", fail)
+        with pytest.raises(OSError, match="Injected save failure"):
+            example(destination, **settings)
+    assert not destination.exists()
+    example(destination, **settings)
+    with np.load(destination, allow_pickle=False) as data:
+        assert data["samples"].shape == (1, 1, 4, 8, 8)
+        assert "allow_pickle" not in data.files
+
+
 def test_example_replay_restores_rng_and_loader_accepts_integer_widths(tmp_path: Path) -> None:
     example = runpy.run_path(str(Path(__file__).resolve().parents[2] / "examples" / "epg_split_gibbs.py"))
     original, replayed, fresh = (tmp_path / name for name in ("original.npz", "replayed.npz", "fresh.npz"))

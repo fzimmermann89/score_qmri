@@ -29,7 +29,7 @@ terminal noise, learned scores and incomplete mixing can each introduce error.
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -248,35 +248,39 @@ def main(
         prior_draw=gaussian_prior if model is None else None,
         generator=generator,
     )
+    payload: dict[str, Any] = dict(
+        **{name: value.cpu().numpy() for name, value in case.items()},
+        samples=samples.cpu().numpy(),
+        fingerprints=dictionary.fingerprints.cpu().numpy(),
+        coupling=np.asarray(coupling),
+        dataset_scales=np.asarray(dataset_scales or ()),
+        physical_to_model_scales=physical_scales,
+        prior="diffusion_reverse_sde" if checkpoint else "analytic_gaussian",
+        checkpoint=str(checkpoint or ""),
+        checkpoint_info=json.dumps(checkpoint_info),
+        compile_model=compile_model,
+        sde_steps=sde_steps,
+        sigma_min=terminal_sigma,
+        epg_states=epg_states,
+        dictionary_chunk=dictionary_chunk,
+        burn_in=burn_in,
+        thinning=thinning,
+        seed=seed,
+        replay=replay,
+        device=device,
+        sampling_rng_state=sampling_rng_state,
+        channels=np.asarray(["T1_seconds", "T2_seconds", "M0_real", "M0_imag"]),
+        noise_convention="per_real_coordinate",
+        fft_convention="centered_ortho",
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("xb") as archive:
-        np.savez_compressed(
-            archive,
-            allow_pickle=False,
-            **{name: value.cpu().numpy() for name, value in case.items()},
-            samples=samples.cpu().numpy(),
-            fingerprints=dictionary.fingerprints.cpu().numpy(),
-            coupling=np.asarray(coupling),
-            dataset_scales=np.asarray(dataset_scales or ()),
-            physical_to_model_scales=physical_scales,
-            prior="diffusion_reverse_sde" if checkpoint else "analytic_gaussian",
-            checkpoint=str(checkpoint or ""),
-            checkpoint_info=json.dumps(checkpoint_info),
-            compile_model=compile_model,
-            sde_steps=sde_steps,
-            sigma_min=terminal_sigma,
-            epg_states=epg_states,
-            dictionary_chunk=dictionary_chunk,
-            burn_in=burn_in,
-            thinning=thinning,
-            seed=seed,
-            replay=replay,
-            device=device,
-            sampling_rng_state=sampling_rng_state,
-            channels=np.asarray(["T1_seconds", "T2_seconds", "M0_real", "M0_imag"]),
-            noise_convention="per_real_coordinate",
-            fft_convention="centered_ortho",
-        )
+    archive = output.open("xb")
+    try:
+        with archive:
+            np.savez_compressed(archive, **payload)
+    except BaseException:
+        output.unlink(missing_ok=True)
+        raise
     print(f"Saved {draws} states per chain to {output}")
 
 
