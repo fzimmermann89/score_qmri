@@ -243,6 +243,7 @@ def main(
             sde_steps=sde_steps,
             sigma_min=terminal_sigma,
             epg_states=epg_states,
+            dictionary_chunk=dictionary_chunk,
             burn_in=burn_in,
             thinning=thinning,
             seed=seed,

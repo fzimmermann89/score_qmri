@@ -426,12 +426,13 @@ def test_high_snr_float32_dictionary_weights_survive_evidence_and_gumbels(chunk:
 def test_example_normalizes_archive_name_and_preserves_existing_data(tmp_path: Path) -> None:
     epg_example = runpy.run_path(str(Path(__file__).resolve().parents[2] / "examples" / "epg_split_gibbs.py"))["main"]
     destination = tmp_path / "result"
-    epg_example(destination, draws=1, burn_in=0, image_size=8, epg_states=8)
+    epg_example(destination, draws=1, burn_in=0, image_size=8, epg_states=8, dictionary_chunk=1)
     archive = destination.with_suffix(".npz")
     before = archive.read_bytes()
     assert not destination.exists()
     with np.load(archive, allow_pickle=False) as data:
         assert data["samples"].shape == (1, 1, 4, 8, 8)
+        assert data["dictionary_chunk"] == 1
     with pytest.raises(FileExistsError):
         epg_example(destination, draws=1, burn_in=0, image_size=8, epg_states=8)
     assert archive.read_bytes() == before
