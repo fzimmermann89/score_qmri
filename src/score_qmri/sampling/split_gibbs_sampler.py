@@ -119,7 +119,7 @@ class CartesianAcquisition(LinearOperator):
 
     @torch.no_grad()
     def validate(self, template: Tensor) -> Tensor:
-        """Check the factorization and return pointwise power (1,H,W,L)."""
+        """Check the factorization and return pointwise power (B,H,W,L)."""
         ones = torch.ones_like(template)
         (coils,) = self.sensitivity(ones)
         (power,) = self.sensitivity.H(coils)
@@ -285,9 +285,9 @@ class _SplitGibbsProblem:
             raise ValueError("Need one coupling per dictionary coordinate and one for amplitude")
         self.operator, self.measurement, self.dictionary, self.support = operator, measurement, dictionary, support
         self.template, self.noise_std, self.cfg, self.prior_draw = template, noise_std, cfg, prior_draw
-        signal = template.new_ones(1, dictionary.fingerprints.shape[1], 1, 1, *support.shape)
+        signal = template.new_ones(template.shape[0], dictionary.fingerprints.shape[1], 1, 1, *support.shape)
         self.power = operator.validate(signal)
-        predicted = operator(signal.expand(template.shape[0], -1, -1, -1, -1, -1))[0]
+        predicted = operator(signal)[0]
         if measurement.shape != predicted.shape or measurement.device != template.device or measurement.dtype != template.dtype:
             raise ValueError("Measurements must match forward output shape, complex dtype and device")
         # Unsampled entries of a full-grid mask are not observations.

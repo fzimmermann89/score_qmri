@@ -143,6 +143,36 @@ def test_collapse_against_real_gaussian_evidence() -> None:
     torch.testing.assert_close(logits.softmax(-1), expected.softmax(-1))
 
 
+def test_batched_coil_maps_match_separate_subject_conditionals() -> None:
+    reference = make_sampler(batch=2)
+    coils = torch.stack((COILS, COILS * torch.tensor([0.6 + 0.2j, 1.4 - 0.3j])))
+
+    def problem(sensitivity: SensitivityOp, measurement: torch.Tensor, template: torch.Tensor) -> _SplitGibbsProblem:
+        operator = CartesianAcquisition(reference.operator.sampling, reference.operator.unitary, sensitivity)
+        return _SplitGibbsProblem(
+            operator,
+            measurement,
+            reference.dictionary,
+            reference.support,
+            template,
+            reference.noise_std,
+            reference.cfg,
+            reference.prior_draw,
+        )
+
+    batched = problem(SensitivityOp(coils[:, None, :, None]), reference.measurement, reference.template)
+    auxiliary = torch.tensor([1.0, 0.1, 0.4, -0.2], dtype=torch.float64)[None, :, None, None].expand(2, -1, 1, 2)
+    actual = batched.collapsed_parameters(reference.measurement, auxiliary, 0, 2)
+    assert batched.power.shape == (2, 1, 2, 3)
+    assert not torch.equal(batched.power[0], batched.power[1])
+    for batch in range(2):
+        subject = slice(batch, batch + 1)
+        separate = problem(SensitivityOp(coils[batch, :, None]), reference.measurement[subject], reference.template[subject])
+        expected = separate.collapsed_parameters(reference.measurement[subject], auxiliary[subject], 0, 2)
+        for combined, single in zip(actual, expected, strict=True):
+            torch.testing.assert_close(combined[subject], single)
+
+
 @pytest.mark.parametrize("use_sde", [False, True], ids=["exact-prior", "reverse-sde-prior"])
 def test_full_chain_matches_enumerated_discrete_smoothed_target(use_sde: bool) -> None:
     """Two voxels coupled by undersampled multicoil data; no continuous reference."""
@@ -416,8 +446,10 @@ def test_high_snr_float32_dictionary_weights_survive_evidence_and_gumbels(chunk:
         lambda x, rho, g: x,
     )
     auxiliary = torch.tensor([1.0, 0.125, 0.0, 0.0])[None, :, None, None].expand(batch, -1, -1, -1)
-    logits, _, _ = problem.collapsed_parameters(completed[:1], auxiliary[:1], 0, 2)
-    torch.testing.assert_close(logits[..., 1] - logits[..., 0], torch.full((1, 1, 1), np.log(4.0), dtype=torch.float64), atol=1e-6, rtol=0)
+    logits, _, _ = problem.collapsed_parameters(completed, auxiliary, 0, 2)
+    torch.testing.assert_close(
+        logits[..., 1] - logits[..., 0], torch.full((batch, 1, 1), np.log(4.0), dtype=torch.float64), atol=1e-6, rtol=0
+    )
     indices, amplitude = problem.physics_draw(completed, auxiliary, torch.Generator().manual_seed(55))
     assert abs((indices == 1).float().mean().item() - 0.8) < 0.015
     assert amplitude.dtype == torch.complex64 and torch.isfinite(amplitude).all()
