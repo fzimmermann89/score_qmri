@@ -5,12 +5,13 @@ Input NPZ: t1 (H,W), m0 (H,W), times (T,), binary unshifted mask
 T1 and times are in seconds. Without measurement, simulate Gaussian noise.
 M0 is used as a reference, never as a known reconstruction parameter.
 
-Run with --help for arguments. For example:
-    python examples/qmri_joint.py model.ckpt case.npz results 0.2383 --method dps
-    python examples/qmri_joint.py model.ckpt case.npz results 0.2383 --method daps
-The example scale is case-specific; derive it from your training normalization.
-Use qmri_joint_plot.py on the output folder.
-Settings reproduce an exploratory case; sample spread is not calibrated.
+Examples:
+    python examples/qmri_joint.py sample model.ckpt case.npz results 0.2383 --method dps
+    python examples/qmri_joint.py sample model.ckpt case.npz results 0.2383 --method daps
+    python examples/qmri_joint.py plot results overview --t1_colors lipari.txt
+
+The M0 scale is case-specific and must match training normalization.
+Both methods are approximate; sample spread is not calibrated.
 """
 
 import json
@@ -18,10 +19,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, cast
 
+import matplotlib
 import numpy as np
 import torch
 from jsonargparse import CLI
+from matplotlib.colors import ListedColormap, Normalize
 from mrpro.operators import LinearOperator, models
+from scipy.ndimage import gaussian_filter
 from torch import Tensor
 
 from score_qmri.datasets.kind import DatasetKind
@@ -30,6 +34,9 @@ from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler
 from score_qmri.sampling._problem import SamplingProblem
 from score_qmri.sampling._utils import conjugate_gradient, normal_like
 from score_qmri.sampling.edm_sampler import karras_sigmas
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 class Encoding(LinearOperator):
@@ -132,7 +139,7 @@ def cg_fit(operator: Encoding, measurement: Tensor, times: Tensor, regularizatio
     return t1, m0
 
 
-def main(
+def sample(
     checkpoint: Path,
     case: Path,
     output: Path,
@@ -158,11 +165,7 @@ def main(
     Supplied measurements must use noise_std per real coordinate and be zero
     outside the mask. Reuse one case and output folder for both methods.
     """
-    if not all(np.isfinite(v) and v > 0 for v in (m0_prior_scale, noise_std, regularization)) or min(draws, batch_size) < 1:
-        raise ValueError("Scales, noise, regularization and sample counts must be positive")
     output.mkdir(parents=True, exist_ok=True)
-    if (output / f"{method}.npz").exists():
-        raise FileExistsError(output / f"{method}.npz")
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
     with np.load(case) as arrays:
@@ -171,12 +174,6 @@ def main(
         times = torch.as_tensor(arrays["times"], dtype=torch.float32, device=device)
         mask = torch.as_tensor(arrays["mask"], dtype=torch.float32, device=device)
         csm = torch.as_tensor(arrays["csm"], dtype=torch.complex64, device=device)
-        if times.ndim != 1 or not (times > 0).all() or csm.ndim != 3:
-            raise ValueError("Require positive recovery times and coil maps with shape (C,H,W)")
-        if t1.ndim != 2 or m0.shape != t1.shape or mask.shape != (len(times), *t1.shape) or csm.shape[1:] != t1.shape:
-            raise ValueError("Case shapes must follow the module docstring")
-        if not all(x.isfinite().all() for x in (t1, m0, times, mask, csm)) or not ((mask == 0) | (mask == 1)).all():
-            raise ValueError("Case must be finite with a binary mask")
         operator = Encoding(csm, mask).to(device)
         if "measurement" in arrays:
             measurement = torch.as_tensor(arrays["measurement"], dtype=torch.complex64, device=device)
@@ -185,39 +182,17 @@ def main(
             clean = operator(signal)[0]
             generator = torch.Generator(device=device).manual_seed(seed)
             measurement = clean + noise_std * normal_like(clean, generator) * mask[:, None, None]
-    if measurement.shape != (len(times), 1, len(csm), *t1.shape) or not measurement.isfinite().all():
-        raise ValueError("Measurement must be finite with shape (T,1,C,H,W)")
-    if (measurement * (1 - mask[:, None, None])).abs().any():
-        raise ValueError("Measurement must be zero outside the mask")
-    saved_case = {
-        "t1": t1.cpu().numpy(),
-        "m0": m0.cpu().numpy(),
-        "times": times.cpu().numpy(),
-        "mask": mask.cpu().numpy(),
-        "csm": csm.cpu().numpy(),
-        "measurement": measurement.cpu().numpy(),
-    }
-    if (output / "case.npz").exists():
-        with np.load(output / "case.npz") as previous:
-            if any(not np.array_equal(previous[key], value) for key, value in saved_case.items()):
-                raise ValueError("Output folder belongs to a different case")
-    else:
-        np.savez_compressed(
-            output / "case.npz",
-            t1=saved_case["t1"],
-            m0=saved_case["m0"],
-            times=saved_case["times"],
-            mask=saved_case["mask"],
-            csm=saved_case["csm"],
-            measurement=saved_case["measurement"],
-        )
-    if (output / "cg-fit.npz").exists():
-        with np.load(output / "cg-fit.npz") as previous_fit:
-            if float(previous_fit["regularization"]) != regularization:
-                raise ValueError("Existing CG+fit baseline uses different regularization")
-    else:
-        fit_t1, fit_m0 = cg_fit(operator, measurement, times, regularization)
-        np.savez_compressed(output / "cg-fit.npz", t1=fit_t1.cpu().numpy(), m0=fit_m0.cpu().numpy(), regularization=regularization)
+    np.savez_compressed(
+        output / "case.npz",
+        t1=t1.cpu().numpy(),
+        m0=m0.cpu().numpy(),
+        times=times.cpu().numpy(),
+        mask=mask.cpu().numpy(),
+        csm=csm.cpu().numpy(),
+        measurement=measurement.cpu().numpy(),
+    )
+    fit_t1, fit_m0 = cg_fit(operator, measurement, times, regularization)
+    np.savez_compressed(output / "cg-fit.npz", t1=fit_t1.cpu().numpy(), m0=fit_m0.cpu().numpy())
     model = DiffusionModel.from_checkpoint(checkpoint, compile_model=False, weights="ema").to(device).eval().requires_grad_(False)
     prior = JointPrior(model, m0_prior_scale)
     cfg = (
@@ -282,5 +257,162 @@ def main(
     )
 
 
+def scores(image: np.ndarray, reference: np.ndarray, mask: np.ndarray) -> dict[str, float]:
+    """Masked errors and local Gaussian SSIM, averaged at valid mask centers.
+
+    SSIM uses an 11-pixel window, sigma 1.5, population covariance and the
+    full reference range. Inputs are not zeroed outside the evaluation mask.
+    """
+    x, y = image.astype(float), reference.astype(float)
+    ux, uy = gaussian_filter(x, 1.5, truncate=3.5), gaussian_filter(y, 1.5, truncate=3.5)
+    vx = gaussian_filter(x * x, 1.5, truncate=3.5) - ux * ux
+    vy = gaussian_filter(y * y, 1.5, truncate=3.5) - uy * uy
+    covariance = gaussian_filter(x * y, 1.5, truncate=3.5) - ux * uy
+    c1, c2 = (0.01 * np.ptp(y)) ** 2, (0.03 * np.ptp(y)) ** 2
+    local = ((2 * ux * uy + c1) * (2 * covariance + c2)) / ((ux * ux + uy * uy + c1) * (vx + vy + c2))
+    valid = mask.copy()
+    valid[:5] = valid[-5:] = False
+    valid[:, :5] = valid[:, -5:] = False
+    error = x[mask] - y[mask]
+    return {"mae": float(np.abs(error).mean()), "rmse": float(np.sqrt(np.mean(error**2))), "ssim": float(local[valid].mean())}
+
+
+def plot(results: Path, output: Path, t1_colors: Path | None = None, mask_threshold: float = 0.2) -> None:
+    """Plot saved ensembles as PNG/PDF, with unclipped metrics in JSON.
+
+    M0 summaries use magnitudes. SD is sample SD, not the standard error
+    of the mean. Coverage is descriptive for the reference-selected mask.
+    t1_colors accepts a Lipari RGB table; otherwise use Matplotlib's magma.
+    """
+    with np.load(results / "case.npz") as case, np.load(results / "cg-fit.npz") as fit:
+        truth = {"t1": case["t1"].copy(), "m0": np.abs(case["m0"])}
+        baseline = {"t1": fit["t1"].copy(), "m0": np.abs(fit["m0"])}
+    data = {}
+    for method in ("dps", "daps"):
+        with np.load(results / f"{method}.npz") as samples:
+            data[method] = {"t1": samples["t1"].astype(float), "m0": np.abs(samples["m0"]).astype(float)}
+    mask = truth["m0"] > mask_threshold
+    coords = np.argwhere(mask)
+    low, high = np.maximum(coords.min(0) - 4, 0), np.minimum(coords.max(0) + 5, mask.shape)
+    crop = np.s_[low[0] : high[0], low[1] : high[1]]
+    t1_cmap = ListedColormap(np.loadtxt(t1_colors)) if t1_colors else plt.get_cmap("magma")
+    error_cmap = plt.get_cmap("magma").with_extremes(bad="white")
+    metrics: dict = {"mask": f"reference |M0| > {mask_threshold}", "mask_pixels": int(mask.sum())}
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with plt.rc_context(
+        {
+            "font.family": "DejaVu Sans",
+            "font.size": 8,
+            "xtick.labelsize": 7,
+            "ytick.labelsize": 7,
+            "pdf.fonttype": 42,
+            "axes.linewidth": 0.6,
+        }
+    ):
+        fig = plt.figure(figsize=(10.2, 10.6))
+        grid = fig.add_gridspec(
+            7,
+            5,
+            height_ratios=[1, 1, 1, 0.16, 1, 1, 1],
+            width_ratios=[1, 1, 1, 1, 1.06],
+            left=0.035,
+            right=0.98,
+            top=0.975,
+            bottom=0.035,
+            hspace=0.31,
+            wspace=0.055,
+        )
+        for start, parameter, label, cmap, maximum, error_max, factor in [
+            (0, "t1", r"$T_1$", t1_cmap, 2.5, 300, 1000),
+            (4, "m0", r"$|M_0|$", plt.get_cmap("viridis"), 2, 0.15, 1),
+        ]:
+            cmap = cmap.with_extremes(bad="white")
+            reference = truth[parameter]
+            for column, limit, palette, units in [
+                (2, maximum, cmap, label + (" (s)" if parameter == "t1" else " (a.u.)")),
+                (3, error_max, error_cmap, "SD / error" + (" (ms)" if parameter == "t1" else " (a.u.)")),
+            ]:
+                host = fig.add_subplot(grid[start, column])
+                host.set_axis_off()
+                bar = fig.colorbar(
+                    plt.cm.ScalarMappable(norm=Normalize(0, limit), cmap=palette),
+                    cax=host.inset_axes((0.08, 0.47, 0.84, 0.065)),
+                    orientation="horizontal",
+                    extend="max",
+                )
+                bar.set_ticks([0, limit / 2, limit])
+                bar.set_label(units)
+            coverage_ax = fig.add_subplot(grid[start + 1 : start + 3, 4])
+            coverage_ax.plot([0, 1], [0, 1], "--", color="0.5", lw=0.8)
+            rows = [(start, "cg_fit", [reference, baseline[parameter]])]
+            for index, (method, color, style) in enumerate([("dps", "#0072B2", "-"), ("daps", "#D55E00", "--")]):
+                draws = data[method][parameter]
+                mean, sd = draws.mean(0), draws.std(0, ddof=1)
+                rows.append((start + index + 1, method, [draws[0], mean, factor * sd, factor * np.abs(mean - reference)]))
+                ordered = np.sort(draws[:, mask], axis=0)
+                count = len(draws)
+                trim = np.arange((count - 2) // 2, -1, -1)
+                expected = np.r_[(count - 1 - 2 * trim) / (count + 1), 1.0]
+                observed = np.r_[((ordered[trim] <= reference[mask]) & (reference[mask] <= ordered[count - 1 - trim])).mean(1), 1.0]
+                coverage_ax.plot(expected, observed, color=color, linestyle=style, lw=1, label=method.upper())
+                metrics[f"{parameter}_{method}"] = {
+                    "draws": count,
+                    "expected_coverage": expected.tolist(),
+                    "observed_coverage": observed.tolist(),
+                }
+            for row, method, fields in rows:
+                for column, field in enumerate(fields):
+                    ax = fig.add_subplot(grid[row, column])
+                    ax.imshow(
+                        np.where(mask, field, np.nan)[crop],
+                        vmin=0,
+                        vmax=error_max if column >= 2 else maximum,
+                        cmap=error_cmap if column >= 2 else cmap,
+                        interpolation="nearest",
+                    )
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    for spine in ax.spines.values():
+                        spine.set_visible(False)
+                    if row == start:
+                        ax.set_title(("Reference " if column == 0 else "CG+fit ") + label, pad=2)
+                    elif method == "dps":
+                        ax.set_title(["Sample", f"Mean (n={len(data[method][parameter])})", "SD", "|Mean − ref|"][column], pad=2)
+                    if row != start and column == 0:
+                        ax.set_ylabel(method.upper(), labelpad=7)
+                    if column == 1 or (row != start and column == 0):
+                        values = scores(field, reference, mask)
+                        mae = f"{factor * values['mae']:.0f} ms" if parameter == "t1" else f"{values['mae']:.3f}"
+                        ax.set_xlabel(f"MAE {mae}   SSIM {values['ssim']:.3f}", labelpad=2)
+                        if row == start:
+                            metrics[f"{parameter}_cg_fit"] = values
+                        else:
+                            metrics[f"{parameter}_{method}"]["sample" if column == 0 else "mean"] = values
+            coverage_ax.set(
+                xlim=(0, 1),
+                ylim=(0, 1),
+                aspect="equal",
+                xticks=[0, 0.5, 1],
+                yticks=[0, 0.5, 1],
+                ylabel="Observed",
+                title=label + " interval coverage",
+            )
+            if start == 0:
+                coverage_ax.legend(frameon=False, fontsize=7, loc="lower right")
+            else:
+                coverage_ax.set_xlabel("Expected")
+        for extension in ("png", "pdf"):
+            fig.savefig(output.with_suffix("." + extension), dpi=600)
+        plt.close(fig)
+    output.with_suffix(".json").write_text(json.dumps(metrics, indent=2) + "\n")
+    output.with_suffix(".txt").write_text(
+        "Reference |M0| defines the display and evaluation mask. First saved draw, ensemble mean, sample SD (ddof=1), "
+        "and absolute mean error. Color limits affect display only; metrics use unclipped values. "
+        "Central order-statistic intervals have nominal coverage (N-1-2k)/(N+1) under exchangeability. "
+        "The endpoint (1,1) represents the unbounded interval; connecting lines are visual guides. "
+        "Single-case coverage with a reference-derived mask does not establish population calibration.\n"
+    )
+
+
 if __name__ == "__main__":
-    CLI(main)
+    CLI({"sample": sample, "plot": plot})
