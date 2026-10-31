@@ -71,7 +71,8 @@ def real_vector(value: Tensor) -> Tensor:
 
 
 def dense_forward(problem: SamplingProblem, center: Tensor) -> Tensor:
-    return torch.autograd.functional.jacobian(lambda z: real_vector(problem.forward(z)), center).flatten(1)
+    jacobian: Tensor = torch.autograd.functional.jacobian(lambda z: real_vector(problem.forward(z)), center)
+    return jacobian.flatten(1)
 
 
 def test_linear_score_is_exact_for_isotropic_gaussian_and_noisy_rank_deficient_operator() -> None:
@@ -90,7 +91,8 @@ def test_linear_score_is_exact_for_isotropic_gaussian_and_noisy_rank_deficient_o
 
     def likelihood(z: Tensor) -> Tensor:
         residual = problem.residual(gain * z)
-        return -0.5 * (residual.conj() * torch.linalg.solve(observation_covariance.to(y), residual.mT).mT).real.sum()
+        value: Tensor = -0.5 * (residual.conj() * torch.linalg.solve(observation_covariance.to(y), residual.mT).mT).real.sum()
+        return value
 
     expected = torch.autograd.functional.jacobian(likelihood, x)
     torch.testing.assert_close(denoised, gain * x)
@@ -196,7 +198,8 @@ def test_full_main_denoiser_vjp_includes_edm_skip_and_input_derivative(cg_dtype:
     def frozen_log_likelihood(z: Tensor) -> Tensor:
         d = model.denoise(z, z.new_tensor([sigma]), problem.kind)
         r = real_vector(problem.residual(d))
-        return -0.5 * r @ torch.linalg.solve(c, r)
+        value: Tensor = -0.5 * r @ torch.linalg.solve(c, r)
+        return value
 
     direction = torch.tensor([[[[0.1, 0.3]], [[-0.2, 0.4]]]])
     difference = (frozen_log_likelihood(x + 1e-3 * direction) - frozen_log_likelihood(x - 1e-3 * direction)) / 2e-3
@@ -217,7 +220,8 @@ class KnownAmplitudeDecay:
 
     def __call__(self, t2: Tensor) -> tuple[Tensor]:
         signal = self.signal(torch.ones_like(t2) * 0.8, t2)[0]
-        return self.acquisition(signal)
+        result: Tensor = self.acquisition(signal)[0]
+        return (result,)
 
 
 def test_nonlinear_extension_is_opt_in_and_uses_frozen_local_covariance() -> None:
@@ -254,7 +258,8 @@ def test_nonlinear_extension_is_opt_in_and_uses_frozen_local_covariance() -> Non
         jacobian = torch.autograd.functional.jacobian(lambda value: real_vector(problem.forward(value)), d, create_graph=True).flatten(1)
         covariance = 0.05**2 * torch.eye(len(r), dtype=z.dtype) + sampler._variance(sigma) * jacobian @ jacobian.T
         residual = real_vector(problem.residual(d))
-        return -0.5 * (residual @ torch.linalg.solve(covariance, residual) + torch.linalg.slogdet(covariance).logabsdet)
+        value: Tensor = -0.5 * (residual @ torch.linalg.solve(covariance, residual) + torch.linalg.slogdet(covariance).logabsdet)
+        return value
 
     full_derivative = torch.autograd.functional.jacobian(local_log_likelihood, x)
     assert not torch.allclose(actual, full_derivative, atol=1e-3, rtol=1e-3)
@@ -287,7 +292,7 @@ def test_model_coordinate_normalization_measurement_units_and_rng() -> None:
     cfg = PiGDMConfig(num_steps=12, cg_rtol=1e-11)
 
     def sample(model: GaussianPrior, matrix: Tensor, y: Tensor, tau: float, seed: int = 8) -> Tensor:
-        return PiGDMSampler(model, cfg).sample(
+        result: Tensor = PiGDMSampler(model, cfg).sample(
             MatrixOperator(matrix),
             y,
             noise_std=tau,
@@ -295,6 +300,7 @@ def test_model_coordinate_normalization_measurement_units_and_rng() -> None:
             kind=DatasetKind.T1MAP,
             generator=torch.Generator().manual_seed(seed),
         )[0]
+        return result
 
     state = torch.random.get_rng_state()
     result = sample(scaled_prior, matrix, y, 0.05)
