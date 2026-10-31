@@ -17,6 +17,8 @@ sensitivities (C,H,W), mask (L,H,W), data (B,L,C,1,H,W), support (H,W), noise_st
 per real coordinate, initial_indices (B,H,W) and initial_m0 (B,H,W). Data use
 mrpro's centered orthonormal FFT. Sequence: inversion followed by FISP. Other
 sequences can construct SignalDictionary.from_model directly in Python.
+The EPG state count comes from the archive when present, otherwise defaults to
+64; an explicit --epg_states must agree with the saved count.
 Loading an acquisition uses seed for fresh draws. Add --replay=true to restore
 an earlier output's sampling RNG state instead; use the same device and sampler
 settings, including dictionary_chunk, to reproduce its draws.
@@ -175,7 +177,7 @@ def main(
     thinning: int = 1,
     sde_steps: int = 128,
     sigma_min: float | None = None,
-    epg_states: int = 64,
+    epg_states: int | None = None,
     dictionary_chunk: int = 256,
     image_size: int = 32,
     seed: int = 42,
@@ -190,13 +192,20 @@ def main(
     if checkpoint is not None and dataset_scales is None:
         raise ValueError("Specify dataset_scales explicitly when using a checkpoint")
     generator = torch.Generator(device=device).manual_seed(seed)
-    if replay:
-        if acquisition is None:
-            raise ValueError("Replay requires a saved acquisition with sampling_rng_state")
+    if acquisition is not None:
         with np.load(acquisition, allow_pickle=False) as stored:
-            if "sampling_rng_state" not in stored:
-                raise ValueError("Replay requires a saved acquisition with sampling_rng_state")
-            generator.set_state(torch.from_numpy(stored["sampling_rng_state"].copy()))
+            if "epg_states" in stored:
+                archived_states = int(stored["epg_states"])
+                if epg_states is not None and epg_states != archived_states:
+                    raise ValueError("epg_states must match the saved acquisition")
+                epg_states = archived_states
+            if replay:
+                if "sampling_rng_state" not in stored:
+                    raise ValueError("Replay requires a saved acquisition with sampling_rng_state")
+                generator.set_state(torch.from_numpy(stored["sampling_rng_state"].copy()))
+    elif replay:
+        raise ValueError("Replay requires a saved acquisition with sampling_rng_state")
+    epg_states = 64 if epg_states is None else epg_states
     case = synthetic_case(device, generator, epg_states, image_size) if acquisition is None else load_acquisition(acquisition, device)
     dictionary = build_dictionary(case, epg_states)
     model = None

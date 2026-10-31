@@ -441,8 +441,8 @@ def test_example_normalizes_archive_name_and_preserves_existing_data(tmp_path: P
 def test_example_replay_restores_rng_and_loader_accepts_integer_widths(tmp_path: Path) -> None:
     example = runpy.run_path(str(Path(__file__).resolve().parents[2] / "examples" / "epg_split_gibbs.py"))
     original, replayed, fresh = (tmp_path / name for name in ("original.npz", "replayed.npz", "fresh.npz"))
-    settings = {"draws": 1, "burn_in": 1, "image_size": 8, "epg_states": 8, "dictionary_chunk": 1}
-    example["main"](original, seed=7, **settings)
+    settings = {"draws": 2, "burn_in": 1, "thinning": 2, "image_size": 8, "dictionary_chunk": 1}
+    example["main"](original, seed=7, epg_states=8, **settings)
     with np.load(original, allow_pickle=False) as data:
         saved = {name: data[name] for name in data.files}
     saved["initial_indices"] = saved["initial_indices"].astype(np.int32)
@@ -452,9 +452,14 @@ def test_example_replay_restores_rng_and_loader_accepts_integer_widths(tmp_path:
     assert loaded["initial_indices"].dtype == torch.long
     example["main"](replayed, acquisition=acquisition, seed=99, replay=True, **settings)
     example["main"](fresh, acquisition=acquisition, seed=99, **settings)
+    with pytest.raises(ValueError, match="epg_states must match"):
+        example["main"](tmp_path / "mismatch.npz", acquisition=acquisition, epg_states=64, **settings)
     with np.load(replayed, allow_pickle=False) as data:
         np.testing.assert_array_equal(data["sampling_rng_state"], saved["sampling_rng_state"])
         np.testing.assert_array_equal(data["samples"], saved["samples"])
+        np.testing.assert_array_equal(data["fingerprints"], saved["fingerprints"])
+        assert data["samples"].shape[0] == settings["draws"]
+        assert data["epg_states"] == 8
         assert data["replay"]
     with np.load(fresh, allow_pickle=False) as data:
         assert not np.array_equal(data["samples"], saved["samples"])
