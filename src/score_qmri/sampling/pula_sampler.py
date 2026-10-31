@@ -111,16 +111,16 @@ class PULASampler:
                 frozen = torch.broadcast_to(frozen, shape)
             except RuntimeError as exc:
                 raise ValueError("diagonal must broadcast to model coordinates (B, 2, H, W)") from exc
-            return lambda rhs: frozen * rhs, lambda: problem.noise(generator) / frozen.sqrt()
+            return lambda rhs: frozen * rhs.to(frozen), lambda: problem.noise(generator) / frozen.sqrt()
         if not problem.linear:
             raise ValueError("Nonlinear likelihood transfer requires an explicit frozen positive diagonal metric")
         jacobian, adjoint = problem.linearize(problem.pack(torch.zeros_like(problem.template)))
 
         def precision(v: Tensor) -> Tensor:
-            return problem.constrain(adjoint(jacobian(v))) / problem.noise_std**2 + v / cfg.sigma**2
+            return problem.constrain(adjoint(jacobian(v))).to(v) / problem.noise_std**2 + v / cfg.sigma**2
 
         def apply(rhs: Tensor) -> Tensor:
-            return conjugate_gradient(precision, rhs, cfg.cg_max_iter, cfg.cg_rtol)
+            return conjugate_gradient(precision, rhs.to(problem.scale), cfg.cg_max_iter, cfg.cg_rtol)
 
         def perturbation() -> Tensor:
             y = problem.measurement

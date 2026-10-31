@@ -7,6 +7,8 @@ import torch
 from mrpro.operators import FastFourierOp, Operator
 
 from score_qmri.datasets.kind import DatasetKind
+from score_qmri.models.diffusion import DiffusionConfig, DiffusionModel
+from score_qmri.models.unet import UNet
 from score_qmri.sampling._problem import SamplingProblem
 from score_qmri.sampling.pula_sampler import PULAConfig, PULASampler
 
@@ -157,6 +159,30 @@ def test_centered_orthonormal_masked_fourier_complex_gaussian() -> None:
 class CubicSignal(Operator):
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor]:
         return (torch.stack([x + 0.1 * x**3, 0.5 * x], dim=0),)
+
+
+@pytest.mark.parametrize("kind", [DatasetKind.M0_COMPLEX, DatasetKind.T1MAP])
+@pytest.mark.parametrize("diagonal", [None, torch.tensor(0.01)])
+def test_float64_physics_keeps_float32_model_state(kind: DatasetKind, diagonal: torch.Tensor | None) -> None:
+    model = DiffusionModel(
+        unet=UNet(base_channels=8, num_res_blocks=1, channel_mult=(1,), attention_levels=(), cond_dim=16),
+        diffusion=DiffusionConfig(cond_dim=16, sigma_min=0.01, sigma_max=1.0),
+        compile_model=False,
+    ).eval()
+    operator = torch.ones(8, 8, dtype=torch.float64) * FastFourierOp(dim=(-2, -1))
+    template = torch.zeros(1, 1, 1, 8, 8, dtype=torch.complex128 if kind.is_complex else torch.float64)
+    measurement = operator(template.to(torch.complex128))[0]
+    (result,) = PULASampler(model, PULAConfig(sigma=0.2, burn_in=1)).sample(
+        operator,
+        measurement,
+        noise_std=0.3,
+        template=template,
+        kind=kind,
+        diagonal=diagonal,
+        generator=torch.Generator().manual_seed(20),
+    )
+    assert result.dtype == (torch.complex64 if kind.is_complex else torch.float32)
+    assert result.isfinite().all()
 
 
 def test_nonlinear_transfer_composed_operator_actual_gradient_and_reproducibility() -> None:
