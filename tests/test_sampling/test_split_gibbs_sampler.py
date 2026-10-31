@@ -1,8 +1,11 @@
 """Independent controls for the discrete target and prior-conditional variance."""
 
 import itertools
+import runpy
 from dataclasses import replace
+from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from mrpro.data import KTrajectory, SpatialDimension
@@ -388,3 +391,47 @@ def test_dictionary_allows_general_coordinates_and_prior_kind_order() -> None:
     assert draws.shape == obs.shape and torch.isfinite(draws).all()
     with pytest.raises(ValueError, match="kinds"):
         DiffusionPriorDraw(GaussianModel(), kinds[::-1], (1.0, 1.0, 1.0, 1.0))
+
+
+@pytest.mark.parametrize("chunk", [1, 2])
+def test_high_snr_float32_dictionary_weights_survive_evidence_and_gumbels(chunk: int) -> None:
+    batch = 10000
+    dictionary = SignalDictionary(
+        torch.tensor([[0.5, 0.125], [1.5, 0.125]]),
+        torch.ones(2, 48, dtype=torch.complex64),
+        torch.tensor([0.2, 0.8]),
+    )
+    operator = CartesianAcquisition(
+        CartesianMaskingOp(None), FastFourierOp(dim=(-2, -1)), SensitivityOp(torch.ones(1, 1, 1, 1, dtype=torch.complex64))
+    )
+    completed = torch.full((batch, 48, 1, 1, 1, 1), 2.0, dtype=torch.complex64)
+    problem = _SplitGibbsProblem(
+        operator,
+        completed,
+        dictionary,
+        torch.ones(1, 1, dtype=torch.bool),
+        torch.zeros(batch, 1, 1, dtype=torch.complex64),
+        0.001,
+        SplitGibbsConfig((0.5, 0.25, 0.5), dictionary_chunk=chunk),
+        lambda x, rho, g: x,
+    )
+    auxiliary = torch.tensor([1.0, 0.125, 0.0, 0.0])[None, :, None, None].expand(batch, -1, -1, -1)
+    logits, _, _ = problem.collapsed_parameters(completed[:1], auxiliary[:1], 0, 2)
+    torch.testing.assert_close(logits[..., 1] - logits[..., 0], torch.full((1, 1, 1), np.log(4.0), dtype=torch.float64), atol=1e-6, rtol=0)
+    indices, amplitude = problem.physics_draw(completed, auxiliary, torch.Generator().manual_seed(55))
+    assert abs((indices == 1).float().mean().item() - 0.8) < 0.015
+    assert amplitude.dtype == torch.complex64 and torch.isfinite(amplitude).all()
+
+
+def test_example_normalizes_archive_name_and_preserves_existing_data(tmp_path: Path) -> None:
+    epg_example = runpy.run_path(str(Path(__file__).resolve().parents[2] / "examples" / "epg_split_gibbs.py"))["main"]
+    destination = tmp_path / "result"
+    epg_example(destination, draws=1, burn_in=0, image_size=8, epg_states=8)
+    archive = destination.with_suffix(".npz")
+    before = archive.read_bytes()
+    assert not destination.exists()
+    with np.load(archive, allow_pickle=False) as data:
+        assert data["samples"].shape == (1, 1, 4, 8, 8)
+    with pytest.raises(FileExistsError):
+        epg_example(destination, draws=1, burn_in=0, image_size=8, epg_states=8)
+    assert archive.read_bytes() == before

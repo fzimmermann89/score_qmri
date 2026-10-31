@@ -176,6 +176,8 @@ def main(
     device: str = "cpu",
 ) -> None:
     """Save physical draws and complete acquisition/settings for reproducibility."""
+    if output.suffix != ".npz":
+        output = Path(f"{output}.npz")
     if output.exists():
         raise FileExistsError(output)
     if checkpoint is not None and dataset_scales is None:
@@ -224,31 +226,32 @@ def main(
         generator=generator,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        output,
-        allow_pickle=False,
-        **{name: value.cpu().numpy() for name, value in case.items()},
-        samples=samples.cpu().numpy(),
-        fingerprints=dictionary.fingerprints.cpu().numpy(),
-        coupling=np.asarray(coupling),
-        dataset_scales=np.asarray(dataset_scales or ()),
-        physical_to_model_scales=physical_scales,
-        prior="diffusion_reverse_sde" if checkpoint else "analytic_gaussian",
-        checkpoint=str(checkpoint or ""),
-        checkpoint_info=json.dumps(checkpoint_info),
-        compile_model=compile_model,
-        sde_steps=sde_steps,
-        sigma_min=terminal_sigma,
-        epg_states=epg_states,
-        burn_in=burn_in,
-        thinning=thinning,
-        seed=seed,
-        device=device,
-        sampling_rng_state=sampling_rng_state,
-        channels=np.asarray(["T1_seconds", "T2_seconds", "M0_real", "M0_imag"]),
-        noise_convention="per_real_coordinate",
-        fft_convention="centered_ortho",
-    )
+    with output.open("xb") as archive:
+        np.savez_compressed(
+            archive,
+            allow_pickle=False,
+            **{name: value.cpu().numpy() for name, value in case.items()},
+            samples=samples.cpu().numpy(),
+            fingerprints=dictionary.fingerprints.cpu().numpy(),
+            coupling=np.asarray(coupling),
+            dataset_scales=np.asarray(dataset_scales or ()),
+            physical_to_model_scales=physical_scales,
+            prior="diffusion_reverse_sde" if checkpoint else "analytic_gaussian",
+            checkpoint=str(checkpoint or ""),
+            checkpoint_info=json.dumps(checkpoint_info),
+            compile_model=compile_model,
+            sde_steps=sde_steps,
+            sigma_min=terminal_sigma,
+            epg_states=epg_states,
+            burn_in=burn_in,
+            thinning=thinning,
+            seed=seed,
+            device=device,
+            sampling_rng_state=sampling_rng_state,
+            channels=np.asarray(["T1_seconds", "T2_seconds", "M0_real", "M0_imag"]),
+            noise_convention="per_real_coordinate",
+            fft_convention="centered_ortho",
+        )
     print(f"Saved {draws} states per chain to {output}")
 
 

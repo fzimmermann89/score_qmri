@@ -311,24 +311,32 @@ class _SplitGibbsProblem:
         return self._collapse(combined, auxiliary, start, stop)
 
     def _collapse(self, combined: Tensor, auxiliary: Tensor, start: int, stop: int) -> tuple[Tensor, Tensor, Tensor]:
-        atoms = self.dictionary.fingerprints[start:stop]
+        # At high SNR the common evidence offset can be ~1e8. Forming it in
+        # float32 discards log weights before any logit centering can help.
+        atoms = self.dictionary.fingerprints[start:stop].to(torch.complex128)
+        combined = combined.to(torch.complex128)
+        auxiliary = auxiliary.to(torch.float64)
         rho = self.cfg.coupling
-        precision = self.power @ atoms.abs().square().T / self.noise_std**2 + 1 / rho[-1] ** 2
+        precision = self.power.to(torch.float64) @ atoms.abs().square().T / self.noise_std**2 + 1 / rho[-1] ** 2
         amplitude = torch.complex(auxiliary[:, -2], auxiliary[:, -1])
         rhs = combined @ atoms.conj().T / self.noise_std**2 + amplitude[..., None] / rho[-1] ** 2
         mean = rhs / precision
         penalty = (
-            (self.dictionary.parameters[start:stop] - auxiliary[:, :-2].moveaxis(1, -1)[..., None, :]) / auxiliary.new_tensor(rho[:-1])
+            (self.dictionary.parameters[start:stop].to(torch.float64) - auxiliary[:, :-2].moveaxis(1, -1)[..., None, :])
+            / auxiliary.new_tensor(rho[:-1])
         ).square().sum(-1) / 2
-        logits = self.dictionary.weights[start:stop].log() + rhs.abs().square() / (2 * precision) - precision.log() - penalty
+        logits = (
+            self.dictionary.weights[start:stop].to(torch.float64).log() + rhs.abs().square() / (2 * precision) - precision.log() - penalty
+        )
         return logits, mean, precision.reciprocal().expand_as(logits)
 
     def physics_draw(self, completed: Tensor, auxiliary: Tensor, generator: torch.Generator | None) -> tuple[Tensor, Tensor]:
-        combined = self.operator.sensitivity.H(self.operator.unitary.H(completed)[0])[0][:, :, 0, 0].moveaxis(1, -1)
+        combined = self.operator.sensitivity.H(self.operator.unitary.H(completed)[0])[0][:, :, 0, 0].moveaxis(1, -1).to(torch.complex128)
+        auxiliary = auxiliary.to(torch.float64)
         shape = auxiliary[:, 0].shape
-        best = auxiliary.new_full(shape, -torch.inf)
+        best = torch.full(shape, -torch.inf, device=auxiliary.device, dtype=torch.float64)
         indices = torch.zeros(shape, device=auxiliary.device, dtype=torch.long)
-        mean = torch.zeros(shape, device=auxiliary.device, dtype=completed.dtype)
+        mean = torch.zeros(shape, device=auxiliary.device, dtype=torch.complex128)
         variance = torch.zeros_like(best)
         for start in range(0, len(self.dictionary.weights), self.cfg.dictionary_chunk):
             stop = min(start + self.cfg.dictionary_chunk, len(self.dictionary.weights))
@@ -342,7 +350,7 @@ class _SplitGibbsProblem:
             variance = torch.where(take, variances.gather(-1, local[..., None]).squeeze(-1), variance)
             indices = torch.where(take, start + local, indices)
             best = torch.maximum(best, value)
-        amplitude = (mean + variance.sqrt() * _noise(mean, generator)) * self.support
+        amplitude = ((mean + variance.sqrt() * _noise(mean, generator)) * self.support).to(completed.dtype)
         return indices.masked_fill(~self.support, 0), amplitude
 
 
