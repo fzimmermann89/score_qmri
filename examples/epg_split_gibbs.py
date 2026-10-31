@@ -13,10 +13,10 @@ analytic-prior example is an execution control, not a brain reconstruction.
 
 An optional --acquisition NPZ supplies: parameters (J,2) in seconds, weights
 (J,), flip_angles and rf_phases in radians, te/tr and inversion_time in seconds,
-sensitivities (C,H,W), mask (L,H,W), data (B,L,C,H,W), support (H,W), noise_std
+sensitivities (C,H,W), mask (L,H,W), data (B,L,C,1,H,W), support (H,W), noise_std
 per real coordinate, initial_indices (B,H,W) and initial_m0 (B,H,W). Data use
 mrpro's centered orthonormal FFT. Sequence: inversion followed by FISP. Other
-sequences can construct EPGDictionary.from_sequence directly in Python.
+sequences can construct SignalDictionary.from_model directly in Python.
 
 Draws approximate a smoothed finite-dictionary posterior. SDE discretization,
 terminal noise, learned scores and incomplete mixing can each introduce error.
@@ -29,14 +29,26 @@ from typing import Literal
 import numpy as np
 import torch
 from jsonargparse import CLI
-from mrpro.operators.models.EPG import EPGSequence, FispBlock, InversionBlock
+from mrpro.operators import FastFourierOp, SensitivityOp
+from mrpro.operators.CartesianSamplingOp import CartesianMaskingOp
+from mrpro.operators.models.EPG import EPGSequence, FispBlock, InversionBlock, Parameters
 from torch import Tensor
 
+from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling.epg_split_gibbs import Coupling, DiffusionPriorDraw, EPGDictionary, EPGSplitGibbs, PriorDraw
+from score_qmri.sampling.split_gibbs_sampler import (
+    CartesianAcquisition,
+    Coupling,
+    DiffusionPriorDraw,
+    SignalDictionary,
+    SplitGibbsConfig,
+    SplitGibbsSampler,
+)
+
+KINDS = (DatasetKind.T1MAP, DatasetKind.T2MAP, DatasetKind.M0_COMPLEX)
 
 
-def gaussian_prior(observation: Tensor, coupling: Coupling, generator: torch.Generator) -> Tensor:
+def gaussian_prior(observation: Tensor, coupling: Coupling, generator: torch.Generator | None) -> Tensor:
     """Exact conditional for explicit physical Gaussian product priors."""
     mean = observation.new_tensor([1.2, 0.1, 0.7, 0.0])[None, :, None, None]
     variance = observation.new_tensor([0.4, 0.04, 0.4, 0.4]).square()[None, :, None, None]
@@ -83,37 +95,37 @@ def synthetic_case(device: str, generator: torch.Generator, states: int = 64, si
         "noise_std": torch.tensor(0.03, device=device),
         "initial_indices": torch.zeros_like(indices),
         "initial_m0": torch.zeros_like(m0),
-        "data": torch.zeros(1, 48, 2, size, size, dtype=torch.complex64, device=device),
+        "data": torch.zeros(1, 48, 2, 1, size, size, dtype=torch.complex64, device=device),
     }
     dictionary = build_dictionary(case, states=states)
-    sampler = build_sampler(case, dictionary, gaussian_prior, (0.2, 0.03, 0.15), 256)
-    (data,) = sampler.forward(indices, m0)
+    operator = build_operator(case)
+    signal = dictionary.fingerprints[indices].moveaxis(-1, 1) * m0[:, None]
+    (data,) = operator(signal[:, :, None, None])
     noise = torch.randn((*data.shape, 2), device=device, generator=generator)
-    case["data"] = (data + case["noise_std"] * torch.complex(noise[..., 0], noise[..., 1])) * mask[None, :, None]
-    case["truth"] = sampler.maps(indices, m0)
+    case["data"] = (data + case["noise_std"] * torch.complex(noise[..., 0], noise[..., 1])) * mask[None, :, None, None]
+    case["truth"] = torch.cat((parameters[indices].moveaxis(-1, 1), m0.real[:, None], m0.imag[:, None]), 1) * support
     return case
 
 
-def build_dictionary(case: dict[str, Tensor], states: int) -> EPGDictionary:
+def build_dictionary(case: dict[str, Tensor], states: int) -> SignalDictionary:
     """Build the supplied inversion-prepared FISP dictionary with mrpro EPG."""
     sequence = EPGSequence(
         [InversionBlock(case["inversion_time"]), FispBlock(case["flip_angles"], case["rf_phases"], case["te"], case["tr"])]
     )
-    return EPGDictionary.from_sequence(sequence, case["parameters"], case["weights"], states=states)
+
+    def signal_model(m0: Tensor, t1: Tensor, t2: Tensor) -> tuple[Tensor]:
+        _, acquisitions = sequence(Parameters(m0=m0, t1=t1, t2=t2), states)
+        return (torch.stack(acquisitions, 0),)
+
+    return SignalDictionary.from_model(signal_model, case["parameters"], case["weights"])
 
 
-def build_sampler(case: dict[str, Tensor], dictionary: EPGDictionary, prior: PriorDraw, coupling: Coupling, chunk: int) -> EPGSplitGibbs:
-    """Use acquisition noise and map units without baseline adapters."""
-    return EPGSplitGibbs(
-        dictionary,
-        case["sensitivities"],
-        case["mask"],
-        case["data"],
-        case["support"],
-        noise_std=float(case["noise_std"]),
-        coupling=coupling,
-        prior_draw=prior,
-        dictionary_chunk=chunk,
+def build_operator(case: dict[str, Tensor]) -> CartesianAcquisition:
+    """Build P U S from explicit mrpro operators; the sampler supplies none."""
+    return CartesianAcquisition(
+        CartesianMaskingOp(case["mask"][None, :, None, None]),
+        FastFourierOp(dim=(-2, -1)),
+        SensitivityOp(case["sensitivities"][:, None]),
     )
 
 
@@ -139,6 +151,8 @@ def load_acquisition(path: Path, device: str) -> dict[str, Tensor]:
         case = {name: torch.as_tensor(stored[name], device=device) for name in fields}
         if "truth" in stored:
             case["truth"] = torch.as_tensor(stored["truth"], device=device)
+    if case["data"].ndim == 5:
+        case["data"] = case["data"].unsqueeze(3)
     return case
 
 
@@ -169,7 +183,8 @@ def main(
     generator = torch.Generator(device=device).manual_seed(seed)
     case = synthetic_case(device, generator, epg_states, image_size) if acquisition is None else load_acquisition(acquisition, device)
     dictionary = build_dictionary(case, epg_states)
-    prior: PriorDraw = gaussian_prior
+    model = None
+    terminal_sigma = np.nan
     checkpoint_info = {}
     physical_scales = np.empty(0)
     if checkpoint is not None:
@@ -179,13 +194,34 @@ def main(
             .eval()
         )
         assert dataset_scales is not None
-        prior = DiffusionPriorDraw(model, dataset_scales, steps=sde_steps, sigma_min=sigma_min)
+        prior = DiffusionPriorDraw(model, KINDS, dataset_scales, steps=sde_steps, sigma_min=sigma_min)
         checkpoint_info = model.checkpoint_info
         physical_scales = prior.physical_scales(dictionary.parameters).cpu().numpy()
-    sampler = build_sampler(case, dictionary, prior, coupling, dictionary_chunk)
+        terminal_sigma = prior.sigma_min
+    cfg = SplitGibbsConfig(
+        coupling,
+        num_samples=draws,
+        burn_in=burn_in,
+        thinning=thinning,
+        prior_steps=sde_steps,
+        prior_sigma_min=sigma_min,
+        dictionary_chunk=dictionary_chunk,
+    )
+    sampler = SplitGibbsSampler(model, cfg)
     sampling_rng_state = generator.get_state().cpu().numpy()
-    samples = sampler.sample(
-        case["initial_indices"], case["initial_m0"], num_samples=draws, burn_in=burn_in, thinning=thinning, generator=generator
+    (samples,) = sampler.sample(
+        build_operator(case),
+        case["data"],
+        noise_std=float(case["noise_std"]),
+        template=case["initial_m0"],
+        dictionary=dictionary,
+        support=case["support"],
+        kind=KINDS,
+        dataset_scales=dataset_scales,
+        initial_indices=case["initial_indices"],
+        initial_m0=case["initial_m0"],
+        prior_draw=gaussian_prior if model is None else None,
+        generator=generator,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -202,7 +238,7 @@ def main(
         checkpoint_info=json.dumps(checkpoint_info),
         compile_model=compile_model,
         sde_steps=sde_steps,
-        sigma_min=prior.sigma_min if isinstance(prior, DiffusionPriorDraw) else np.nan,
+        sigma_min=terminal_sigma,
         epg_states=epg_states,
         burn_in=burn_in,
         thinning=thinning,

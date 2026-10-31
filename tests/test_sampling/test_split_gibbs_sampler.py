@@ -1,18 +1,35 @@
 """Independent controls for the discrete target and prior-conditional variance."""
 
 import itertools
+from dataclasses import replace
 
 import pytest
 import torch
-from mrpro.operators import FastFourierOp
+from mrpro.data import KTrajectory, SpatialDimension
+from mrpro.operators import FastFourierOp, SensitivityOp
+from mrpro.operators.CartesianSamplingOp import CartesianMaskingOp, CartesianSamplingOp
 from mrpro.operators.models.EPG import EPGSequence, FispBlock, InversionBlock, Parameters
+from mrpro.operators.models.SaturationRecovery import SaturationRecovery
 
 from score_qmri.datasets.kind import DatasetKind
-from score_qmri.sampling.epg_split_gibbs import Coupling, DiffusionPriorDraw, EPGDictionary, EPGSplitGibbs, PriorDraw
+from score_qmri.sampling.split_gibbs_sampler import (
+    CartesianAcquisition,
+    Coupling,
+    DiffusionPriorDraw,
+    PriorDraw,
+    SignalDictionary,
+    SplitGibbsConfig,
+    SplitGibbsSampler,
+    _SplitGibbsProblem,
+)
+
+KINDS = (DatasetKind.T1MAP, DatasetKind.T2MAP, DatasetKind.M0_COMPLEX)
+MASK = torch.tensor([[[True, False]], [[False, True]], [[True, False]]])
+COILS = torch.tensor([[[1.0, 0.8 + 0.3j]], [[0.2 + 0.4j, -0.3 + 0.6j]]], dtype=torch.complex128)
 
 
-def dictionary() -> EPGDictionary:
-    return EPGDictionary(
+def dictionary() -> SignalDictionary:
+    return SignalDictionary(
         torch.tensor([[0.7, 0.06], [1.3, 0.14]], dtype=torch.float64),
         torch.tensor([[0.8 + 0.2j, 0.3 - 0.5j, -0.2 + 0.4j], [0.2 - 0.4j, 0.9 + 0.1j, 0.4 + 0.3j]], dtype=torch.complex128),
         torch.tensor([0.3, 0.7], dtype=torch.float64),
@@ -22,7 +39,12 @@ def dictionary() -> EPGDictionary:
 def test_epg_sequence_dictionary_preserves_amplitude_and_phase() -> None:
     parameters = dictionary().parameters
     sequence = EPGSequence([InversionBlock(0.02), FispBlock(torch.tensor([0.2, 0.6, 0.4]), torch.tensor([0.0, 0.4, 1.2]), 0.003, 0.012)])
-    result = EPGDictionary.from_sequence(sequence, parameters, dictionary().weights, states=12)
+
+    def signal_model(m0: torch.Tensor, t1: torch.Tensor, t2: torch.Tensor) -> tuple[torch.Tensor]:
+        _, signals = sequence(Parameters(m0=m0, t1=t1, t2=t2), 12)
+        return (torch.stack(signals, 0),)
+
+    result = SignalDictionary.from_model(signal_model, parameters, dictionary().weights)
     amplitude = torch.tensor([0.3 + 0.8j, -0.4 + 0.2j], dtype=torch.complex128)
     _, signals = sequence(Parameters(m0=amplitude, t1=parameters[:, 0], t2=parameters[:, 1]), 12)
     torch.testing.assert_close(torch.stack(signals, -1), amplitude[:, None] * result.fingerprints)
@@ -30,24 +52,49 @@ def test_epg_sequence_dictionary_preserves_amplitude_and_phase() -> None:
     assert result.fingerprints.imag.abs().max() > 0
 
 
-def make_sampler(batch: int = 1, prior: PriorDraw | None = None, chunk: int = 1, support: torch.Tensor | None = None) -> EPGSplitGibbs:
-    coils = torch.tensor([[[1.0, 0.8 + 0.3j]], [[0.2 + 0.4j, -0.3 + 0.6j]]], dtype=torch.complex128)
-    mask = torch.tensor([[[True, False]], [[False, True]], [[True, False]]])
-    measurement = torch.zeros(batch, 3, 2, 1, 2, dtype=torch.complex128)
-    measurement[:, :, :, 0, :] = torch.tensor(
+def make_sampler(batch: int = 1, prior: PriorDraw | None = None, chunk: int = 1, support: torch.Tensor | None = None) -> _SplitGibbsProblem:
+    measurement = torch.zeros(batch, 3, 2, 1, 1, 2, dtype=torch.complex128)
+    measurement[:, :, :, 0, 0, :] = torch.tensor(
         [[[0.25 + 0.1j, 0], [0.1 - 0.2j, 0]], [[0, 0.2 + 0.4j], [0, -0.1 + 0.1j]], [[-0.1 + 0.2j, 0], [0.3 + 0.2j, 0]]]
     )
-    return EPGSplitGibbs(
-        dictionary(),
-        coils,
-        mask,
-        measurement,
-        torch.ones(1, 2, dtype=torch.bool) if support is None else support,
-        noise_std=0.45,
-        coupling=(0.4, 0.2, 0.5),
-        prior_draw=prior or (lambda x, rho, g: x),
-        dictionary_chunk=chunk,
+    operator = CartesianAcquisition(
+        CartesianMaskingOp(MASK[None, :, None, None]), FastFourierOp(dim=(-2, -1)), SensitivityOp(COILS[:, None])
     )
+    return _SplitGibbsProblem(
+        operator,
+        measurement,
+        dictionary(),
+        torch.ones(1, 2, dtype=torch.bool) if support is None else support,
+        torch.zeros(batch, 1, 2, dtype=torch.complex128),
+        0.45,
+        SplitGibbsConfig((0.4, 0.2, 0.5), dictionary_chunk=chunk),
+        prior or (lambda x, rho, g: x),
+    )
+
+
+def run(
+    sampler: _SplitGibbsProblem,
+    initial_indices: torch.Tensor,
+    initial_m0: torch.Tensor,
+    *,
+    num_samples: int,
+    burn_in: int,
+    generator: torch.Generator | None,
+) -> torch.Tensor:
+    cfg = replace(sampler.cfg, num_samples=num_samples, burn_in=burn_in)
+    (draws,) = SplitGibbsSampler(None, cfg).sample(
+        sampler.operator,
+        sampler.measurement,
+        noise_std=sampler.noise_std,
+        template=sampler.template,
+        dictionary=sampler.dictionary,
+        support=sampler.support,
+        initial_indices=initial_indices,
+        initial_m0=initial_m0,
+        prior_draw=sampler.prior_draw,
+        generator=generator,
+    )
+    return draws
 
 
 def test_imputation_preserves_observations_and_real_noise_variance() -> None:
@@ -56,10 +103,10 @@ def test_imputation_preserves_observations_and_real_noise_variance() -> None:
     amplitude = torch.full((16000, 1, 2), 0.3 + 0.2j, dtype=torch.complex128)
     generator = torch.Generator().manual_seed(4)
     completed = sampler.impute(indices, amplitude, generator)
-    sampled = sampler.mask[:, None].expand(3, 2, 1, 2)
+    sampled = MASK[:, None, None].expand(3, 2, 1, 1, 2)
     torch.testing.assert_close(completed[:, sampled], sampler.measurement[:, sampled], rtol=0, atol=0)
     signal = sampler.dictionary.fingerprints[indices].moveaxis(-1, 1) * amplitude[:, None]
-    (prediction,) = sampler.fft(signal[:, :, None] * sampler.sensitivities)
+    (prediction,) = sampler.operator.unitary(sampler.operator.sensitivity(signal[:, :, None, None])[0])
     noise = (completed - prediction)[:, ~sampled]
     assert abs(noise.real.mean()) < 0.006
     assert abs(noise.imag.mean()) < 0.006
@@ -69,25 +116,25 @@ def test_imputation_preserves_observations_and_real_noise_variance() -> None:
 
 def test_collapse_against_real_gaussian_evidence() -> None:
     sampler = make_sampler()
-    images = sampler.measurement
+    images = sampler.operator.unitary.H(sampler.measurement)[0]
     auxiliary = torch.tensor([[[[1.1, 0.8]], [[0.09, 0.12]], [[0.4, -0.2]], [[-0.3, 0.5]]]], dtype=torch.float64)
-    logits, means, variances = sampler.collapsed_parameters(images, auxiliary, 0, 2)
+    logits, means, variances = sampler.collapsed_parameters(sampler.measurement, auxiliary, 0, 2)
     expected = torch.empty_like(logits)
     for voxel in range(2):
-        z = images[0, :, :, 0, voxel].flatten()
+        z = images[0, :, :, 0, 0, voxel].flatten()
         real_z = torch.cat((z.real, z.imag))
         mu = auxiliary[0, 2:, 0, voxel]
         for j in range(2):
-            atom = (sampler.dictionary.fingerprints[j, :, None] * sampler.sensitivities[:, 0, voxel]).flatten()
+            atom = (sampler.dictionary.fingerprints[j, :, None] * COILS[:, 0, voxel]).flatten()
             design = torch.cat((torch.stack((atom.real, -atom.imag), -1), torch.stack((atom.imag, atom.real), -1)))
-            covariance = sampler.noise_std**2 * torch.eye(len(real_z)) + sampler.coupling[2] ** 2 * design @ design.T
+            covariance = sampler.noise_std**2 * torch.eye(len(real_z)) + sampler.cfg.coupling[2] ** 2 * design @ design.T
             evidence = torch.distributions.MultivariateNormal(design @ mu, covariance).log_prob(real_z)
             penalty = (
-                (sampler.dictionary.parameters[j] - auxiliary[0, :2, 0, voxel]) / torch.tensor(sampler.coupling[:2])
+                (sampler.dictionary.parameters[j] - auxiliary[0, :2, 0, voxel]) / torch.tensor(sampler.cfg.coupling[:2])
             ).square().sum() / 2
             expected[0, 0, voxel, j] = evidence + sampler.dictionary.weights[j].log() - penalty
-            precision = design.T @ design / sampler.noise_std**2 + torch.eye(2) / sampler.coupling[2] ** 2
-            conditional_mean = torch.linalg.solve(precision, design.T @ real_z / sampler.noise_std**2 + mu / sampler.coupling[2] ** 2)
+            precision = design.T @ design / sampler.noise_std**2 + torch.eye(2) / sampler.cfg.coupling[2] ** 2
+            conditional_mean = torch.linalg.solve(precision, design.T @ real_z / sampler.noise_std**2 + mu / sampler.cfg.coupling[2] ** 2)
             torch.testing.assert_close(means[0, 0, voxel, j], torch.complex(*conditional_mean))
             torch.testing.assert_close(variances[0, 0, voxel, j], torch.linalg.inv(precision)[0, 0])
     torch.testing.assert_close(logits.softmax(-1), expected.softmax(-1))
@@ -99,7 +146,7 @@ def test_full_chain_matches_enumerated_discrete_smoothed_target(use_sde: bool) -
     mu = torch.tensor([1.0, 0.1, 0.25, -0.15], dtype=torch.float64)
     prior_variance = torch.tensor([0.16, 0.025, 0.12, 0.12], dtype=torch.float64)
 
-    def exact_prior(observation: torch.Tensor, coupling: Coupling, generator: torch.Generator) -> torch.Tensor:
+    def exact_prior(observation: torch.Tensor, coupling: Coupling, generator: torch.Generator | None) -> torch.Tensor:
         r2 = observation.new_tensor([*coupling[:2], coupling[2], coupling[2]]).square()
         variance = 1 / (1 / prior_variance + 1 / r2)
         mean = variance[None, :, None, None] * (observation / r2[None, :, None, None] + (mu / prior_variance)[None, :, None, None])
@@ -117,27 +164,27 @@ def test_full_chain_matches_enumerated_discrete_smoothed_target(use_sde: bool) -
             return (variances * x + s2 * means[index, :, None, None]) / (variances + s2)
 
     batch = 4096
-    prior = DiffusionPriorDraw(OracleScore(), (1.0, 1.0, 1.0), steps=128) if use_sde else exact_prior
+    prior = DiffusionPriorDraw(OracleScore(), KINDS, (1.0, 1.0, 1.0), steps=128) if use_sde else exact_prior
     sampler = make_sampler(batch, prior)
     configurations = torch.tensor(list(itertools.product(range(2), repeat=2)))
-    mask = sampler.mask[:, None].expand(3, 2, 1, 2)
+    mask = MASK[:, None, None].expand(3, 2, 1, 1, 2)
     y = sampler.measurement[0][mask]
     m_mean = torch.complex(mu[2], mu[3]).expand(2)
-    amplitude_variance = 2 * (prior_variance[2] + sampler.coupling[2] ** 2)
+    amplitude_variance = 2 * (prior_variance[2] + sampler.cfg.coupling[2] ** 2)
     log_weights, conditional_means, second_moments = [], [], []
     for config in configurations:
         # Build the observed linear amplitude operator independently, one basis vector at a time.
         columns = []
         for voxel in range(2):
             signal = sampler.dictionary.fingerprints[config].T[:, None, :] * torch.eye(2, dtype=torch.float64)[voxel]
-            (kspace,) = FastFourierOp(dim=(-2, -1))(signal[:, None] * sampler.sensitivities)
+            (kspace,) = FastFourierOp(dim=(-2, -1))(signal[:, None, None] * COILS[:, None])
             columns.append(kspace[mask])
         operator = torch.stack(columns, -1)
         cov = 2 * sampler.noise_std**2 * torch.eye(len(y)) + amplitude_variance * operator @ operator.H
         residual = y - operator @ m_mean
         log_evidence = -(residual.conj() @ torch.linalg.solve(cov, residual)).real - torch.linalg.slogdet(cov)[1]
         t = sampler.dictionary.parameters[config]
-        t_variance = prior_variance[:2] + torch.tensor(sampler.coupling[:2]).square()
+        t_variance = prior_variance[:2] + torch.tensor(sampler.cfg.coupling[:2]).square()
         log_prior = -((t - mu[:2]).square() / (2 * t_variance)).sum() + sampler.dictionary.weights[config].log().sum()
         log_weights.append(log_evidence + log_prior)
         mean = m_mean + amplitude_variance * operator.H @ torch.linalg.solve(cov, residual)
@@ -147,7 +194,8 @@ def test_full_chain_matches_enumerated_discrete_smoothed_target(use_sde: bool) -
     probabilities = torch.stack(log_weights).softmax(0)
     expected_mean = (probabilities[:, None] * torch.stack(conditional_means)).sum(0)
     expected_second = (probabilities[:, None, None] * torch.stack(second_moments)).sum(0)
-    samples = sampler.sample(
+    samples = run(
+        sampler,
         torch.zeros(batch, 1, 2, dtype=torch.long),
         torch.zeros(batch, 1, 2, dtype=torch.complex128),
         num_samples=1,
@@ -184,7 +232,7 @@ class GaussianModel(torch.nn.Module):
 
 def test_sde_conditional_moments_scaling_and_reproducibility() -> None:
     model = GaussianModel()
-    prior = DiffusionPriorDraw(model, (2.0, 0.5, 0.4), steps=256)
+    prior = DiffusionPriorDraw(model, KINDS, (2.0, 0.5, 0.4), steps=256)
     obs = torch.full((12000, 4, 1, 1), 0.6, dtype=torch.float64)
     rho = (0.8, 0.4, 1.0)
     scale = torch.tensor([0.5, 1.0, 0.4, 0.4], dtype=torch.float64)
@@ -198,7 +246,7 @@ def test_sde_conditional_moments_scaling_and_reproducibility() -> None:
     small = obs[:2]
     torch.testing.assert_close(prior(small, rho, torch.Generator().manual_seed(1)), prior(small, rho, torch.Generator().manual_seed(1)))
     # At a substantial endpoint the exact reverse process retains extra variance.
-    endpoint = DiffusionPriorDraw(model, (2.0, 0.5, 0.4), steps=256, sigma_min=0.2)
+    endpoint = DiffusionPriorDraw(model, KINDS, (2.0, 0.5, 0.4), steps=256, sigma_min=0.2)
     noisy = endpoint(obs, rho, torch.Generator().manual_seed(83))[:, :, 0, 0]
     start2 = (scale * torch.tensor([rho[0], rho[1], rho[2], rho[2]])).square()
     endpoint_variance = (0.09 + 0.2**2) * (start2 - 0.2**2) / (0.09 + start2) / scale.square()
@@ -237,7 +285,7 @@ def test_sde_preserves_mixture_modes_and_converges_with_step_refinement() -> Non
     obs = observation[None, :, None, None].expand(12000, -1, -1, -1)
     errors = []
     for steps in (8, 512):
-        prior = DiffusionPriorDraw(model, (4.0, 0.5, 1.0), steps=steps)
+        prior = DiffusionPriorDraw(model, KINDS, (4.0, 0.5, 1.0), steps=steps)
         draws = prior(obs, coupling, torch.Generator().manual_seed(19))[:, :, 0, 0]
         errors.append((draws.square().mean(0) - expected_second).abs().max())
         if steps == 512:
@@ -250,7 +298,7 @@ def test_sde_preserves_mixture_modes_and_converges_with_step_refinement() -> Non
 def test_background_physical_only_and_input_unchanged() -> None:
     observed_aux = []
 
-    def prior(x: torch.Tensor, rho: Coupling, g: torch.Generator) -> torch.Tensor:
+    def prior(x: torch.Tensor, rho: Coupling, g: torch.Generator | None) -> torch.Tensor:
         observed_aux.append(x.clone())
         return torch.ones_like(x)
 
@@ -258,10 +306,85 @@ def test_background_physical_only_and_input_unchanged() -> None:
     indices = torch.zeros(1, 1, 2, dtype=torch.long)
     amplitude = torch.ones(1, 1, 2, dtype=torch.complex128)
     before = sampler.measurement.clone()
-    draws = sampler.sample(indices, amplitude, num_samples=2, burn_in=2, generator=torch.Generator().manual_seed(2))
+    draws = run(sampler, indices, amplitude, num_samples=2, burn_in=2, generator=torch.Generator().manual_seed(2))
     assert not draws[..., 1].any()
     assert not observed_aux[0][..., 1].any()
     torch.testing.assert_close(amplitude, torch.ones_like(amplitude))
     torch.testing.assert_close(sampler.measurement, before)
     with pytest.raises(ValueError, match="indices"):
-        sampler.sample(indices + 10, amplitude, num_samples=1, burn_in=0, generator=torch.Generator())
+        run(sampler, indices + 10, amplitude, num_samples=1, burn_in=0, generator=torch.Generator())
+
+
+def test_native_signal_model_and_compressed_cartesian_acquisition() -> None:
+    model = SaturationRecovery(torch.tensor([0.1, 0.5, 1.5], dtype=torch.float64))
+    grid = torch.tensor([[0.7], [1.3]], dtype=torch.float64)
+    dictionary = SignalDictionary.from_model(model, grid, torch.tensor([0.3, 0.7], dtype=torch.float64))
+    amplitude = torch.tensor([0.4 + 0.2j, 0.2 - 0.3j], dtype=torch.complex128)
+    torch.testing.assert_close(model(amplitude, grid[:, 0])[0].T, amplitude[:, None] * dictionary.fingerprints)
+    trajectory = KTrajectory(
+        kz=torch.zeros(1, 1, 1, 1, 1),
+        ky=torch.tensor([-2.0, 0.0]).reshape(1, 1, 1, 2, 1),
+        kx=torch.arange(-2.0, 2.0).reshape(1, 1, 1, 1, 4),
+    )
+    selection = CartesianSamplingOp(SpatialDimension(1, 4, 4), trajectory)
+    coils = torch.polar(torch.ones(2, 1, 4, 4, dtype=torch.float64), torch.arange(32, dtype=torch.float64).reshape(2, 1, 4, 4) / 7)
+    operator = CartesianAcquisition(selection, FastFourierOp(dim=(-2, -1)), SensitivityOp(coils))
+    signal = torch.ones(1, 3, 1, 1, 4, 4, dtype=torch.complex128) * (0.3 + 0.4j)
+    power = operator.validate(signal)
+    torch.testing.assert_close(power, torch.full((1, 4, 4, 3), 2.0, dtype=torch.float64))
+    (data,) = operator(signal)
+    assert data.shape == (1, 3, 2, 1, 2, 4)
+    full = operator.complete(signal.expand(5000, -1, -1, -1, -1, -1), data, 0.2, torch.Generator().manual_seed(41))
+    torch.testing.assert_close(selection(full)[0], data.expand(5000, -1, -1, -1, -1, -1), rtol=0, atol=0)
+    prediction = operator.unitary(operator.sensitivity(signal)[0])[0]
+    noise = (full - prediction)[..., 1::2, :].flatten()
+    torch.testing.assert_close(noise.real.var(), torch.tensor(0.04, dtype=torch.float64), atol=0.001, rtol=0)
+    torch.testing.assert_close(noise.imag.var(), torch.tensor(0.04, dtype=torch.float64), atol=0.001, rtol=0)
+    # General one-coordinate dictionary reaches the same public sampler boundary.
+    (draws,) = SplitGibbsSampler(GaussianModel(), SplitGibbsConfig((0.3, 0.4), num_samples=2, burn_in=1, prior_steps=4)).sample(
+        operator,
+        data,
+        noise_std=0.2,
+        template=torch.zeros(1, 4, 4, dtype=torch.complex128),
+        dictionary=dictionary,
+        support=torch.ones(4, 4, dtype=torch.bool),
+        kind=(DatasetKind.T1MAP, DatasetKind.M0_COMPLEX),
+        dataset_scales=(1.0, 1.0),
+        generator=torch.Generator().manual_seed(7),
+    )
+    assert draws.shape == (2, 1, 3, 4, 4)
+    assert torch.isfinite(draws).all()
+
+
+@pytest.mark.parametrize("bad_factor", ["sampling", "unitary", "sensitivity"])
+def test_rejects_factors_that_break_exact_completion(bad_factor: str) -> None:
+    template = torch.ones(1, 3, 1, 1, 2, 4, dtype=torch.complex128)
+    sampling = CartesianMaskingOp(torch.ones(2, 4))
+    unitary = FastFourierOp(dim=(-2, -1))
+    sensitivity = SensitivityOp(torch.ones(2, 1, 2, 4, dtype=torch.complex128))
+    if bad_factor == "sampling":
+        sampling = CartesianMaskingOp(torch.full((2, 4), 0.5))
+    elif bad_factor == "unitary":
+        unitary = unitary * 2
+    else:
+        weights = torch.arange(1.0, 9.0, dtype=torch.float64).reshape(1, 1, 2, 4).to(torch.complex128)
+        sensitivity = SensitivityOp(weights) @ unitary
+    with pytest.raises(ValueError, match="Exact Gibbs"):
+        CartesianAcquisition(sampling, unitary, sensitivity).validate(template)
+
+
+def test_dictionary_allows_general_coordinates_and_prior_kind_order() -> None:
+    grid = torch.tensor([[0.7, -0.2, 0.01], [1.3, 0.4, 0.03]], dtype=torch.float64)
+
+    def signal(m0: torch.Tensor, t1: torch.Tensor, offset: torch.Tensor, rate: torch.Tensor) -> tuple[torch.Tensor]:
+        return (m0[None] * torch.exp(torch.complex(-t1[None], offset[None])) * (1 + rate[None]),)
+
+    result = SignalDictionary.from_model(signal, grid, torch.ones(2, dtype=torch.float64))
+    assert result.fingerprints.shape == (2, 1)
+    kinds = (DatasetKind.T1MAP, DatasetKind.T2MAP, DatasetKind.T2STARMAP, DatasetKind.M0_COMPLEX)
+    prior = DiffusionPriorDraw(GaussianModel(), kinds, (1.0, 1.0, 1.0, 1.0), steps=4)
+    obs = torch.zeros(2, 5, 2, 2, dtype=torch.float64)
+    draws = prior(obs, (0.4, 0.2, 0.3, 0.5), torch.Generator().manual_seed(10))
+    assert draws.shape == obs.shape and torch.isfinite(draws).all()
+    with pytest.raises(ValueError, match="kinds"):
+        DiffusionPriorDraw(GaussianModel(), kinds[::-1], (1.0, 1.0, 1.0, 1.0))
