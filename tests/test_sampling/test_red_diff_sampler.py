@@ -220,18 +220,29 @@ def test_finite_schedule_matches_hand_computed_adam_updates() -> None:
     assert not result.requires_grad
 
 
-class ZeroNetwork(torch.nn.Module):
+class DistinctHeadsNetwork(torch.nn.Module):
     def forward(self, x: Tensor, cond: Tensor) -> tuple[Tensor, Tensor]:
-        return torch.zeros_like(x), torch.zeros_like(x)
+        return 2 * torch.ones_like(x), -torch.ones_like(x)
 
 
 @pytest.mark.parametrize("kind", [DatasetKind.T1MAP, DatasetKind.COMPLEX_T1W_COIL_COMBINED])
 def test_actual_edm_preconditioned_main_head(kind: DatasetKind) -> None:
-    model = DiffusionModel(unet=ZeroNetwork(), compile_model=False).eval()
+    model = DiffusionModel(unet=DistinctHeadsNetwork(), compile_model=False).eval()
     dtype = torch.complex64 if kind.is_complex else torch.float32
     template = torch.ones(1, 1, 2, dtype=dtype)
     operator = FastFourierOp(dim=(-2, -1))
-    result = REDDiffSampler(model, REDDiffConfig(num_steps=3)).sample(
+    sampler = REDDiffSampler(model, REDDiffConfig(num_steps=3))
+    problem = SamplingProblem(model, operator, operator(template)[0], template, kind, 0.2, 0)
+    mu = problem.encode(template * 0.3).requires_grad_(True)
+    sigma = 0.4
+    epsilon = problem.noise(torch.Generator().manual_seed(2))
+    c_skip = model.sigma_data**2 / (sigma**2 + model.sigma_data**2)
+    c_out = sigma * model.sigma_data / sqrt(sigma**2 + model.sigma_data**2)
+    main = problem.constrain(c_skip * (mu.detach() + sigma * epsilon) + 2 * c_out)
+    expected = problem.gradient(mu) + sampler.cfg.prior_weight * (mu.detach() - main)
+    objective = sampler._objective(mu, problem, sigma, epsilon)
+    torch.testing.assert_close(torch.autograd.grad(objective, mu)[0], expected)
+    result = sampler.sample(
         operator,
         operator(template)[0],
         template=template,
