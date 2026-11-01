@@ -183,15 +183,26 @@ class NonlinearHeads(torch.nn.Module):
 
 @pytest.mark.parametrize("cg_dtype", [None, torch.float64])
 def test_full_main_denoiser_vjp_includes_edm_skip_and_input_derivative(cg_dtype: torch.dtype | None) -> None:
+    class RecordingMatrixOperator(MatrixOperator):
+        def __init__(self, matrix: Tensor) -> None:
+            super().__init__(matrix)
+            self.input_dtypes: list[torch.dtype] = []
+
+        def __call__(self, x: Tensor) -> tuple[Tensor]:
+            self.input_dtypes.append(x.dtype)
+            return super().__call__(x)
+
     model = DiffusionModel(unet=NonlinearHeads(), diffusion=DiffusionConfig(cond_dim=8), compile_model=False).eval()
     model.requires_grad_(False)
-    op = MatrixOperator(torch.tensor([[1.0, 0.4], [0.0, 0.2]]))
+    op = RecordingMatrixOperator(torch.tensor([[1.0, 0.4], [0.0, 0.2]]))
     y = torch.tensor([[[0.1 + 0.2j, -0.1 + 0.3j]]])
     problem = SamplingProblem(model, op, y, op.H(y)[0], COMPLEX, 0.15, 0)
     x = torch.tensor([[[[0.2, -0.1]], [[0.1, 0.3]]]])
     sigma = 0.4
     sampler = PiGDMSampler(model, PiGDMConfig(cg_rtol=1e-6, cg_dtype=cg_dtype))
     denoised, actual = sampler._denoise_and_guidance(x, problem, sigma)
+    assert set(op.input_dtypes) == {torch.complex128 if cg_dtype == torch.float64 else torch.complex64}
+    assert denoised.dtype == actual.dtype == x.dtype
     b = dense_forward(problem, denoised)
     c = 0.15**2 * torch.eye(b.shape[0]) + sampler._variance(sigma) * b @ b.T
 
@@ -374,7 +385,9 @@ def test_inverse_failure_is_not_silently_used() -> None:
     y = torch.full((1, 1, 2), 0.1 + 0.2j, dtype=torch.complex128)
     template = torch.empty_like(y)
     sampler = PiGDMSampler(model, PiGDMConfig(num_steps=3, cg_max_iter=1, cg_rtol=1e-12))
-    with pytest.raises(RuntimeError, match="CG did not converge"):
+    with pytest.raises(RuntimeError, match="CG did not converge") as failure:
         sampler.sample(op, y, noise_std=0.05, template=template, kind=COMPLEX, generator=torch.Generator().manual_seed(7))
+    assert "cg_max_iter" in str(failure.value) and "cg_dtype=torch.float64" in str(failure.value)
+    assert isinstance(failure.value.__cause__, RuntimeError)
     with pytest.raises(ValueError, match="per real coordinate"):
         sampler.sample(op, y, noise_std=0.0, template=template, kind=COMPLEX)

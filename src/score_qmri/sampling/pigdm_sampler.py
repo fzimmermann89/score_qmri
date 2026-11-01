@@ -71,9 +71,11 @@ class PiGDMConfig:
     covariance_std is s in the module equations, per real model coordinate;
     None selects model.sigma_data. eta is the DDIM stochasticity in [0, 1].
     cg_dtype changes only the physics solve precision; the operator must
-    support it. No full denoiser Jacobian enters CG. nonlinear_mode defaults
-    to rejecting operators without a linear adjoint; opt in to the separately
-    labeled local approximation for differentiable nonlinear forward models.
+    support it. Low measurement noise may require more CG iterations or
+    float64 physics to meet cg_rtol. No full denoiser Jacobian enters CG.
+    nonlinear_mode defaults to rejecting operators without a linear adjoint.
+    Opt in to the separately labeled local approximation for differentiable
+    nonlinear forward models.
     """
 
     num_steps: int = 100
@@ -124,8 +126,6 @@ class PiGDMSampler:
 
     @torch.enable_grad()
     def _denoise_and_guidance(self, x: Tensor, problem: SamplingProblem, sigma: float) -> tuple[Tensor, Tensor]:
-        if not problem.linear and self.cfg.nonlinear_mode != "local_linearization":
-            raise ValueError("Nonlinear operators require explicit nonlinear_mode='local_linearization'")
         point = x.detach().requires_grad_(True)
         denoised = self.model.denoise(point, point.new_full((len(point),), sigma), problem.kind)
         center = denoised.detach().to(dtype=self.cfg.cg_dtype or denoised.dtype)
@@ -136,7 +136,13 @@ class PiGDMSampler:
         def covariance(v: Tensor) -> Tensor:
             return problem.noise_std**2 * v + variance * jacobian(adjoint(v))
 
-        solution = conjugate_gradient(covariance, residual, self.cfg.cg_max_iter, self.cfg.cg_rtol)
+        try:
+            solution = conjugate_gradient(covariance, residual, self.cfg.cg_max_iter, self.cfg.cg_rtol)
+        except RuntimeError as error:
+            raise RuntimeError(
+                f"ΠGDM covariance solve failed: {error}. For convergence failures, increase cg_max_iter or use "
+                "cg_dtype=torch.float64 with an operator that supports float64 physics."
+            ) from error
         pullback = adjoint(solution).detach().to(denoised)
         (guidance,) = torch.autograd.grad(denoised, point, pullback)
         return denoised.detach(), problem.constrain(guidance).detach()
@@ -145,9 +151,9 @@ class PiGDMSampler:
     def _step(self, x: Tensor, problem: SamplingProblem, sigma: float, sigma_next: float, noise: Tensor) -> Tensor:
         denoised, guidance = self._denoise_and_guidance(x, problem, sigma)
         # Paper Eqs. 18/20 in VE coordinates; eta=1 recovers the ancestral bridge.
-        noise_std = self.cfg.eta * sigma_next * sqrt(max(0.0, 1 - (sigma_next / sigma) ** 2))
-        residual_std = sqrt(max(0.0, sigma_next**2 - noise_std**2))
-        result = denoised + residual_std / sigma * (x - denoised) + noise_std * noise + self._variance(sigma) * guidance
+        innovation_std = self.cfg.eta * sigma_next * sqrt(max(0.0, 1 - (sigma_next / sigma) ** 2))
+        residual_std = sqrt(max(0.0, sigma_next**2 - innovation_std**2))
+        result = denoised + residual_std / sigma * (x - denoised) + innovation_std * noise + self._variance(sigma) * guidance
         result = problem.constrain(result)
         if not result.isfinite().all():
             raise RuntimeError("Nonfinite ΠGDM trajectory; check the operator, units and covariance approximation")
