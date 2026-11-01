@@ -46,10 +46,12 @@ from .protocols import OperatorProtocol
 class PnPDMConfig:
     """Split coupling, reverse SDE and likelihood solver settings.
 
-    rho and rho_start are per-real-coordinate SDs in normalized MODEL units;
-    their physical SD is divided by the model's fixed kind scale. rho is held
+    rho and rho_start are per-real-coordinate SDs in normalized MODEL units,
+    with physical SD divided by the model's fixed kind scale. Unlike DAPSConfig.rho,
+    they are coupling SDs, not schedule exponents. rho is held
     fixed during burn_in and sample collection. Optional geometric annealing
     from rho_start to rho precedes burn_in; none of those states are retained.
+    A single annealing step uses rho_start before switching to the final rho.
     burn_in is an equilibration budget, not a convergence guarantee. thin
     counts Gibbs transitions between retained states, which remain correlated.
 
@@ -63,6 +65,11 @@ class PnPDMConfig:
     and its real-inner-product adjoint. CG must converge to cg_rtol or raises.
     finite_langevin starts at x for each likelihood block; langevin_step is in
     squared MODEL units and must be small enough for the physical likelihood.
+    For the tether alone, stability requires langevin_step < 2*rho²; likelihood
+    curvature can require a smaller step. Increasing langevin_steps reduces
+    finite-time error, but neither defaults nor this bound guarantee mixing.
+    For a flat likelihood, defaults reach only about 55% of the conditional
+    variance in one block. Tune step and iteration budget for each problem.
     No Metropolis correction or nonlinear local-Gaussian solve is used.
     """
 
@@ -118,8 +125,6 @@ class PnPDMSampler:
     def _likelihood(self, x: Tensor, problem: SamplingProblem, rho: float, generator: torch.Generator) -> Tensor:
         cfg = self.cfg
         if cfg.likelihood == "linear_gaussian" or (cfg.likelihood == "auto" and problem.linear):
-            if not problem.linear:
-                raise ValueError("linear_gaussian requires a linear operator with an adjoint H")
             forward, adjoint = problem.linearize(x)
 
             def precision(v: Tensor) -> Tensor:
@@ -135,6 +140,8 @@ class PnPDMSampler:
             rhs = problem.constrain(rhs + problem.noise(generator) / rho + adjoint(measurement_noise) / problem.noise_std)
             return conjugate_gradient(precision, rhs, cfg.cg_max_iter, cfg.cg_rtol)
 
+        if cfg.langevin_step >= 2 * rho**2:
+            raise ValueError("finite_langevin requires langevin_step < 2*rho² even before likelihood curvature is considered")
         z = x.clone()
         for _ in range(cfg.langevin_steps):
             gradient = problem.gradient(z) + (z - x) / rho**2
@@ -182,8 +189,11 @@ class PnPDMSampler:
 
         template specifies (B, ..., H, W) with singleton nonspatial dimensions;
         its values are ignored. B indexes independent chains, while the leading
-        output axis holds correlated retained draws. initial optionally supplies
-        a physical x state; otherwise x starts at zero. No re-noising is applied.
+        output axis holds correlated retained draws. initial supplies a physical
+        x state and is required for nonlinear operators, whose gradients can be
+        undefined at zero (e.g. relaxation-time signal models). Linear operators
+        default to zero. No re-noising or physical-domain clipping is applied;
+        the caller's signal must remain differentiable along the trajectory.
 
         noise_std is the physical Gaussian SD PER REAL coordinate, including
         each real/imaginary component of complex measurements. Physics acts on
@@ -202,6 +212,8 @@ class PnPDMSampler:
         if cfg.likelihood == "linear_gaussian" and not problem.linear:
             raise ValueError("linear_gaussian requires a linear operator with an adjoint H")
         if initial is None:
+            if not problem.linear:
+                raise ValueError("Nonlinear operators require a valid physical initial state; zero can have undefined signal gradients")
             x = problem.encode(torch.zeros_like(problem.template))
         else:
             if initial.shape != template.shape or initial.is_complex() != problem.complex or not initial.isfinite().all():

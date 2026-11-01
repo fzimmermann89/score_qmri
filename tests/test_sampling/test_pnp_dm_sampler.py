@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 import torch
-from mrpro.operators import FastFourierOp
+from mrpro.operators import FastFourierOp, models
 from torch import Tensor
 
 from score_qmri.datasets.kind import DatasetKind
@@ -141,7 +141,8 @@ def test_fixed_rho_chain_matches_declared_smoothed_likelihood_target() -> None:
     assert draws.shape == (1, *template.shape) and not draws.requires_grad
 
 
-def test_reverse_discretization_refines_toward_gaussian_conditional() -> None:
+def test_reverse_grid_refines_gaussian_conditional_moments() -> None:
+    """Check grid design analytically; the separate draw test exercises _prior."""
     model = GaussianModel()
     rho, variance = 0.4, 0.04
     exact_mean = variance / (variance + rho**2)
@@ -185,6 +186,53 @@ def test_finite_langevin_has_its_declared_finite_gaussian_moments() -> None:
         covariance = transition @ covariance @ transition.mT + 2 * cfg.langevin_step * torch.eye(2)
     assert_moments(result, mean, covariance)
     assert not torch.allclose(covariance, precision.inverse(), atol=0.001)
+
+
+def test_default_finite_langevin_exposes_incomplete_flat_likelihood_mixing() -> None:
+    model = GaussianModel()
+    template = torch.full((8192, 1, 2), 0.1, dtype=torch.float64)
+
+    def flat_forward(x: Tensor) -> tuple[Tensor]:
+        return (x * 0,)
+
+    problem = SamplingProblem(model, flat_forward, torch.zeros_like(template), template, DatasetKind.T1MAP, 0.1, 0)
+    cfg = PnPDMConfig(likelihood="finite_langevin")
+    x = problem.encode(template)
+    sampler = PnPDMSampler(model, cfg)
+    result = sampler._likelihood(x, problem, cfg.rho, torch.Generator().manual_seed(42))
+    transition = 1 - cfg.langevin_step / cfg.rho**2
+    variance = 2 * cfg.langevin_step * (1 - transition ** (2 * cfg.langevin_steps)) / (1 - transition**2)
+    assert_moments(result[:, 0, 0], x[0, 0, 0], torch.eye(2, dtype=torch.float64) * variance)
+    assert 0.55 < variance / cfg.rho**2 < 0.56
+    with pytest.raises(ValueError, match="langevin_step < 2"):
+        PnPDMSampler(model, replace(cfg, rho=0.002)).sample(
+            flat_forward,
+            torch.zeros_like(template),
+            noise_std=0.1,
+            template=template,
+            kind=DatasetKind.T1MAP,
+            initial=template,
+            generator=torch.Generator().manual_seed(42),
+        )
+
+
+@pytest.mark.parametrize("signal_type", [models.InversionRecovery, models.MonoExponentialDecay])
+def test_relaxation_physics_requires_physical_initial_state(signal_type: type) -> None:
+    model = GaussianModel(scale=0.25)
+    signal = signal_type(torch.tensor([0.1, 0.5], dtype=torch.float64))
+    acquisition = FastFourierOp(dim=(-2, -1))
+
+    def operator(x: Tensor) -> tuple[Tensor]:
+        return (acquisition(signal(torch.ones_like(x), x)[0])[0],)
+
+    template = torch.tensor([[[0.7, 1.3]], [[1.1, 0.8]]], dtype=torch.float64)
+    measurement = operator(template)[0]
+    sampler = PnPDMSampler(model, PnPDMConfig(rho=0.01, burn_in=1, reverse_steps=8, langevin_steps=2, langevin_step=1e-6))
+    args = {"noise_std": 0.1, "template": template, "kind": DatasetKind.T1MAP, "measurement_batch_dim": 1}
+    with pytest.raises(ValueError, match="valid physical initial state"):
+        sampler.sample(operator, measurement, generator=torch.Generator().manual_seed(4), **args)
+    (draws,) = sampler.sample(operator, measurement, initial=template, generator=torch.Generator().manual_seed(4), **args)
+    assert draws.isfinite().all() and draws.shape == (1, *template.shape)
 
 
 class EchoSignalFourier:
@@ -300,9 +348,10 @@ def test_failed_cg_and_nonfinite_trajectories_raise() -> None:
         PnPDMSampler(model, cfg)._likelihood(problem.encode(template), problem, 0.2, torch.Generator().manual_seed(1))
 
 
-def test_collection_discards_annealing_and_equilibrates_at_fixed_rho(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("anneal_steps", [1, 3])
+def test_collection_discards_annealing_and_equilibrates_at_fixed_rho(monkeypatch: pytest.MonkeyPatch, anneal_steps: int) -> None:
     model = GaussianModel()
-    cfg = PnPDMConfig(rho=0.1, rho_start=0.8, anneal_steps=3, burn_in=4, num_samples=2, thin=3)
+    cfg = PnPDMConfig(rho=0.1, rho_start=0.8, anneal_steps=anneal_steps, burn_in=4, num_samples=2, thin=3)
     sampler = PnPDMSampler(model, cfg)
     visited: list[float] = []
 
@@ -318,9 +367,12 @@ def test_collection_discards_annealing_and_equilibrates_at_fixed_rho(monkeypatch
         operator, template, noise_std=0.1, template=template, kind=DatasetKind.T1MAP, generator=torch.Generator().manual_seed(1)
     )
     assert len(visited) == cfg.anneal_steps + cfg.burn_in + cfg.num_samples * cfg.thin
-    assert visited[0] == cfg.rho_start and visited[cfg.anneal_steps - 1] == cfg.rho
+    assert visited[0] == cfg.rho_start
+    if anneal_steps > 1:
+        assert visited[cfg.anneal_steps - 1] == cfg.rho
     assert all(rho == cfg.rho for rho in visited[cfg.anneal_steps :])
-    torch.testing.assert_close(draws[:, 0, 0, 0], torch.tensor([10.0, 13.0], dtype=torch.float64))
+    first = cfg.anneal_steps + cfg.burn_in + cfg.thin
+    torch.testing.assert_close(draws[:, 0, 0, 0], torch.tensor([first, first + cfg.thin], dtype=torch.float64))
 
 
 @pytest.mark.parametrize(
