@@ -84,6 +84,9 @@ def test_backtracking_checks_nonlinear_objective_per_sample() -> None:
     assert 0 < report.step_sizes[0][0] < 1
     assert report.step_sizes[0][1] == 1
     assert (report.objective_after < report.objective_before).all()
+    expected_objective = 0.5 * (result - center).square().flatten(1).sum(1)
+    expected_objective += 0.5 * cfg.gamma * (problem.residual(result) / problem.noise_std).abs().square().flatten(1).sum(1)
+    torch.testing.assert_close(report.objective_after, expected_objective)
     one = SamplingProblem(model, operator, operator(template[1:])[0], template[1:], DatasetKind.T1MAP, 0.1, 0)
     single, single_report = sampler._data_consistency(center[1:], one, 0.4)
     torch.testing.assert_close(result[1:], single, rtol=1e-12, atol=1e-12)
@@ -142,5 +145,6 @@ def test_pinned_ir_signal_fourier_composition_real_map_and_time_axis() -> None:
     )
     assert reconstruction.isfinite().all() and not reconstruction.requires_grad
     assert reconstruction.shape == template.shape and reconstruction.dtype == template.dtype
+    assert len(reports) == cfg.num_steps and reports[-1].sigma == model.sigma_min
     assert all(report.mode == "gauss_newton" for report in reports)
     assert all((report.objective_after <= report.objective_before).all() for report in reports)

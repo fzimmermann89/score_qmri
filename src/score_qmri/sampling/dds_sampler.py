@@ -22,9 +22,10 @@ sigma=sqrt((1-alpha_bar)/alpha_bar),
     u_next = u_dc + sigma_next*(sqrt(1-eta²)*epsilon_hat + eta*z).
 
 This uses beta_tilde=1 in Eq. (66), matching the released code's coefficients.
-The Karras grid replaces its VP time grid; the last evaluation only denoises,
-as in the reference endpoint. This is an EDM schedule adaptation, not a
-reproduction of its VP checkpoint, geometric VE grid or rejection heuristic.
+The Karras grid replaces its VP time grid. The endpoint includes a proximal
+update after the final denoise, following the released loop; Algorithm 3's
+pseudocode instead ends with denoising alone. This is an EDM schedule adaptation,
+not a reproduction of its VP checkpoint, geometric VE grid or rejection heuristic.
 
 ``data_consistency='gauss_newton'`` is a nonlinear proximal adaptation: CG
 solves a local Jacobian system, with backtracking on Q. It does not solve the
@@ -57,7 +58,8 @@ from .protocols import OperatorProtocol
 class DDSConfig:
     """DDS schedule, truncated CG budget and nonlinear adaptation settings.
 
-    num_steps counts denoiser calls, including the final denoise-only call.
+    num_steps counts denoiser calls and data-consistency updates, including the
+    final denoise/proximal endpoint without further noise mixing.
     eta controls the released-code noise mixing, in [0, 1]. gamma weights the
     physical Gaussian negative log likelihood relative to the model-coordinate
     tether; it is fixed across sigma levels. Defaults are starting settings,
@@ -118,7 +120,7 @@ class DDSStepDiagnostics:
 
     objectives use Q from the module documentation. step_sizes has one (B,)
     tensor per solve; zero means the nonlinear line search retained its input.
-    No diagnostics are emitted for the final denoise-only call.
+    The final denoise/proximal endpoint also emits diagnostics.
     """
 
     sigma: float
@@ -134,18 +136,18 @@ def _squared_norm(x: Tensor) -> Tensor:
 
 
 @torch.no_grad()
-def _truncated_cg(
-    matvec: Callable[[Tensor], Tensor], initial: Tensor, rhs: Tensor, max_iter: int, rtol: float
-) -> tuple[Tensor, DDSCGDiagnostics]:
-    """DDS-local warm-started, independently batched real-coordinate CG.
+def _truncated_cg(matvec: Callable[[Tensor], Tensor], rhs: Tensor, max_iter: int, rtol: float) -> tuple[Tensor, DDSCGDiagnostics]:
+    """DDS-local correction solve with independently batched real-coordinate CG.
 
-    The shared solver requires convergence and starts at zero; pinned mrpro CG
-    uses one global inner product across samples. Neither preserves DDS's
-    independent, truncated Krylov updates. No implicit backward is used here.
+    The shared solver requires convergence and does not return diagnostics;
+    pinned mrpro CG uses one global inner product across samples. This solver
+    permits truncated independent updates and reports true residuals without
+    an implicit backward. Starting the correction at zero preserves the
+    image-space warm start without applying the normal operator to zero.
     """
-    x = initial.detach().clone()
-    residual = rhs - matvec(x)
-    if not x.isfinite().all() or not residual.isfinite().all():
+    x = torch.zeros_like(rhs)
+    residual = rhs.detach().clone()
+    if not residual.isfinite().all():
         raise RuntimeError("Nonfinite DDS CG input or residual; check the physics and units")
     direction = residual.clone()
     squared = _squared_norm(residual)
@@ -192,16 +194,15 @@ class DDSSampler:
         """
         self.model, self.cfg = model, cfg
 
-    def _objective(self, x: Tensor, center: Tensor, problem: SamplingProblem) -> Tensor:
-        return 0.5 * _squared_norm(x - center) + 0.5 * self.cfg.gamma * _squared_norm(problem.residual(x) / problem.noise_std)
+    def _objective(self, x: Tensor, center: Tensor, whitened_residual: Tensor) -> Tensor:
+        return 0.5 * _squared_norm(x - center) + 0.5 * self.cfg.gamma * _squared_norm(whitened_residual)
 
     @torch.no_grad()
     def _data_consistency(self, center: Tensor, problem: SamplingProblem, sigma: float) -> tuple[Tensor, DDSStepDiagnostics]:
         cfg = self.cfg
-        if cfg.data_consistency == "linear" and not problem.linear:
-            raise ValueError("Linear DDS requires an adjoint; select data_consistency='gauss_newton' for nonlinear physics")
-        point = problem.constrain(center.detach())
-        before = self._objective(point, center, problem)
+        point = center
+        residual = problem.residual(point) / problem.noise_std
+        before = current = self._objective(point, center, residual)
         reports: list[DDSCGDiagnostics] = []
         steps: list[Tensor] = []
         for _ in range(1 if cfg.data_consistency == "linear" else cfg.gauss_newton_steps):
@@ -212,32 +213,38 @@ class DDSSampler:
 
             # A correction solve from zero is exactly CG warm-started at point.
             # For linear DDS point=d; for GN, the tether remains fixed at d.
-            rhs = center - point - cfg.gamma * adjoint(problem.residual(point) / problem.noise_std) / problem.noise_std
-            correction, report = _truncated_cg(precision, torch.zeros_like(point), rhs, cfg.cg_max_iter, cfg.cg_rtol)
+            rhs = center - point - cfg.gamma * adjoint(residual) / problem.noise_std
+            correction, report = _truncated_cg(precision, rhs, cfg.cg_max_iter, cfg.cg_rtol)
             reports.append(report)
             if cfg.data_consistency == "linear":
                 point = problem.constrain(point + correction)
+                current = self._objective(point, center, problem.residual(point) / problem.noise_std)
                 steps.append(point.new_ones(len(point)))
                 break
-            current = self._objective(point, center, problem)
             accepted = torch.zeros(len(point), device=point.device, dtype=torch.bool)
             step = point.new_ones(len(point))
             used_step = torch.zeros_like(step)
             updated = point.clone()
+            updated_residual = residual.clone()
+            updated_objective = current.clone()
             expand = (-1,) + (1,) * (point.ndim - 1)
+            measurement_expand = (-1,) + (1,) * (residual.ndim - 1)
             for _ in range(cfg.backtracking_steps):
                 candidate = problem.constrain(point + step.reshape(expand) * correction)
-                value = self._objective(candidate, center, problem)
+                candidate_residual = problem.residual(candidate) / problem.noise_std
+                value = self._objective(candidate, center, candidate_residual)
                 take = ~accepted & value.isfinite() & (value <= current)
                 updated = torch.where(take.reshape(expand), candidate, updated)
+                updated_residual = torch.where(take.reshape(measurement_expand), candidate_residual, updated_residual)
+                updated_objective = torch.where(take, value, updated_objective)
                 used_step = torch.where(take, step, used_step)
                 accepted |= take
                 if accepted.all():
                     break
                 step = step * 0.5
-            point = updated
+            point, residual, current = updated, updated_residual, updated_objective
             steps.append(used_step)
-        after = self._objective(point, center, problem)
+        after = current
         if not before.isfinite().all() or not after.isfinite().all():
             raise RuntimeError("Nonfinite DDS data-consistency objective; check the physics and units")
         return point, DDSStepDiagnostics(sigma, cfg.data_consistency, tuple(reports), before, after, tuple(steps))
@@ -277,8 +284,8 @@ class DDSSampler:
         physical warm start. All random draws use generator when supplied.
 
         callback receives per-sample true CG residuals and proximal objective
-        values, including exhausted budgets. The final operation denoises only;
-        it can change data consistency and does not emit a CG report.
+        values, including exhausted budgets. The final denoise is followed by
+        data consistency and its report, with no further noise mixing.
         """
         cfg = self.cfg
         start = self.model.sigma_max if cfg.sigma_start is None else cfg.sigma_start
@@ -305,7 +312,10 @@ class DDSSampler:
             if callback is not None:
                 callback(report)
         final = problem.constrain(self.model.denoise(x, x.new_full((len(x),), self.model.sigma_min), problem.kind))
+        final, report = self._data_consistency(final, problem, self.model.sigma_min)
+        if callback is not None:
+            callback(report)
         result = problem.decode(final).detach()
         if not result.isfinite().all():
-            raise RuntimeError("Nonfinite DDS final denoiser output")
+            raise RuntimeError("Nonfinite DDS final reconstruction")
         return (result,)

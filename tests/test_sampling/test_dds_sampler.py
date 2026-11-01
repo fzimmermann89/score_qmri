@@ -48,7 +48,18 @@ def test_cg_truncates_from_warm_start_with_independent_batch_diagnostics() -> No
     matrix = torch.diag(torch.tensor([1.0, 3.0, 12.0], dtype=torch.float64))
     initial = torch.tensor([[0.2, 0.8, -0.1], [0.0, 0.0, 0.0]], dtype=torch.float64)
     rhs = torch.tensor([[1.0, -0.5, 0.2], [0.0, 0.0, 0.0]], dtype=torch.float64)
-    actual, report = _truncated_cg(lambda x: x @ matrix, initial, rhs, 1, 1e-12)
+    correction_rhs = rhs - initial @ matrix
+    calls = 0
+
+    def matvec(x: Tensor) -> Tensor:
+        nonlocal calls
+        calls += 1
+        return x @ matrix
+
+    correction, report = _truncated_cg(matvec, correction_rhs, 1, 1e-12)
+    actual = initial + correction
+    # One Krylov product plus the reported true residual; no zero-start product.
+    assert calls == 2
     r = rhs[0] - initial[0] @ matrix
     expected = initial[0] + r * (r @ r) / (r @ matrix @ r)
     torch.testing.assert_close(actual[0], expected, rtol=1e-14, atol=1e-14)
@@ -56,9 +67,11 @@ def test_cg_truncates_from_warm_start_with_independent_batch_diagnostics() -> No
     assert report.iterations.tolist() == [1, 0]
     assert report.converged.tolist() == [False, True]
     torch.testing.assert_close(report.residual_norm, (rhs - actual @ matrix).norm(dim=1))
-    single, _ = _truncated_cg(lambda x: x @ matrix, initial[:1], rhs[:1], 1, 1e-12)
+    single_correction, _ = _truncated_cg(lambda x: x @ matrix, correction_rhs[:1], 1, 1e-12)
+    single = initial[:1] + single_correction
     torch.testing.assert_close(actual[:1], single, rtol=0, atol=0)
-    solved, converged = _truncated_cg(lambda x: x @ matrix, initial, rhs, 5, 1e-11)
+    solved_correction, converged = _truncated_cg(lambda x: x @ matrix, correction_rhs, 5, 1e-11)
+    solved = initial + solved_correction
     torch.testing.assert_close(solved, torch.linalg.solve(matrix, rhs.mT).mT)
     assert converged.converged.all()
     assert converged.iterations.tolist() == [3, 0]
@@ -72,7 +85,7 @@ def test_cg_rejects_invalid_physics(bad: str) -> None:
         return -x if bad == "negative" else x * float("nan")
 
     with pytest.raises(RuntimeError, match="curvature|Nonfinite"):
-        _truncated_cg(matvec, torch.zeros(2, 3), torch.ones(2, 3), 2, 1e-6)
+        _truncated_cg(matvec, torch.ones(2, 3), 2, 1e-6)
 
 
 @pytest.mark.parametrize("scale", [1.0, 0.25])
@@ -187,8 +200,8 @@ def test_gaussian_finite_trajectory_mean_covariance_and_endpoint() -> None:
         transition = proximal_gain @ denoiser + following / sigma * (1 - cfg.eta**2) ** 0.5 * (eye - denoiser)
         mean = transition.to(mean) @ mean + offset
         covariance = transition @ covariance @ transition.mT + (following * cfg.eta) ** 2 * eye
-    final_gain = torch.linalg.solve(model.covariance + model.sigma_min**2 * eye, model.covariance)
-    mean = final_gain.to(mean) @ mean
+    final_gain = proximal_gain @ torch.linalg.solve(model.covariance + model.sigma_min**2 * eye, model.covariance)
+    mean = final_gain.to(mean) @ mean + offset
     covariance = final_gain @ covariance @ final_gain.mT
     reports: list[DDSStepDiagnostics] = []
     (recon,) = DDSSampler(model, cfg).sample(
@@ -200,8 +213,9 @@ def test_gaussian_finite_trajectory_mean_covariance_and_endpoint() -> None:
         generator=torch.Generator().manual_seed(71),
         callback=reports.append,
     )
-    assert len(model.calls) == cfg.num_steps and len(reports) == cfg.num_steps - 1
+    assert len(model.calls) == cfg.num_steps and len(reports) == cfg.num_steps
     assert model.calls[-1][0] == model.sigma_min
+    assert reports[-1].sigma == model.sigma_min
     values = recon[:, 0]
     for part, target in [(values.real, mean.real), (values.imag, mean.imag)]:
         mean_se = (covariance.diag() / len(values)).sqrt()
