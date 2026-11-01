@@ -81,7 +81,9 @@ def test_objective_and_gradient_match_official_epsilon_surrogate(complex_state: 
     eps_hat = (xt - alpha * clean) / sigma_vp
     stopped = problem.constrain((eps_hat - epsilon).detach())
     expected_prior = cfg.prior_weight * (sigma_vp / alpha) * stopped
-    likelihood = problem.residual(mu).abs().square().sum() / (2 * problem.noise_std**2)
+    residual = problem.residual(mu)
+    squared = residual.real.square() + residual.imag.square() if complex_state else residual.square()
+    likelihood = squared.sum() / (2 * problem.noise_std**2)
     expected_loss = likelihood + (expected_prior * mu).sum()
     torch.testing.assert_close(objective, expected_loss)
     torch.testing.assert_close(gradient, problem.gradient(mu) + expected_prior)
@@ -126,24 +128,26 @@ def test_expected_gradient_matches_smoothed_gaussian_energy_and_minimizer() -> N
     assert not torch.allclose(center, posterior)
 
 
-def test_likelihood_gradient_has_per_real_noise_and_summed_reductions() -> None:
+@pytest.mark.parametrize("noise_std", [0.01, 0.3])
+def test_prior_weight_mapping_preserves_official_gradient_ratio(noise_std: float) -> None:
     model = GaussianEDMPrior()
-    problem = make_problem(model, complex_state=True, batch=2)
+    problem = make_problem(model, complex_state=True, batch=2, noise_std=noise_std)
     mu = problem.encode(problem.template * (0.5 + 0.1j)).detach().requires_grad_(True)
-    sampler = REDDiffSampler(model, REDDiffConfig(prior_weight=0))
-    loss = sampler._objective(mu, problem, 0.3, torch.zeros_like(mu))
+    sigma, official_weight = 0.4, 0.25
+    epsilon = problem.noise(torch.Generator().manual_seed(8))
+    with torch.no_grad():
+        z = mu + sigma * epsilon
+        clean = model.denoise(z, z.new_full((len(z),), sigma), problem.kind)
+        eps_hat = (z - clean) / sigma
     residual = problem.residual(mu)
-    torch.testing.assert_close(loss, (residual.real.square() + residual.imag.square()).sum() / (2 * problem.noise_std**2))
+    official = torch.view_as_real(residual).square().mean() / 2
+    official = official + official_weight * sigma * ((eps_hat - epsilon).detach() * mu).mean()
+    (official_gradient,) = torch.autograd.grad(official, mu)
+    m, n = 2 * residual.numel(), mu.numel()
+    cfg = REDDiffConfig(prior_weight=official_weight * m / (noise_std**2 * n))
+    loss = REDDiffSampler(model, cfg)._objective(mu, problem, sigma, epsilon)
     (gradient,) = torch.autograd.grad(loss, mu)
-    assert isinstance(problem.operator, MatrixOperator)
-    expected = problem.pack(problem.operator.H(residual)[0]) / problem.noise_std**2
-    torch.testing.assert_close(gradient, expected)
-    one = make_problem(model, complex_state=True)
-    single = mu[:1].detach().requires_grad_(True)
-    single_loss = sampler._objective(single, one, 0.3, torch.zeros_like(single))
-    torch.testing.assert_close(gradient[:1], torch.autograd.grad(single_loss, single)[0])
-    torch.testing.assert_close(loss, 2 * single_loss)
-    assert model.calls == []
+    torch.testing.assert_close(gradient, official_gradient * m / noise_std**2, rtol=1e-12, atol=1e-12)
 
 
 def test_public_model_normalization_and_noise_are_mapped_together() -> None:

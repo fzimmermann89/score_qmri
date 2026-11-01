@@ -1,6 +1,6 @@
 """RED-Diff point-mass variational reconstruction with the existing EDM prior.
 
-References checked against primary sources on 2026-10-31:
+Primary sources:
 
 * Mardani et al., ICLR 2024, arXiv:2305.04391v2, Algorithm 1,
   Proposition 2 and Eqs. (9)--(11): https://arxiv.org/html/2305.04391v2
@@ -16,8 +16,7 @@ The existing preconditioned denoiser consumes z in MODEL coordinates, so
 ``epsilon_hat = (z - D(z,s))/s``. The paper defines amplitude SNR, alpha_t/sigma_t,
 not its square. Its linear inverse-SNR weight is therefore lambda*s, giving
 ``g_prior = lambda*s*sg[epsilon_hat-epsilon] = lambda*sg[mu-D(z,s)]``.
-No denoiser Jacobian, extra alpha, sigma_data factor or EDM training-loss weight
-belongs in this update. The official default has zero variational dispersion.
+The official default has zero variational dispersion.
 
 Here the instantaneous surrogate is
 ``sum(|G(decode(mu))-y|**2)/(2*noise_std**2) + lambda*<sg[mu-D(z,s)],mu>``.
@@ -25,8 +24,7 @@ Both terms SUM coordinates and independent batch items. Official code instead
 uses separate means and unwhitened half squared residuals; its lambda is not
 numerically interchangeable when measurement/image sizes or noise units differ.
 This surrogate supplies a gradient; its changing value is not the KL objective
-or a global energy to compare across iterations. Linear Gaussian prior controls
-have expected prior gradient lambda*s**2*(C+s**2*I)^-1*mu, generally not C^-1*mu.
+or a global energy to compare across iterations.
 
 Declared EDM adaptation: descend a finite Karras grid within checkpoint support
 instead of the official uniformly spaced VP timesteps. This is annealed
@@ -59,10 +57,19 @@ from .protocols import OperatorProtocol
 class REDDiffConfig:
     """Annealed reconstruction settings in normalized model coordinates.
 
-    learning_rate is the Adam step size; prior_weight multiplies the summed
-    stopped-gradient signal residual. Adam uses the reference betas (0.9, 0.99),
-    epsilon 1e-8 and no weight decay. None bounds use checkpoint sigma limits.
-    Defaults are reference starting choices, not tuned MRI settings.
+    learning_rate is an absolute Adam step in normalized model coordinates:
+    0.1 is half the default model sigma_data=0.2. Choose it for the model's scale.
+    Adam uses the reference betas (0.9, 0.99), epsilon 1e-8 and no weight decay.
+    None bounds use checkpoint sigma limits.
+
+    prior_weight multiplies the summed stopped-gradient signal residual. Its
+    default 0.25 is uncalibrated and does not reproduce the official strength.
+    For identical coordinates/operator, matching the official separately mean-
+    reduced losses requires prior_weight = lambda_official*m/(noise_std**2*n),
+    where m and n count real measurement and image coordinates in those means.
+    This matches their gradient ratio, not Adam's epsilon under global rescaling.
+    Choose prior_weight for the physical likelihood; no automatic conversion
+    or MRI tuning is applied.
     """
 
     num_steps: int = 1000
@@ -98,7 +105,7 @@ class REDDiffSampler:
         self.model, self.cfg = model, cfg
 
     def _objective(self, mu: Tensor, problem: SamplingProblem, sigma: float, epsilon: Tensor) -> Tensor:
-        """Instantaneous surrogate with fixed epsilon, useful for gradient controls."""
+        """Instantaneous surrogate with a stopped denoiser residual."""
         loss = problem.residual(mu).abs().square().sum() / (2 * problem.noise_std**2)
         if self.cfg.prior_weight:
             with torch.no_grad():
@@ -140,8 +147,7 @@ class REDDiffSampler:
         if not isfinite(start) or not isfinite(end) or not self.model.sigma_min <= end < start <= self.model.sigma_max:
             raise ValueError("RED-Diff schedule must stay within the model's supported sigma range")
         problem = SamplingProblem(self.model, forward_op, measurement, template, kind, noise_std, measurement_batch_dim)
-        zero = torch.zeros_like(problem.template)
-        mu = problem.start(0.0, generator, zero, initial).detach().requires_grad_(True)
+        mu = problem.start(0.0, None, torch.zeros_like(problem.template), initial).requires_grad_(True)
         optimizer = torch.optim.Adam([mu], lr=cfg.learning_rate, betas=(0.9, 0.99), eps=1e-8, weight_decay=0.0)
         grid = karras_sigmas(cfg.num_steps, sigma_min=end, sigma_max=start, rho=cfg.rho, device=mu.device)
         for sigma in grid:
