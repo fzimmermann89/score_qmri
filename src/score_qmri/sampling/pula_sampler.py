@@ -41,6 +41,7 @@ integration outside this reference API.
 from collections.abc import Callable
 from dataclasses import dataclass
 from math import isfinite, sqrt
+from typing import Literal
 
 import torch
 from torch import Tensor
@@ -58,9 +59,14 @@ class PULAConfig:
     """Fixed model-coordinate sigma, Euler step and collection settings.
 
     burn_in counts discarded transitions at the target sigma. num_samples
-    counts retained states, separated by thinning transitions. Defaults are
+    counts states separated by thinning transitions; without return_chain only
+    the final state after the full collection is returned. Defaults are
     engineering starting values, not a mixing or stability guarantee.
     cg_rtol must be small enough for the required covariance accuracy.
+    cg_dtype defaults to float64 for the normal-metric solve and perturbations;
+    the linear operator must support this precision. None uses model precision,
+    which may need a looser cg_rtol for ill-conditioned systems. The denoiser
+    and returned states keep model precision. A supplied diagonal ignores CG.
     """
 
     sigma: float = 0.01
@@ -70,6 +76,7 @@ class PULAConfig:
     thinning: int = 1
     cg_max_iter: int = 100
     cg_rtol: float = 1e-6
+    cg_dtype: Literal["float32", "float64"] | None = "float64"
 
     def __post_init__(self) -> None:
         if not all(isfinite(v) and v > 0 for v in (self.sigma, self.step_size, self.cg_rtol)):
@@ -79,6 +86,8 @@ class PULAConfig:
             raise ValueError("Iteration counts must be integers")
         if self.burn_in < 0 or min(counts[1:]) < 1 or self.cg_rtol >= 1:
             raise ValueError("Require nonnegative burn_in, positive collection/CG counts and cg_rtol < 1")
+        if self.cg_dtype not in (None, "float32", "float64"):
+            raise ValueError("cg_dtype must be float32, float64 or None (model precision)")
 
 
 class PULASampler:
@@ -115,20 +124,24 @@ class PULASampler:
         if not problem.linear:
             raise ValueError("Nonlinear likelihood transfer requires an explicit frozen positive diagonal metric")
         jacobian, adjoint = problem.linearize(problem.pack(torch.zeros_like(problem.template)))
+        dtype = problem.scale.dtype if cfg.cg_dtype is None else {"float32": torch.float32, "float64": torch.float64}[cfg.cg_dtype]
 
         def precision(v: Tensor) -> Tensor:
             return problem.constrain(adjoint(jacobian(v))).to(v) / problem.noise_std**2 + v / cfg.sigma**2
 
         def apply(rhs: Tensor) -> Tensor:
-            return conjugate_gradient(precision, rhs.to(problem.scale), cfg.cg_max_iter, cfg.cg_rtol)
+            return conjugate_gradient(precision, rhs.to(dtype=dtype), cfg.cg_max_iter, cfg.cg_rtol)
 
         def perturbation() -> Tensor:
-            y = problem.measurement
+            y = problem.measurement.to(
+                dtype=(torch.complex128 if dtype == torch.float64 else torch.complex64) if problem.measurement.is_complex() else dtype
+            )
             if y.is_complex():
                 epsilon = normal_like(y, generator)
             else:
                 epsilon = torch.randn(y.shape, device=y.device, dtype=y.dtype, generator=generator)
-            return problem.constrain(adjoint(epsilon)) / problem.noise_std + problem.noise(generator) / cfg.sigma
+            image_noise = torch.randn((problem.shape[0], 2, *problem.shape[-2:]), device=y.device, dtype=dtype, generator=generator)
+            return problem.constrain(adjoint(epsilon)) / problem.noise_std + problem.constrain(image_noise) / cfg.sigma
 
         return apply, perturbation
 
@@ -170,7 +183,8 @@ class PULASampler:
             Optional physical starting state, used without additional re-noising.
             Otherwise linear normal-metric pULA uses a Gaussian surrogate start
             with N(0, sigma² I) regularization in model coordinates. A supplied
-            diagonal uses a zero-mean model Gaussian start with that variance.
+            diagonal uses a zero-mean Gaussian start with variance sigma² per
+            model coordinate.
         diagonal
             Optional fixed positive diagonal of M in model coordinates, scalar
             or broadcastable to (B, 2, H, W). An estimated metric must be estimated
@@ -193,7 +207,12 @@ class PULASampler:
             x = problem.start(0.0, generator, torch.zeros_like(problem.template), initial)
         elif diagonal is None:
             _, adjoint = problem.linearize(problem.pack(torch.zeros_like(problem.template)))
-            x = apply(problem.constrain(adjoint(problem.measurement)) / noise_std**2 + perturbation())
+            random_rhs = perturbation()
+            measurement_dtype = random_rhs.dtype
+            if problem.measurement.is_complex():
+                measurement_dtype = torch.complex128 if measurement_dtype == torch.float64 else torch.complex64
+            x = apply(problem.constrain(adjoint(problem.measurement.to(dtype=measurement_dtype))) / noise_std**2 + random_rhs)
+            x = x.to(problem.scale)
         else:
             x = problem.start(cfg.sigma, generator, None)
         sigma = x.new_full((x.shape[0],), cfg.sigma)
@@ -201,7 +220,7 @@ class PULASampler:
         for i in range(cfg.burn_in + cfg.num_samples * cfg.thinning):
             denoised = self.model.denoise(x, sigma, problem.kind)
             score = problem.constrain((denoised - x) / cfg.sigma**2) - problem.gradient(x)
-            x = problem.constrain(x + apply(cfg.step_size * score + sqrt(2 * cfg.step_size) * perturbation()))
+            x = problem.constrain(x + apply(cfg.step_size * score + sqrt(2 * cfg.step_size) * perturbation()).to(x))
             if not x.isfinite().all():
                 raise RuntimeError("Nonfinite pULA trajectory; reduce step_size and check likelihood/model units")
             if return_chain and i >= cfg.burn_in and (i - cfg.burn_in + 1) % cfg.thinning == 0:

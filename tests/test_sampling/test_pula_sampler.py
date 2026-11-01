@@ -39,7 +39,8 @@ class MatrixOperator:
         self.matrix = matrix
 
     def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor]:
-        return (x @ self.matrix.to(x).mT,)
+        dtype = torch.promote_types(x.dtype, self.matrix.dtype)
+        return (x.to(dtype=dtype) @ self.matrix.to(device=x.device, dtype=dtype).mT,)
 
     @property
     def H(self) -> "MatrixOperator":
@@ -156,6 +157,53 @@ def test_centered_orthonormal_masked_fourier_complex_gaussian() -> None:
         torch.testing.assert_close(part.var(0), discrete_var, rtol=0.09, atol=0)
 
 
+@pytest.mark.parametrize("condition", [100, 10000])
+def test_float32_high_snr_fourier_uses_accurate_physics_solve(condition: int) -> None:
+    model = GaussianPrior(torch.eye(32, dtype=torch.float32) * 0.05)
+    fourier = FastFourierOp(dim=(-2, -1))
+    mask = torch.zeros(32, 32)
+    mask[:, ::4] = 1
+    cfg = PULAConfig(burn_in=0)
+    tau = cfg.sigma / (condition - 1) ** 0.5
+    template = torch.zeros(2, 32, 32, dtype=torch.complex64)
+    sampler = PULASampler(model, cfg)
+    problem = SamplingProblem(model, mask * fourier, template[:1], template, DatasetKind.M0_COMPLEX, tau, 0)
+    apply, _ = sampler._metric(problem, None, torch.Generator().manual_seed(2))
+    rhs = torch.randn((2, 2, 32, 32), generator=torch.Generator().manual_seed(3))
+    solved = apply(rhs)
+    expected = fourier.H(fourier(torch.complex(rhs[:, 0].double(), rhs[:, 1].double()))[0] / (mask / tau**2 + 1 / cfg.sigma**2))[0]
+    torch.testing.assert_close(torch.complex(solved[:, 0], solved[:, 1]), expected, rtol=2e-6, atol=1e-10)
+    (result,) = sampler.sample(
+        mask * fourier,
+        template[:1],
+        noise_std=tau,
+        template=template,
+        kind=DatasetKind.M0_COMPLEX,
+        generator=torch.Generator().manual_seed(2),
+    )
+    assert result.dtype == torch.complex64 and result.isfinite().all()
+
+
+def test_real_map_complex_measurement_public_step_noise_covariance() -> None:
+    model = GaussianPrior(torch.eye(2, dtype=torch.float64) * 0.1)
+    matrix = torch.tensor([[1.0 + 0.5j, -0.3 + 0.7j], [0.2 - 0.8j, 1.1 + 0.4j]], dtype=torch.complex128)
+    operator = MatrixOperator(matrix)
+    cfg = PULAConfig(sigma=0.2, step_size=0.1, burn_in=0, cg_rtol=1e-10)
+    template = torch.zeros(25000, 1, 2, dtype=torch.float64)
+    (draws,) = PULASampler(model, cfg).sample(
+        operator,
+        torch.zeros(1, 1, 2, dtype=torch.complex128),
+        noise_std=0.3,
+        template=template,
+        initial=template,
+        kind=DatasetKind.T1MAP,
+        generator=torch.Generator().manual_seed(11),
+    )
+    precision = (matrix.mH @ matrix).real / 0.3**2 + torch.eye(2, dtype=torch.float64) / cfg.sigma**2
+    expected = 2 * cfg.step_size * torch.linalg.inv(precision)
+    torch.testing.assert_close(torch.cov(draws[:, 0].mT), expected, rtol=0.05, atol=0.0001)
+
+
 class CubicSignal(Operator):
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor]:
         return (torch.stack([x + 0.1 * x**3, 0.5 * x], dim=0),)
@@ -260,7 +308,16 @@ def test_invalid_metrics_fail(diagonal: torch.Tensor) -> None:
 
 
 @pytest.mark.parametrize(
-    "kwargs", [{"sigma": 0}, {"step_size": float("nan")}, {"burn_in": -1}, {"thinning": 0}, {"num_samples": 1.5}, {"cg_rtol": 1}]
+    "kwargs",
+    [
+        {"sigma": 0},
+        {"step_size": float("nan")},
+        {"burn_in": -1},
+        {"thinning": 0},
+        {"num_samples": 1.5},
+        {"cg_rtol": 1},
+        {"cg_dtype": torch.float16},
+    ],
 )
 def test_invalid_config_fails(kwargs: dict) -> None:
     with pytest.raises(ValueError):
