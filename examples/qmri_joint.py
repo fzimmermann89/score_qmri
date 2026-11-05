@@ -17,6 +17,7 @@ Both methods are approximate; sample spread is not calibrated.
 
 import json
 from dataclasses import asdict
+from math import isfinite
 from pathlib import Path
 from typing import Literal, cast
 
@@ -44,6 +45,8 @@ class JointPrior:
     """Separate T1 and complex-M0 priors in diffusion coordinates."""
 
     def __init__(self, model: DiffusionModel, m0_prior_scale: float) -> None:
+        if not isfinite(m0_prior_scale) or m0_prior_scale <= 0:
+            raise ValueError("m0_prior_scale must be finite and positive")
         self.model, self.scale = model, m0_prior_scale
         self.t1_scale = model.normalize(
             torch.ones(1, 1, 1, device=model.device), torch.tensor([DatasetKind.T1MAP], device=model.device)
@@ -140,6 +143,8 @@ def sample(
     The reference maps define the simulation and evaluation only. Use the same
     input, seed, noise_std and output folder for both methods.
     """
+    if draws < 1 or batch_size < 1:
+        raise ValueError("draws and batch_size must be positive")
     output.mkdir(parents=True, exist_ok=True)
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
@@ -181,9 +186,6 @@ def sample(
             with np.load(path) as saved:
                 if any(not np.array_equal(saved[key], value) for key, value in values.items()):
                     raise ValueError(f"{path} differs from this run; use a new output directory")
-    for name, values in shared.items():
-        if not (output / name).exists():
-            np.savez_compressed(output / name, **values)
     model = DiffusionModel.from_checkpoint(checkpoint, compile_model=False, weights="ema").to(device).eval().requires_grad_(False)
     prior = JointPrior(model, m0_prior_scale)
     cfg = (
@@ -201,6 +203,9 @@ def sample(
     )
     if method == "daps" and not prior.sigma_min < sigma_min < prior.sigma_max:
         raise ValueError("Require prior noise floor < sigma_min < prior noise maximum")
+    for name, values in shared.items():
+        if not (output / name).exists():
+            np.savez_compressed(output / name, **values)
     # The public API describes one map kind. These local adapters use the same
     # step routines for a product prior without extending that library API.
     sampler = DPSSampler(cast(DiffusionModel, prior), cfg) if isinstance(cfg, DPSConfig) else DAPSSampler(cast(DiffusionModel, prior), cfg)
@@ -282,6 +287,8 @@ def plot(results: Path, output: Path, t1_colors: Path | None = None, mask_thresh
     data = {}
     for method in ("dps", "daps"):
         with np.load(results / f"{method}.npz") as samples:
+            if len(samples["t1"]) < 2:
+                raise ValueError("At least two draws per method are required for SD and coverage plots")
             data[method] = {"t1": samples["t1"].astype(float), "m0": np.abs(samples["m0"]).astype(float)}
     mask = truth["m0"] > mask_threshold
     coords = np.argwhere(mask)
