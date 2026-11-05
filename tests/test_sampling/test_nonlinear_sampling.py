@@ -5,7 +5,7 @@ import torch
 from mrpro.operators import FastFourierOp, models
 
 from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
-from score_qmri.sampling._problem import SamplingProblem
+from score_qmri.sampling.problem import SamplingProblem
 
 from .test_dps_sampler import GaussianPrior
 
@@ -15,9 +15,6 @@ class MapPrior(GaussianPrior):
 
     def normalize(self, x, kind):
         return x * 0.25
-
-    def denormalize(self, x, kind):
-        return x * 4
 
 
 class KnownM0IR:
@@ -48,16 +45,19 @@ def test_ir_gradient_and_jacobian_include_scaling_and_time_axis():
     assert torch.count_nonzero(problem.noise(torch.Generator().manual_seed(4))[:, 1]) == 0
 
 
-def test_real_linear_pullback_matches_autograd():
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_real_linear_pullback_matches_autograd(dtype):
     model = MapPrior()
-    operator = FastFourierOp(dim=(-2, -1))
-    template = torch.ones(2, 1, 2, dtype=torch.float64)
+    operator = torch.ones(1, 2, dtype=torch.complex128) * FastFourierOp(dim=(-2, -1))
+    template = torch.ones(2, 1, 2, dtype=dtype)
     y = operator(template)[0] + 0.02j
     problem = SamplingProblem(model, operator, y, template, 6, 0.1, 0)
     x = problem.encode(template * 0.8).requires_grad_(True)
     objective = problem.residual(x).abs().square().sum() / (2 * 0.1**2)
     gradient = torch.autograd.grad(objective, x)[0]
-    torch.testing.assert_close(problem.gradient(x), gradient)
+    actual = problem.gradient(x)
+    assert actual.dtype == x.dtype
+    torch.testing.assert_close(actual, gradient)
 
 
 class NonlinearEncoding:

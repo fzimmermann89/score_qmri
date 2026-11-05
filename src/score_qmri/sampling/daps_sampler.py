@@ -9,8 +9,8 @@ from torch import Tensor
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
 
-from ._problem import SamplingProblem
 from .edm_sampler import karras_sigmas
+from .problem import SamplingProblem
 from .protocols import OperatorProtocol
 
 
