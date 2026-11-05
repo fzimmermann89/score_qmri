@@ -46,6 +46,7 @@ class ScheduledBatchSampler(BatchSampler):
         rank: int = 0,
         sampler: "torch.utils.data.Sampler | None" = None,
         max_steps: int | None = None,
+        start_step: int = 0,
     ):
         """
         Parameters
@@ -73,6 +74,8 @@ class ScheduledBatchSampler(BatchSampler):
             Total training steps. Sampler reports this as its length, enabling single-epoch
             training that avoids iterator recreation overhead. If None, falls back to
             total_samples // batch_size (legacy behavior with warning).
+        start_step
+            Completed batches before this iterator, including resumed training.
         """
         n_ds = len(dataset.datasets)
         if not (len(dataset_lengths) == len(dataset_kinds) == len(schedules) == n_ds):
@@ -100,7 +103,7 @@ class ScheduledBatchSampler(BatchSampler):
         self.rank = rank
 
         self.rng = torch.Generator()
-        self.rng.manual_seed(base_seed + rank)
+        self.reset_step(start_step)
 
         self.dataset_lengths = torch.tensor(dataset_lengths, dtype=torch.float32)
         self.dataset_kinds = torch.tensor([int(k) for k in dataset_kinds], dtype=torch.long)
@@ -168,7 +171,8 @@ class ScheduledBatchSampler(BatchSampler):
 
     def reset_step(self, step: int = 0) -> None:
         self.step = step
+        self.set_epoch(0)
 
     def set_epoch(self, epoch: int) -> None:
         """Called by Lightning at epoch boundaries. Reseeds RNG but preserves step for schedule continuity."""
-        self.rng.manual_seed(self.base_seed + self.rank + epoch * 10000)
+        self.rng.manual_seed(self.base_seed + self.rank + epoch * 10000 + self.step * 1000003)

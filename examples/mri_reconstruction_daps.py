@@ -13,7 +13,6 @@
 # %%
 
 from pathlib import Path
-from typing import cast
 
 import mrpro
 import torch
@@ -51,7 +50,8 @@ fourier_op = FourierOp.from_kdata(k_us)
 op = fourier_op @ csm.as_operator()
 
 # %% Load the model
-model = cast(DiffusionModel, torch.compile(DiffusionModel.from_checkpoint(CHECKPOINT_PATH).cuda().eval()))
+# Use eager execution for repeated Jacobian products.
+model = DiffusionModel.from_checkpoint(CHECKPOINT_PATH, compile_model=False).cuda().eval()
 
 # %%
 # Direct (zero-filled) reconstruction for reference.

@@ -13,7 +13,6 @@
 # %%
 
 from pathlib import Path
-from typing import cast
 
 import mrpro
 import torch
@@ -52,7 +51,8 @@ op = fourier_op @ csm.as_operator()
 
 # %%
 # Load the diffusion model (VE/EDM framework)
-model = cast(DiffusionModel, torch.compile(DiffusionModel.from_checkpoint(CHECKPOINT_PATH).cuda().eval()))
+# Use eager execution for repeated Jacobian products.
+model = DiffusionModel.from_checkpoint(CHECKPOINT_PATH, compile_model=False).cuda().eval()
 
 # %% DPS config and sampler
 # Set tau from the measured noise after applying the k-space scaling above.
