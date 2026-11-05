@@ -1,4 +1,4 @@
-"""Compare ensemble uncertainty with known reconstruction errors without smoothing."""
+"""Compare uncertainty and reconstruction errors in centered MR2 Fourier coordinates."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def diagnostic(error: np.ndarray, std: np.ndarray, roi: np.ndarray) -> dict[str,
 
 def main() -> None:
     parser = ArgumentParser(description=__doc__)
-    parser.add_argument("--runs", type=Path, nargs="+", required=True)
+    parser.add_argument("--runs", type=Path, nargs="+", required=True, help="Run directories with centered MR2 images and k-space")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)

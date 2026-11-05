@@ -5,6 +5,12 @@ from runpy import run_path
 
 import numpy as np
 import pytest
+import torch
+from mr2.operators import FastFourierOp, models
+
+from score_qmri.models.diffusion import DiffusionConfig, DiffusionModel, NormalizationConfig
+from score_qmri.models.unet import UNet
+from score_qmri.sampling import MRIProblem
 
 
 @pytest.mark.parametrize("changed", [{"seed": 43}, {"regularization": 0.1}])
@@ -38,3 +44,27 @@ def test_joint_example_rejects_inconsistent_shared_results(tmp_path, monkeypatch
     with pytest.raises(RuntimeError, match="checkpoint unavailable"):
         example["sample"](*arguments, device="cpu", method="daps")
     assert all(path.read_bytes() == contents for path, contents in saved.items())
+
+
+@pytest.mark.parametrize("t1_scale", [0.25, 0.5])
+def test_joint_example_respects_checkpoint_t1_scale(t1_scale):
+    example = run_path(str(Path(__file__).parents[2] / "examples/qmri_joint.py"))
+    model = DiffusionModel(
+        unet=UNet(base_channels=8, num_res_blocks=1, channel_mult=(1,), attention_levels=(), cond_dim=16),
+        diffusion=DiffusionConfig(cond_dim=16, normalization=NormalizationConfig(kind_scales={"T1MAP": t1_scale})),
+        compile_model=False,
+    )
+    prior = example["JointPrior"](model, 0.2383)
+    assert prior.t1_scale == t1_scale
+    state = torch.tensor([1.2 * t1_scale, 0, 1, 0.2], dtype=torch.float64)[None, :, None, None].expand(1, 4, 2, 3)
+    state = state.clone().requires_grad_(True)
+    signal = models.SaturationRecovery(torch.tensor([0.5, 1.0, 2.0, 8.0], dtype=torch.float64))
+    encoding = FastFourierOp(dim=(-2, -1))
+    m0 = torch.complex(state[:, 2].detach(), state[:, 3].detach())
+    measurement = encoding(signal(m0, torch.full_like(m0.real, 1.2))[0])[0] + 0.01j
+    physical = MRIProblem(encoding, measurement, 0.03, signal_model=signal, measurement_batch_dim=1)
+    joint = example["JointProblem"](physical, 1, prior.t1_scale)
+    torch.testing.assert_close(joint.decode(state)[0], torch.full_like(m0.real, 1.2))
+    loss = joint.residual(state).abs().square().sum() / (2 * physical.noise_std**2)
+    (expected,) = torch.autograd.grad(loss, state)
+    torch.testing.assert_close(joint.gradient(state), expected, rtol=1e-12, atol=1e-12)

@@ -41,10 +41,13 @@ import matplotlib.pyplot as plt
 
 
 class JointPrior:
-    """Product prior in state coordinates [T1/4, 0, Re(M0), Im(M0)]."""
+    """Separate T1 and complex-M0 priors in diffusion coordinates."""
 
     def __init__(self, model: DiffusionModel, m0_prior_scale: float) -> None:
         self.model, self.scale = model, m0_prior_scale
+        self.t1_scale = model.normalize(
+            torch.ones(1, 1, 1, device=model.device), torch.tensor([DatasetKind.T1MAP], device=model.device)
+        ).item()
         self.sigma_min = max(model.sigma_min, model.sigma_min / self.scale)
         self.sigma_max = min(model.sigma_max, model.sigma_max / self.scale)
         self.sigma_data = model.sigma_data
@@ -63,8 +66,9 @@ class JointProblem:
 
     linear = False
 
-    def __init__(self, problem: MRIProblem, batch: int) -> None:
+    def __init__(self, problem: MRIProblem, batch: int, t1_scale: float) -> None:
         self.problem = problem
+        self.t1_scale = t1_scale
         self.measurement = problem.measurement.moveaxis(problem.measurement_batch_dim, 0)
         self.noise_std = problem.noise_std
         self.shape = (batch, 4, *self.measurement.shape[-2:])
@@ -76,7 +80,7 @@ class JointProblem:
         return noise
 
     def decode(self, x: Tensor) -> tuple[Tensor, Tensor]:
-        return 4 * x[:, 0], torch.complex(x[:, 2], x[:, 3])
+        return x[:, 0] / self.t1_scale, torch.complex(x[:, 2], x[:, 3])
 
     def residual(self, x: Tensor) -> Tensor:
         t1, m0 = self.decode(x)
@@ -86,7 +90,7 @@ class JointProblem:
     def gradient(self, x: Tensor) -> Tensor:
         t1, m0 = self.decode(x)
         m0_gradient, t1_gradient = self.problem.gradient(m0, t1.clamp_min(0.05))
-        t1_gradient = 4 * t1_gradient * (t1 > 0.05)
+        t1_gradient = t1_gradient * (t1 > 0.05) / self.t1_scale
         return torch.stack([t1_gradient, torch.zeros_like(t1_gradient), m0_gradient.real, m0_gradient.imag], dim=1)
 
 
@@ -133,8 +137,8 @@ def sample(
     m0_prior_scale maps physical M0 to its training coordinates, including
     dataset scaling. It multiplies both denoiser input and noise level, with
     inverse output scaling. It does not rescale measurements or their noise.
-    The reference maps define the simulation and evaluation only. Reuse one
-    input and output folder for both methods to use the same measurements.
+    The reference maps define the simulation and evaluation only. Use the same
+    input, seed, noise_std and output folder for both methods.
     """
     output.mkdir(parents=True, exist_ok=True)
     torch.backends.cuda.matmul.allow_tf32 = False
@@ -160,6 +164,8 @@ def sample(
     fit_t1, fit_m0 = cg_fit(encoding, measurement, times, regularization)
     shared: dict = {
         "case.npz": {
+            "checkpoint": np.asarray(str(checkpoint.resolve())),
+            "m0_prior_scale": np.asarray(m0_prior_scale),
             "t1": t1.cpu().numpy(),
             "m0": m0.cpu().numpy(),
             "times": times.cpu().numpy(),
@@ -200,7 +206,7 @@ def sample(
     sampler = DPSSampler(cast(DiffusionModel, prior), cfg) if isinstance(cfg, DPSConfig) else DAPSSampler(cast(DiffusionModel, prior), cfg)
     samples_t1, samples_m0 = [], []
     for batch in range(0, draws, batch_size):
-        problem = JointProblem(physical_problem, min(batch_size, draws - batch))
+        problem = JointProblem(physical_problem, min(batch_size, draws - batch), prior.t1_scale)
         generator = torch.Generator(device=device).manual_seed(seed + 1 + batch)
         x = prior.sigma_max * problem.noise(generator)
         grid = karras_sigmas(

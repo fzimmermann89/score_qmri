@@ -35,7 +35,7 @@ def metrics(x: torch.Tensor, truth: torch.Tensor, op: LinearOperator, y: torch.T
 def main() -> None:
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--cases", type=Path, required=True)
+    parser.add_argument("--cases", type=Path, required=True, help="NPZ with centered images, masks and k-space measurements")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--case-index", type=int, required=True)
     parser.add_argument("--kind", type=str, required=True)

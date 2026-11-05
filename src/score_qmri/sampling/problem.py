@@ -56,14 +56,8 @@ class MRIProblem:
     @torch.enable_grad()
     def gradient(self, *parameters: Tensor) -> tuple[Tensor, ...]:
         """Gaussian negative-log-likelihood gradients in physical coordinates."""
-        if self.signal_model is None:
-            (gradient,) = self.encoding.H(self.residual(*parameters))
-            if not parameters[0].is_complex():
-                gradient = gradient.real
-            return (gradient.to(parameters[0]) / self.noise_std**2,)
-
         points = tuple(parameter.detach().requires_grad_(True) for parameter in parameters)
-        (image,) = self.signal_model(*points)
+        (image,) = points if self.signal_model is None else self.signal_model(*points)
         with torch.no_grad():
             (backprojection,) = self.encoding.H(self.encoding(image.detach())[0] - self.measurement)
             if not image.is_complex():
