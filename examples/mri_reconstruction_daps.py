@@ -95,7 +95,7 @@ plot(x_zf, ax[1], "Zero-filled")
 plot(x_cg, ax[2], "CG")
 plot(recon.mean(0), ax[3], "DAPS")
 if BATCH > 1:
-    plot(recon.std(0), ax[4], "DAPS std")
+    plot(recon.std(0), ax[4], "Sample spread (uncalibrated)")
 fig.tight_layout()
 
 # %%
