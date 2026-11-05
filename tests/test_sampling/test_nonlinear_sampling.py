@@ -124,3 +124,28 @@ def test_nonlinear_dps_correction_matches_dense_covariance(dtype, cg_dtype):
     actual = DPSSampler(model, DPSConfig(cg_rtol=1e-12, cg_dtype=cg_dtype))._step(x, problem, sigma, following, torch.zeros_like(x))
     tolerance = 1e-12 if dtype == torch.float64 else 1e-5
     torch.testing.assert_close(actual, expected, rtol=tolerance, atol=tolerance)
+
+
+def test_norm_dps_supports_backward_only_nonlinear_operators():
+    class Square(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, image):
+            ctx.save_for_backward(image)
+            return image.square()
+
+        @staticmethod
+        def backward(ctx, gradient):
+            return 2 * ctx.saved_tensors[0] * gradient
+
+    model = MapPrior()
+    template = torch.ones(1, 1, 2, dtype=torch.float64)
+    sampler = DPSSampler(model, DPSConfig(num_steps=3, guidance="dps", guidance_scale=0.01))
+    (result,) = sampler.sample(
+        lambda image: (Square.apply(image),),
+        template.square(),
+        noise_std=0.1,
+        template=template,
+        kind=6,
+        generator=torch.Generator().manual_seed(4),
+    )
+    assert result.isfinite().all()

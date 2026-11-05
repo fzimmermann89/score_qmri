@@ -72,12 +72,15 @@ class DPSSampler:
         x = x.detach().requires_grad_(True)
         denoised = self.model.denoise(x, x.new_full((x.shape[0],), sigma), problem.kind)
         if cfg.guidance == "dps":
-            point = denoised.detach()
-            residual = problem.residual(point)
-            residual_norm = torch.linalg.vector_norm(residual.flatten(1), dim=1).clamp_min(torch.finfo(x.dtype).tiny)
-            norm = residual_norm.reshape((-1,) + (1,) * (residual.ndim - 1))
-            _, adjoint = problem.linearize(point)
-            (gradient,) = torch.autograd.grad(denoised, x, adjoint(residual / norm))
+            residual = problem.residual(denoised)
+            residual_norm = torch.linalg.vector_norm(residual.flatten(1), dim=1)
+            if problem.linear:
+                _, adjoint = problem.linearize(denoised)
+                norm = residual_norm.clamp_min(torch.finfo(x.dtype).tiny).reshape((-1,) + (1,) * (residual.ndim - 1))
+                pullback = adjoint(residual.detach() / norm.detach())
+                (gradient,) = torch.autograd.grad(denoised, x, pullback)
+            else:
+                (gradient,) = torch.autograd.grad(residual_norm.sum(), x)
             return self._ancestral(x, denoised, cfg.guidance_scale * gradient, sigma, sigma_next, noise)
         point = denoised.detach().to(dtype=cfg.cg_dtype)
         residual = problem.residual(point).detach()
