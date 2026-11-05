@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from score_qmri.sampling import DAPSConfig, DAPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler, MRIProblem
 from score_qmri.sampling.edm_sampler import karras_sigmas
 
 from .test_dps_sampler import GaussianPrior, MatrixOperator
@@ -43,9 +43,7 @@ def test_daps_matches_finite_algorithm_moments():
         if i < cfg.num_steps - 1:
             covariance += grid[i + 1].double() ** 2 * identity
     draws = DAPSSampler(model, cfg).sample(
-        op,
-        y.reshape(1, 1, 1, 1, 2).expand(4096, -1, -1, -1, -1),
-        noise_std=0.05,
+        MRIProblem(op, y.reshape(1, 1, 1, 1, 2).expand(4096, -1, -1, -1, -1), noise_std=0.05),
         template=op.H(y.reshape(1, 1, 1, 1, 2).expand(4096, -1, -1, -1, -1))[0],
         kind=1,
         generator=torch.Generator().manual_seed(73),
@@ -70,33 +68,25 @@ def test_daps_measurement_units_and_randomness(sampler_type, cfg):
     matrix = torch.tensor([[1.0, 0.4], [0.0, 0.2]], dtype=torch.float64)
     y = torch.full((2, 1, 1, 1, 2), 0.15 + 0.05j, dtype=torch.complex128)
     first = sampler_type(model, cfg).sample(
-        MatrixOperator(matrix),
-        y,
-        noise_std=0.05,
+        MRIProblem(MatrixOperator(matrix), y, noise_std=0.05),
         template=MatrixOperator(matrix).H(y)[0],
         kind=1,
         generator=torch.Generator().manual_seed(8),
     )[0]
     scaled = sampler_type(model, cfg).sample(
-        MatrixOperator(matrix * 10),
-        y * 10,
-        noise_std=0.05 * 10,
+        MRIProblem(MatrixOperator(matrix * 10), y * 10, noise_std=0.05 * 10),
         template=MatrixOperator(matrix * 10).H(y * 10)[0],
         kind=1,
         generator=torch.Generator().manual_seed(8),
     )[0]
     repeated = sampler_type(model, cfg).sample(
-        MatrixOperator(matrix),
-        y,
-        noise_std=0.05,
+        MRIProblem(MatrixOperator(matrix), y, noise_std=0.05),
         template=MatrixOperator(matrix).H(y)[0],
         kind=1,
         generator=torch.Generator().manual_seed(8),
     )[0]
     other = sampler_type(model, cfg).sample(
-        MatrixOperator(matrix),
-        y,
-        noise_std=0.05,
+        MRIProblem(MatrixOperator(matrix), y, noise_std=0.05),
         template=MatrixOperator(matrix).H(y)[0],
         kind=1,
         generator=torch.Generator().manual_seed(9),
@@ -106,5 +96,8 @@ def test_daps_measurement_units_and_randomness(sampler_type, cfg):
     assert not torch.equal(first, other)
     with pytest.raises(ValueError, match="noise must match"):
         sampler_type(model, cfg).sample(
-            MatrixOperator(matrix), y, noise_std=0.05, template=MatrixOperator(matrix).H(y)[0], kind=1, noise=torch.ones_like(y.real)
+            MRIProblem(MatrixOperator(matrix), y, noise_std=0.05),
+            template=MatrixOperator(matrix).H(y)[0],
+            kind=1,
+            noise=torch.ones_like(y.real),
         )[0]

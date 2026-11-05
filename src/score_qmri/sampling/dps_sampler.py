@@ -12,8 +12,7 @@ from score_qmri.models.diffusion import DiffusionModel
 
 from ._utils import conjugate_gradient
 from .edm_sampler import karras_sigmas
-from .problem import SamplingProblem
-from .protocols import OperatorProtocol
+from .problem import MRIProblem, SamplingProblem
 
 
 @dataclass
@@ -118,34 +117,29 @@ class DPSSampler:
 
     def sample(
         self,
-        forward_op: OperatorProtocol,
-        measurement: Tensor,
+        problem: MRIProblem,
         *,
-        noise_std: float,
         template: Tensor,
         kind: DatasetKind | int,
-        measurement_batch_dim: int = 0,
         noise: Tensor | None = None,
         generator: torch.Generator | None = None,
     ) -> tuple[Tensor]:
         """Draw one physical image/map per template sample, returning ``(image,)``.
 
         template has shape (B, ..., H, W) with singleton nonspatial dimensions;
-        its values are ignored. Physics uses physical units. noise_std is per
-        real coordinate. measurement_batch_dim identifies B in forward outputs
-        and measurements (e.g. 1 when inversion time precedes B). The forward
-        model must act independently across samples.
+        its values are ignored. The MRIProblem defines the physics in physical
+        units and the Gaussian noise standard deviation per real coordinate.
         Supplied noise is unit noise in normalized diffusion coordinates.
         """
         cfg = self.cfg
         start = self.model.sigma_max if cfg.sigma_start is None else cfg.sigma_start
         if not isfinite(start) or not self.model.sigma_min < start <= self.model.sigma_max:
             raise ValueError("Starting sigma must be within the model's supported range")
-        problem = SamplingProblem(self.model, forward_op, measurement, template, kind, noise_std, measurement_batch_dim)
-        x = problem.start(start, generator, noise)
+        coordinates = SamplingProblem(self.model, problem, template, kind)
+        x = coordinates.start(start, generator, noise)
         grid = karras_sigmas(cfg.num_steps, sigma_min=self.model.sigma_min, sigma_max=start, rho=cfg.rho, device=x.device)
         grid = torch.cat([grid, grid.new_zeros(1)])
         for sigma, following in zip(grid[:-1], grid[1:], strict=True):
-            epsilon = problem.noise(generator)
-            x = self._step(x, problem, float(sigma), float(following), epsilon)
-        return (problem.decode(x.detach()),)
+            epsilon = coordinates.noise(generator)
+            x = self._step(x, coordinates, float(sigma), float(following), epsilon)
+        return (coordinates.decode(x.detach()),)

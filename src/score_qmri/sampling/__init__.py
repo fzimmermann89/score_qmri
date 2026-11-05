@@ -5,7 +5,7 @@ from .dps_sampler import DPSConfig, DPSSampler
 from .edm_sampler import EDMSampler, create_fixed_noise, karras_sigmas
 from .full_score_daps_sampler import FullScoreDAPSConfig, FullScoreDAPSSampler
 from .generate import generate_samples
-from .protocols import LinearOperatorProtocol, OperatorProtocol
+from .problem import MRIProblem
 
 __all__ = [
     "DAPSConfig",
@@ -15,8 +15,7 @@ __all__ = [
     "EDMSampler",
     "FullScoreDAPSConfig",
     "FullScoreDAPSSampler",
-    "LinearOperatorProtocol",
-    "OperatorProtocol",
+    "MRIProblem",
     "create_fixed_noise",
     "generate_samples",
     "karras_sigmas",

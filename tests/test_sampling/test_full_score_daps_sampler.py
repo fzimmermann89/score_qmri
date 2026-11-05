@@ -2,7 +2,7 @@
 
 import torch
 
-from score_qmri.sampling import FullScoreDAPSConfig, FullScoreDAPSSampler
+from score_qmri.sampling import FullScoreDAPSConfig, FullScoreDAPSSampler, MRIProblem
 
 from .test_dps_sampler import GaussianPrior, MatrixOperator, assert_gaussian_posterior
 
@@ -14,9 +14,7 @@ def test_full_score_daps_recovers_gaussian_posterior_and_cross_covariance():
     y = torch.tensor([0.15 + 0.05j, 0j], dtype=torch.complex128).reshape(1, 1, 1, 1, 2)
     cfg = FullScoreDAPSConfig(num_steps=8, reverse_steps=4, cg_rtol=1e-10)
     draws = FullScoreDAPSSampler(model, cfg).sample(
-        op,
-        y.expand(2048, -1, -1, -1, -1),
-        noise_std=0.05,
+        MRIProblem(op, y.expand(2048, -1, -1, -1, -1), noise_std=0.05),
         template=op.H(y.expand(2048, -1, -1, -1, -1))[0],
         kind=1,
         generator=torch.Generator().manual_seed(73),
@@ -41,9 +39,7 @@ def test_warm_started_finite_gibbs_chain_preserves_posterior_draws():
     )
     initial = (noise @ torch.linalg.cholesky(covariance).to(y).mT + mean).reshape(2048, 1, 1, 1, 2)
     draws = FullScoreDAPSSampler(model, cfg).sample(
-        op,
-        y.expand(2048, -1, -1, -1, -1),
-        noise_std=0.05,
+        MRIProblem(op, y.expand(2048, -1, -1, -1, -1), noise_std=0.05),
         template=op.H(y.expand(2048, -1, -1, -1, -1))[0],
         kind=1,
         generator=generator,

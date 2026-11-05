@@ -1,14 +1,12 @@
 """Distributional and numerical checks for diffusion posterior sampling."""
 
-from pathlib import Path
-from runpy import run_path
-
 import pytest
 import torch
+from mr2.operators import FastFourierOp, LinearOperator
 
 from score_qmri.models.diffusion import DiffusionConfig, DiffusionModel
 from score_qmri.models.unet import UNet
-from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler, MRIProblem
 from score_qmri.sampling._utils import conjugate_gradient, to_2ch, to_complex
 from score_qmri.sampling.problem import SamplingProblem
 
@@ -39,16 +37,16 @@ class GaussianPrior:
         return -torch.linalg.solve(precision, x.squeeze(2).mT).mT.unsqueeze(2)
 
 
-class MatrixOperator:
+class MatrixOperator(LinearOperator):
     def __init__(self, matrix):
+        super().__init__()
         self.matrix = matrix
 
-    def __call__(self, x):
+    def forward(self, x):
         return (x @ self.matrix.to(x).mT,)
 
-    @property
-    def H(self):
-        return MatrixOperator(self.matrix.mH)
+    def adjoint(self, x):
+        return (x @ self.matrix.to(x).conj(),)
 
 
 def test_dps_style_guidance_matches_official_norm_correction_on_ve_bridge():
@@ -60,7 +58,7 @@ def test_dps_style_guidance_matches_official_norm_correction_on_ve_bridge():
     sigma = 0.4
     cfg = DPSConfig(guidance="dps", guidance_scale=0.3)
     result = DPSSampler(model, cfg)._step(
-        x, SamplingProblem(model, operator, y, operator.H(y)[0], 1, 0.05, 0), sigma, following, torch.zeros_like(x)
+        x, SamplingProblem(model, MRIProblem(operator, y, noise_std=0.05), operator.H(y)[0], 1), sigma, following, torch.zeros_like(x)
     )
     gain = 0.04 / (0.04 + sigma**2)
     residual = gain * x - to_2ch(y)
@@ -68,7 +66,7 @@ def test_dps_style_guidance_matches_official_norm_correction_on_ve_bridge():
     expected = (following / sigma) ** 2 * x + (1 - (following / sigma) ** 2) * gain * x - cfg.guidance_scale * gradient
     torch.testing.assert_close(result, expected)
     repeated = DPSSampler(model, cfg)._step(
-        x, SamplingProblem(model, operator, y, operator.H(y)[0], 1, 0.5, 0), sigma, following, torch.zeros_like(x)
+        x, SamplingProblem(model, MRIProblem(operator, y, noise_std=0.5), operator.H(y)[0], 1), sigma, following, torch.zeros_like(x)
     )
     torch.testing.assert_close(result, repeated)
 
@@ -80,10 +78,16 @@ def test_dps_style_zero_residual_and_batch_independence():
     x = torch.tensor([0.0, 0.2], dtype=torch.float64)[:, None, None, None].expand(-1, 2, 1, 2)
     y = to_complex(torch.zeros_like(x))
     sampler = DPSSampler(model, cfg)
-    batch = sampler._step(x, SamplingProblem(model, operator, y, operator.H(y)[0], 1, 0.05, 0), 0.4, 0.3, torch.zeros_like(x))
+    batch = sampler._step(
+        x, SamplingProblem(model, MRIProblem(operator, y, noise_std=0.05), operator.H(y)[0], 1), 0.4, 0.3, torch.zeros_like(x)
+    )
     assert torch.equal(batch[0], torch.zeros_like(batch[0]))
     single = sampler._step(
-        x[1:], SamplingProblem(model, operator, y[1:], operator.H(y[1:])[0], 1, 0.05, 0), 0.4, 0.3, torch.zeros_like(x[1:])
+        x[1:],
+        SamplingProblem(model, MRIProblem(operator, y[1:], noise_std=0.05), operator.H(y[1:])[0], 1),
+        0.4,
+        0.3,
+        torch.zeros_like(x[1:]),
     )
     torch.testing.assert_close(batch[1:], single)
 
@@ -115,9 +119,7 @@ def test_dps_recovers_observed_nullspace_and_cross_covariance(matrix, prior_vari
     y = op(op.H(y)[0])[0] if matrix[1, 1] == 0 else y
     cfg = DPSConfig(num_steps=512, cg_rtol=1e-10)
     draws = DPSSampler(model, cfg).sample(
-        op,
-        y.expand(2048, -1, -1, -1, -1),
-        noise_std=0.05,
+        MRIProblem(op, y.expand(2048, -1, -1, -1, -1), noise_std=0.05),
         template=op.H(y.expand(2048, -1, -1, -1, -1))[0],
         kind=1,
         generator=torch.Generator().manual_seed(71),
@@ -131,25 +133,19 @@ def test_dps_is_invariant_to_measurement_units_and_reproducible():
     y = torch.full((3, 1, 1, 1, 2), 0.15 + 0.05j, dtype=torch.complex128)
     cfg = DPSConfig(num_steps=32, cg_rtol=1e-10)
     first = DPSSampler(model, cfg).sample(
-        MatrixOperator(matrix),
-        y,
-        noise_std=0.05,
+        MRIProblem(MatrixOperator(matrix), y, noise_std=0.05),
         template=MatrixOperator(matrix).H(y)[0],
         kind=1,
         generator=torch.Generator().manual_seed(8),
     )[0]
     scaled = DPSSampler(model, cfg).sample(
-        MatrixOperator(matrix * 10),
-        y * 10,
-        noise_std=0.05 * 10,
+        MRIProblem(MatrixOperator(matrix * 10), y * 10, noise_std=0.05 * 10),
         template=MatrixOperator(matrix * 10).H(y * 10)[0],
         kind=1,
         generator=torch.Generator().manual_seed(8),
     )[0]
     repeated = DPSSampler(model, cfg).sample(
-        MatrixOperator(matrix),
-        y,
-        noise_std=0.05,
+        MRIProblem(MatrixOperator(matrix), y, noise_std=0.05),
         template=MatrixOperator(matrix).H(y)[0],
         kind=1,
         generator=torch.Generator().manual_seed(8),
@@ -166,7 +162,9 @@ def test_dps_guidance_uses_diffusion_increment_and_conditional_noise():
     y = to_complex(torch.full_like(x, 0.1))
     sigma, following = 0.4, 0.3
     cfg = DPSConfig(cg_rtol=1e-12)
-    actual = DPSSampler(model, cfg)._step(x, SamplingProblem(model, op, y, op.H(y)[0], 1, 0.05, 0), sigma, following, torch.zeros_like(x))
+    actual = DPSSampler(model, cfg)._step(
+        x, SamplingProblem(model, MRIProblem(op, y, noise_std=0.05), op.H(y)[0], 1), sigma, following, torch.zeros_like(x)
+    )
     gain = prior_variance / (prior_variance + sigma**2)
     conditional_var = sigma**2 * gain
     posterior_mean = gain * x - conditional_var * (gain * x - to_2ch(y)) / (conditional_var + 0.05**2)
@@ -190,22 +188,18 @@ def test_dps_requires_physical_measurement_noise():
     with pytest.raises(ValueError):
         SamplingProblem(
             GaussianPrior(),
-            MatrixOperator(torch.eye(2)),
-            torch.zeros(1, 2, dtype=torch.complex64),
+            MRIProblem(MatrixOperator(torch.eye(2)), torch.zeros(1, 2, dtype=torch.complex64), noise_std=tau),
             torch.zeros(1, 1, 2, dtype=torch.complex64),
             1,
-            tau,
-            0,
         )
 
 
 @pytest.mark.parametrize("sampler_name", ["dps", "daps", "full-score-daps"])
 @pytest.mark.parametrize("kind", [1, 6])
 def test_sampler_with_masking_operator(sampler_name, kind):
-    operator_type = run_path(str(Path(__file__).parents[2] / "scripts/sample_posterior_ensemble.py"))["MaskedFourier"]
     mask = torch.zeros(1, 1, 1, 32, 32)
     mask[..., ::2, :] = 1
-    operator = operator_type(mask)
+    operator = mask * FastFourierOp(dim=(-2, -1))
     model = DiffusionModel(
         unet=UNet(base_channels=8, num_res_blocks=1, channel_mult=(1,), attention_levels=(), cond_dim=16),
         diffusion=DiffusionConfig(cond_dim=16, sigma_min=0.01, sigma_max=1.0),
@@ -227,9 +221,7 @@ def test_sampler_with_masking_operator(sampler_name, kind):
         measurement = measurement.to(torch.complex128)
         noise = torch.randn_like(template, dtype=torch.complex128 if kind == 1 else torch.float64)
     image = sampler.sample(
-        operator,
-        measurement,
-        noise_std=0.1,
+        MRIProblem(operator, measurement, noise_std=0.1),
         template=template,
         kind=kind,
         noise=noise,

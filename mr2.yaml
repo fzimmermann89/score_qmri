@@ -6,7 +6,7 @@ data:
 
 model:
   unet:
-    class_path: mrpro.nn.nets.UNet
+    class_path: mr2.nn.nets.UNet
     init_args:
       n_dim: 2
       n_channels_in: 2

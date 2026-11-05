@@ -11,8 +11,7 @@ from score_qmri.models.diffusion import DiffusionModel
 
 from ._utils import conjugate_gradient, normal_like
 from .edm_sampler import EDMSampler, karras_sigmas
-from .problem import SamplingProblem
-from .protocols import OperatorProtocol
+from .problem import MRIProblem, SamplingProblem
 
 
 @dataclass
@@ -139,13 +138,10 @@ class FullScoreDAPSSampler:
     @torch.no_grad()
     def sample(
         self,
-        forward_op: OperatorProtocol,
-        measurement: Tensor,
+        problem: MRIProblem,
         *,
-        noise_std: float,
         template: Tensor,
         kind: DatasetKind | int,
-        measurement_batch_dim: int = 0,
         noise: Tensor | None = None,
         initial: Tensor | None = None,
         generator: torch.Generator | None = None,
@@ -161,12 +157,12 @@ class FullScoreDAPSSampler:
             raise ValueError("DAPS schedule must stay within the model's supported sigma range")
         if not self.model.sigma_min <= self.prior_sigma <= self.model.sigma_max:
             raise ValueError("Prior score sigma must be within the model's supported range")
-        problem = SamplingProblem(self.model, forward_op, measurement, template, kind, noise_std, measurement_batch_dim)
-        xt = problem.start(start, generator, noise, initial)
-        x = None if initial is None else problem.encode(initial.to(problem.template)).detach()
+        coordinates = SamplingProblem(self.model, problem, template, kind)
+        xt = coordinates.start(start, generator, noise, initial)
+        x = None if initial is None else coordinates.encode(initial.to(coordinates.template)).detach()
         grid = karras_sigmas(cfg.num_steps, sigma_min=cfg.sigma_min, sigma_max=start, rho=cfg.rho, device=xt.device)
         grid = torch.cat([grid, grid.new_zeros(1)])
         for sigma, following in zip(grid[:-1], grid[1:], strict=True):
-            x = self._conditional(xt, problem, float(sigma), generator, initial=x)
-            xt = x + float(following) * problem.noise(generator)
-        return (problem.decode(xt),)
+            x = self._conditional(xt, coordinates, float(sigma), generator, initial=x)
+            xt = x + float(following) * coordinates.noise(generator)
+        return (coordinates.decode(xt),)

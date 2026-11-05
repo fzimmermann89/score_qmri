@@ -1,8 +1,9 @@
 """Joint T1/complex-M0 saturation recovery with separate learned priors.
 
-Input NPZ: t1 (H,W), m0 (H,W), times (T,), binary unshifted mask
-(T,H,W), RSS-normalized csm (C,H,W). Optional measurement is (T,1,C,H,W).
-T1 and times are in seconds. Without measurement, simulate Gaussian noise.
+Input NPZ: t1 (H,W), m0 (H,W), times (T,), binary centered mask
+(T,H,W), RSS-normalized csm (C,H,W). All images and k-space use centered
+MR2 coordinates. T1 and times are in seconds. Measurements are simulated
+with Gaussian noise of noise_std per real coordinate.
 M0 is used as a reference, never as a known reconstruction parameter.
 
 Examples:
@@ -24,37 +25,19 @@ import numpy as np
 import torch
 from jsonargparse import CLI
 from matplotlib.colors import ListedColormap, Normalize
-from mrpro.operators import LinearOperator, models
+from mr2.operators import FastFourierOp, LinearOperator, RearrangeOp, SensitivityOp, models
 from scipy.ndimage import gaussian_filter
 from torch import Tensor
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, MRIProblem
 from score_qmri.sampling._utils import conjugate_gradient, normal_like
 from score_qmri.sampling.edm_sampler import karras_sigmas
 from score_qmri.sampling.problem import SamplingProblem
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
-
-class Encoding(LinearOperator):
-    """Unshifted orthonormal Cartesian FFT with known coil sensitivities."""
-
-    csm: Tensor
-    mask: Tensor
-
-    def __init__(self, csm: Tensor, mask: Tensor) -> None:
-        super().__init__()
-        self.register_buffer("csm", csm)
-        self.register_buffer("mask", mask)
-
-    def forward(self, images: Tensor) -> tuple[Tensor]:
-        return (torch.fft.fft2(images[:, :, None] * self.csm, norm="ortho") * self.mask[:, None, None],)
-
-    def adjoint(self, data: Tensor) -> tuple[Tensor]:
-        return ((torch.fft.ifft2(data * self.mask[:, None, None], norm="ortho") * self.csm.conj()).sum(2),)
 
 
 class JointPrior:
@@ -80,52 +63,40 @@ class JointProblem:
 
     linear = False
 
-    def __init__(self, operator: Encoding, measurement: Tensor, times: Tensor, batch: int, noise_std: float) -> None:
-        self.operator, self.measurement = operator, measurement.moveaxis(1, 0)
-        self.times, self.noise_std = times, noise_std
-        self.shape = (batch, 4, *measurement.shape[-2:])
-        self.kind = torch.zeros(batch, dtype=torch.long, device=measurement.device)
-        self.signal = models.SaturationRecovery(times).to(measurement.device)
-
-    def constrain(self, x: Tensor) -> Tensor:
-        return torch.stack([x[:, 0], torch.zeros_like(x[:, 1]), x[:, 2], x[:, 3]], dim=1)
+    def __init__(self, problem: MRIProblem, batch: int) -> None:
+        self.problem = problem
+        self.measurement = problem.measurement.moveaxis(problem.measurement_batch_dim, 0)
+        self.noise_std = problem.noise_std
+        self.shape = (batch, 4, *self.measurement.shape[-2:])
+        self.kind = torch.zeros(batch, dtype=torch.long, device=self.measurement.device)
 
     def noise(self, generator: torch.Generator) -> Tensor:
-        return self.constrain(torch.randn(self.shape, device=self.measurement.device, generator=generator))
+        noise = torch.randn(self.shape, device=self.measurement.device, generator=generator)
+        noise[:, 1] = 0
+        return noise
 
     def decode(self, x: Tensor) -> tuple[Tensor, Tensor]:
         return 4 * x[:, 0], torch.complex(x[:, 2], x[:, 3])
 
     def residual(self, x: Tensor) -> Tensor:
         t1, m0 = self.decode(x)
-        # Extend the signal below 50 ms; sampler outputs are not clipped.
-        signal: Tensor
-        (signal,) = self.signal(m0, t1.clamp_min(0.05))
-        predicted: Tensor
-        (predicted,) = self.operator(signal)
-        return predicted.moveaxis(1, 0) - self.measurement
+        # Extend the forward model below 50 ms; sampler outputs are not clipped.
+        return self.problem.residual(m0, t1.clamp_min(0.05)).moveaxis(1, 0)
 
-    @torch.no_grad()
     def gradient(self, x: Tensor) -> Tensor:
         t1, m0 = self.decode(x)
-        safe = t1.clamp_min(0.05)
-        exponential = torch.exp(-self.times[:, None, None, None] / safe[None])
-        basis = 1 - exponential
-        residual = self.operator(m0[None] * basis)[0] - self.measurement.moveaxis(0, 1)
-        back = self.operator.H(residual)[0]
-        derivative = -self.times[:, None, None, None] * exponential / safe[None].square() * (t1 > 0.05)[None]
-        t1_gradient = 4 * (back.conj() * m0[None] * derivative).real.sum(0)
-        m0_gradient = (back * basis).sum(0)
-        return torch.stack([t1_gradient, torch.zeros_like(t1_gradient), m0_gradient.real, m0_gradient.imag], dim=1) / self.noise_std**2
+        m0_gradient, t1_gradient = self.problem.gradient(m0, t1.clamp_min(0.05))
+        t1_gradient = 4 * t1_gradient * (t1 > 0.05)
+        return torch.stack([t1_gradient, torch.zeros_like(t1_gradient), m0_gradient.real, m0_gradient.imag], dim=1)
 
 
 @torch.no_grad()
-def cg_fit(operator: Encoding, measurement: Tensor, times: Tensor, regularization: float) -> tuple[Tensor, Tensor]:
+def cg_fit(operator: LinearOperator, measurement: Tensor, times: Tensor, regularization: float) -> tuple[Tensor, Tensor]:
     """Tikhonov SENSE followed by grid T1 fitting with profiled complex M0."""
     rhs = operator.H(measurement.to(torch.complex128))[0]
     images = conjugate_gradient(lambda x: operator.H(operator(x)[0])[0] + regularization * x, rhs, 1000, 1e-6)
     grid = torch.linspace(0.05, 5.5, 2181, dtype=images.real.dtype, device=images.device)
-    basis = 1 - torch.exp(-times[:, None] / grid)
+    basis = models.SaturationRecovery(times)(torch.ones_like(grid), grid)[0]
     norm = basis.square().sum(0)
     t1 = torch.empty(images.shape[-2:], device=images.device)
     m0 = torch.empty_like(t1, dtype=torch.complex64)
@@ -162,8 +133,8 @@ def sample(
     m0_prior_scale maps physical M0 to its training coordinates, including
     dataset scaling. It multiplies both denoiser input and noise level, with
     inverse output scaling. It does not rescale measurements or their noise.
-    Supplied measurements must use noise_std per real coordinate and be zero
-    outside the mask. Reuse one case and output folder for both methods.
+    The reference maps define the simulation and evaluation only. Reuse one
+    input and output folder for both methods to use the same measurements.
     """
     output.mkdir(parents=True, exist_ok=True)
     torch.backends.cuda.matmul.allow_tf32 = False
@@ -174,14 +145,18 @@ def sample(
         times = torch.as_tensor(arrays["times"], dtype=torch.float32, device=device)
         mask = torch.as_tensor(arrays["mask"], dtype=torch.float32, device=device)
         csm = torch.as_tensor(arrays["csm"], dtype=torch.complex64, device=device)
-        operator = Encoding(csm, mask).to(device)
-        if "measurement" in arrays:
-            measurement = torch.as_tensor(arrays["measurement"], dtype=torch.complex64, device=device)
-        else:
-            signal = models.SaturationRecovery(times).to(device)(m0[None], t1.clamp_min(0.05)[None])[0]
-            clean = operator(signal)[0]
-            generator = torch.Generator(device=device).manual_seed(seed)
-            measurement = clean + noise_std * normal_like(clean, generator) * mask[:, None, None]
+        encoding = (
+            mask[:, None, None, None]
+            * FastFourierOp(dim=(-2, -1))
+            @ SensitivityOp(csm[None, None, :, None])
+            @ RearrangeOp("... y x -> ... 1 1 y x")
+        ).to(device)
+        signal_model = models.SaturationRecovery(times).to(device)
+        signal = signal_model(m0[None], t1.clamp_min(0.05)[None])[0]
+        clean = encoding(signal)[0]
+        generator = torch.Generator(device=device).manual_seed(seed)
+        measurement = clean + noise_std * normal_like(clean, generator) * mask[:, None, None, None]
+        physical_problem = MRIProblem(encoding, measurement, noise_std, signal_model=signal_model, measurement_batch_dim=1)
     np.savez_compressed(
         output / "case.npz",
         t1=t1.cpu().numpy(),
@@ -191,7 +166,7 @@ def sample(
         csm=csm.cpu().numpy(),
         measurement=measurement.cpu().numpy(),
     )
-    fit_t1, fit_m0 = cg_fit(operator, measurement, times, regularization)
+    fit_t1, fit_m0 = cg_fit(encoding, measurement, times, regularization)
     np.savez_compressed(output / "cg-fit.npz", t1=fit_t1.cpu().numpy(), m0=fit_m0.cpu().numpy())
     model = DiffusionModel.from_checkpoint(checkpoint, compile_model=False, weights="ema").to(device).eval().requires_grad_(False)
     prior = JointPrior(model, m0_prior_scale)
@@ -215,7 +190,7 @@ def sample(
     sampler = DPSSampler(cast(DiffusionModel, prior), cfg) if isinstance(cfg, DPSConfig) else DAPSSampler(cast(DiffusionModel, prior), cfg)
     samples_t1, samples_m0 = [], []
     for batch in range(0, draws, batch_size):
-        problem = JointProblem(operator, measurement, times, min(batch_size, draws - batch), noise_std)
+        problem = JointProblem(physical_problem, min(batch_size, draws - batch))
         generator = torch.Generator(device=device).manual_seed(seed + 1 + batch)
         x = prior.sigma_max * problem.noise(generator)
         grid = karras_sigmas(
@@ -243,6 +218,7 @@ def sample(
             {
                 "checkpoint": str(checkpoint.resolve()),
                 "case": str(case.resolve()),
+                "signal_model": "mr2.operators.models.SaturationRecovery",
                 "m0_prior_scale": m0_prior_scale,
                 "noise_std": noise_std,
                 "seed": seed,

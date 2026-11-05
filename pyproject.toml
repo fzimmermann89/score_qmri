@@ -19,7 +19,7 @@ dependencies = [
     "einops>=0.7.0",
     "kornia>=0.7.0",
     "matplotlib>3.9",
-    "mrpro @ git+https://github.com/PTB-MR/mrpro.git@nn-stacked-v2",
+    "mrtwo @ git+https://github.com/fzimmermann89/mr2.git@5a1c85eee85363d88385cb9e765a23c9f5e3835a",
 ]
 
 [project.optional-dependencies]
@@ -126,7 +126,7 @@ ignore_missing_imports = true
 disable_error_code = ["import-untyped"]
 
 [[tool.mypy.overrides]]
-module = ["mrpro", "mrpro.*"]
+module = ["mr2", "mr2.*"]
 ignore_missing_imports = true
 disable_error_code = ["import-not-found"]
 

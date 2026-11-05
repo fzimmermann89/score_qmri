@@ -9,10 +9,11 @@ from typing import cast
 
 import torch
 from jsonargparse import ArgumentParser
+from mr2.operators import IdentityOp
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler, MRIProblem
 
 
 class GaussianOracle:
@@ -32,17 +33,6 @@ class GaussianOracle:
 
     def score(self, x: torch.Tensor, sigma: torch.Tensor, kind: torch.Tensor) -> torch.Tensor:
         return -x / (0.04 + sigma[:, None, None, None].square())
-
-
-class Mask:
-    """Observe one complex coordinate; leave the second in the null space."""
-
-    def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor]:
-        return (x * x.real.new_tensor([1.0, 0.0]),)
-
-    @property
-    def H(self) -> Mask:
-        return self
 
 
 def main() -> None:
@@ -72,9 +62,7 @@ def main() -> None:
     y = torch.zeros(args.draws, 1, 1, 1, 2, dtype=torch.complex128)
     y[..., 0] = y.new_tensor(0.15 + 0.05j)
     sample = sampler.sample(
-        Mask(),
-        y,
-        noise_std=0.01,
+        MRIProblem(y.real.new_tensor([1.0, 0.0]) * IdentityOp(), y, noise_std=0.01),
         template=y,
         kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED,
         generator=torch.Generator().manual_seed(args.seed),
