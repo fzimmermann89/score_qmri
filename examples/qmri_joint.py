@@ -31,9 +31,9 @@ from torch import Tensor
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
 from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler
-from score_qmri.sampling._problem import SamplingProblem
 from score_qmri.sampling._utils import conjugate_gradient, normal_like
 from score_qmri.sampling.edm_sampler import karras_sigmas
+from score_qmri.sampling.problem import SamplingProblem
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
