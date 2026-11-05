@@ -227,3 +227,5 @@ uv.lock
 
 # Node.js / Frontend
 node_modules/
+viewer/node_modules/
+viewer/dist/
