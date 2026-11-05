@@ -158,7 +158,7 @@ def sample(
         measurement = clean + noise_std * normal_like(clean, generator) * mask[:, None, None, None]
         physical_problem = MRIProblem(encoding, measurement, noise_std, signal_model=signal_model, measurement_batch_dim=1)
     fit_t1, fit_m0 = cg_fit(encoding, measurement, times, regularization)
-    shared = {
+    shared: dict = {
         "case.npz": {
             "t1": t1.cpu().numpy(),
             "m0": m0.cpu().numpy(),
