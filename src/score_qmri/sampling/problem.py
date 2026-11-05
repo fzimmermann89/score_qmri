@@ -190,7 +190,7 @@ class SamplingProblem:
             return self.forward, linear_adjoint
 
         point = state.detach()
-        _, pullback = torch.func.vjp(self.forward, point)
+        _, pullback, *_ = torch.func.vjp(self.forward, point)
 
         def jacobian(tangent: Tensor) -> Tensor:
             result: Tensor = torch.func.jvp(self.forward, (point,), (tangent,))[1]
