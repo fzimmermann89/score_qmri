@@ -9,8 +9,8 @@ import torch
 from score_qmri.models.diffusion import DiffusionConfig, DiffusionModel
 from score_qmri.models.unet import UNet
 from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
-from score_qmri.sampling._problem import SamplingProblem
 from score_qmri.sampling._utils import conjugate_gradient, to_2ch, to_complex
+from score_qmri.sampling.problem import SamplingProblem
 
 
 class GaussianPrior:
@@ -23,9 +23,6 @@ class GaussianPrior:
         self.covariance = torch.eye(2, dtype=torch.float64) * 0.04 if covariance is None else covariance
 
     def normalize(self, x, kind):
-        return x
-
-    def denormalize(self, x, kind):
         return x
 
     def denoise(self, x, sigma, kind):

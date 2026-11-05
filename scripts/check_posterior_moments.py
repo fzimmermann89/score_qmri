@@ -26,9 +26,6 @@ class GaussianOracle:
     def normalize(self, x: torch.Tensor, kind: torch.Tensor) -> torch.Tensor:
         return x
 
-    def denormalize(self, x: torch.Tensor, kind: torch.Tensor) -> torch.Tensor:
-        return x
-
     def denoise(self, x: torch.Tensor, sigma: torch.Tensor, kind: torch.Tensor) -> torch.Tensor:
         sigma = sigma.expand(len(x))
         return x * 0.04 / (0.04 + sigma[:, None, None, None].square())

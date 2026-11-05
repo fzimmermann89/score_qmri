@@ -10,9 +10,9 @@ from torch import Tensor
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
 
-from ._problem import SamplingProblem
 from ._utils import conjugate_gradient
 from .edm_sampler import karras_sigmas
+from .problem import SamplingProblem
 from .protocols import OperatorProtocol
 
 
@@ -72,17 +72,14 @@ class DPSSampler:
         x = x.detach().requires_grad_(True)
         denoised = self.model.denoise(x, x.new_full((x.shape[0],), sigma), problem.kind)
         if cfg.guidance == "dps":
-            residual = problem.residual(denoised)
-            residual_norm = torch.linalg.vector_norm(residual.flatten(1), dim=1)
-            if problem.linear:
-                _, adjoint = problem.linearize(denoised)
-                norm = residual_norm.clamp_min(torch.finfo(x.dtype).tiny).reshape((-1,) + (1,) * (residual.ndim - 1))
-                pullback = adjoint(residual.detach() / norm.detach())
-                (gradient,) = torch.autograd.grad(denoised, x, pullback)
-            else:
-                (gradient,) = torch.autograd.grad(residual_norm.sum(), x)
-            return problem.constrain(self._ancestral(x, denoised, cfg.guidance_scale * gradient, sigma, sigma_next, noise))
-        point = denoised.detach() if cfg.cg_dtype is None else denoised.detach().to(cfg.cg_dtype)
+            point = denoised.detach()
+            residual = problem.residual(point)
+            residual_norm = torch.linalg.vector_norm(residual.flatten(1), dim=1).clamp_min(torch.finfo(x.dtype).tiny)
+            norm = residual_norm.reshape((-1,) + (1,) * (residual.ndim - 1))
+            _, adjoint = problem.linearize(point)
+            (gradient,) = torch.autograd.grad(denoised, x, adjoint(residual / norm))
+            return self._ancestral(x, denoised, cfg.guidance_scale * gradient, sigma, sigma_next, noise)
+        point = denoised.detach().to(dtype=cfg.cg_dtype)
         residual = problem.residual(point).detach()
         jacobian, adjoint = problem.linearize(point)
         direction = adjoint(residual).detach()
@@ -103,8 +100,8 @@ class DPSSampler:
 
         # J* (tau² I + v J J*)^-1 r = (tau² I + v J* J)^-1 J* r.
         pullback = conjugate_gradient(precision, direction, cfg.cg_max_iter, cfg.cg_rtol)
-        (gradient,) = torch.autograd.grad(denoised, x, pullback.detach().to(denoised))
-        return problem.constrain(self._ancestral(x, denoised, (sigma**2 - sigma_next**2) * gradient, sigma, sigma_next, noise))
+        (gradient,) = torch.autograd.grad(denoised, x, pullback.to(denoised))
+        return self._ancestral(x, denoised, (sigma**2 - sigma_next**2) * gradient, sigma, sigma_next, noise)
 
     @staticmethod
     @torch.no_grad()

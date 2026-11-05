@@ -9,9 +9,9 @@ from torch import Tensor
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
 
-from ._problem import SamplingProblem
 from ._utils import conjugate_gradient, normal_like
 from .edm_sampler import EDMSampler, karras_sigmas
+from .problem import SamplingProblem
 from .protocols import OperatorProtocol
 
 
@@ -74,7 +74,7 @@ class FullScoreDAPSSampler:
         initial: Tensor | None = None,
     ) -> Tensor:
         cfg = self.cfg
-        sigmas = xt.real.new_full((xt.shape[0],), sigma)
+        sigmas = xt.new_full((xt.shape[0],), sigma)
         noisy = xt
         if sigma > self.model.sigma_min:
             flow = EDMSampler(
@@ -97,7 +97,9 @@ class FullScoreDAPSSampler:
             squared = torch.zeros_like(point)
             probes = 32
             for i in range(probes):
-                probe = problem.constrain(torch.empty_like(point).bernoulli_(0.5, generator=generator).mul_(2).sub_(1))
+                probe = torch.empty_like(point).bernoulli_(0.5, generator=generator).mul_(2).sub_(1)
+                if not problem.complex:
+                    probe[:, 1] = 0
                 (response,) = torch.autograd.grad(score, point, probe, retain_graph=i < probes - 1)
                 squared += response.square()
             curvature = (
@@ -123,15 +125,7 @@ class FullScoreDAPSSampler:
             # B = scale Q scale. Cov(innovation)=B, giving Q^-1 driving noise
             # after the whitened solve and the final multiplication by scale.
             innovation = problem.noise(generator)
-            innovation += (
-                scale
-                * adjoint(
-                    normal_like(problem.measurement, generator)
-                    if problem.measurement.is_complex()
-                    else torch.randn(problem.measurement.shape, device=x.device, dtype=x.dtype, generator=generator)
-                )
-                / problem.noise_std
-            )
+            innovation += scale * adjoint(normal_like(problem.measurement, generator)) / problem.noise_std
             rhs = cfg.langevin_step * scale * score + sqrt(2 * cfg.langevin_step) * innovation
             proposal = x + scale * conjugate_gradient(preconditioner_precision, rhs, cfg.cg_max_iter, cfg.cg_rtol)
             # Stochastic Heun reuses the same noise; fresh noise here would

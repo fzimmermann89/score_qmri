@@ -18,6 +18,8 @@ def to_2ch(x: Tensor) -> Tensor:
 
 def normal_like(x: Tensor, generator: torch.Generator | None) -> Tensor:
     """Independent unit Gaussian noise in each real coordinate."""
+    if not x.is_complex():
+        return torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=generator)
     noise = torch.randn((*x.shape, 2), device=x.device, dtype=x.real.dtype, generator=generator)
     return torch.view_as_complex(noise)
 
