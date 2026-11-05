@@ -157,17 +157,27 @@ def sample(
         generator = torch.Generator(device=device).manual_seed(seed)
         measurement = clean + noise_std * normal_like(clean, generator) * mask[:, None, None, None]
         physical_problem = MRIProblem(encoding, measurement, noise_std, signal_model=signal_model, measurement_batch_dim=1)
-    np.savez_compressed(
-        output / "case.npz",
-        t1=t1.cpu().numpy(),
-        m0=m0.cpu().numpy(),
-        times=times.cpu().numpy(),
-        mask=mask.cpu().numpy(),
-        csm=csm.cpu().numpy(),
-        measurement=measurement.cpu().numpy(),
-    )
     fit_t1, fit_m0 = cg_fit(encoding, measurement, times, regularization)
-    np.savez_compressed(output / "cg-fit.npz", t1=fit_t1.cpu().numpy(), m0=fit_m0.cpu().numpy())
+    shared = {
+        "case.npz": {
+            "t1": t1.cpu().numpy(),
+            "m0": m0.cpu().numpy(),
+            "times": times.cpu().numpy(),
+            "mask": mask.cpu().numpy(),
+            "csm": csm.cpu().numpy(),
+            "measurement": measurement.cpu().numpy(),
+        },
+        "cg-fit.npz": {"t1": fit_t1.cpu().numpy(), "m0": fit_m0.cpu().numpy()},
+    }
+    for name, values in shared.items():
+        path = output / name
+        if path.exists():
+            with np.load(path) as saved:
+                if any(not np.array_equal(saved[key], value) for key, value in values.items()):
+                    raise ValueError(f"{path} differs from this run; use a new output directory")
+    for name, values in shared.items():
+        if not (output / name).exists():
+            np.savez_compressed(output / name, **values)
     model = DiffusionModel.from_checkpoint(checkpoint, compile_model=False, weights="ema").to(device).eval().requires_grad_(False)
     prior = JointPrior(model, m0_prior_scale)
     cfg = (
