@@ -22,6 +22,12 @@ Training datasets and loader settings are in `data.yaml`; model and optimizer ov
 
 See [checkpoint compatibility](docs/checkpoints.md) for strict model loading and portable checkpoint conversion.
 
+## Joint T₁/M₀ reconstruction
+
+[The joint example](examples/qmri_joint.py) simulates undersampled Cartesian saturation-recovery measurements using MR2 and reconstructs both T₁ and complex M₀ with separate learned priors.
+
+![Joint T1 and M0 reconstruction with CG+fit, DPS and DAPS](docs/images/qmri_joint.png)
+
 ## Dev
 
 ```bash

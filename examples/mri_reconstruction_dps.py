@@ -2,27 +2,27 @@
 # # DPS MRI Reconstruction Example
 #
 # This example demonstrates Diffusion Posterior Sampling (DPS) for MRI reconstruction
-# using the package sampler with mrpro's Fourier operator and FastMRI phantom data.
+# using the package sampler with mr2's Fourier operator and FastMRI phantom data.
 #
 # DPS combines an unconditional diffusion prior with likelihood guidance to solve
 # the inverse problem: k-space → image.
 #
-# Requires: `pip install -e ".[examples]"` (mrpro) and a FastMRI H5 file.
+# Requires: `pip install -e .` and a FastMRI H5 file.
 
 # ruff: noqa: E402
 # %%
 
 from pathlib import Path
 
-import mrpro
+import mr2
 import torch
-from mrpro.data import CsmData, SpatialDimension
-from mrpro.operators import FourierOp
-from mrpro.phantoms.fastmri import FastMRIKDataDataset
+from mr2.data import CsmData, SpatialDimension
+from mr2.operators import FourierOp
+from mr2.phantoms.fastmri import FastMRIKDataDataset
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import DPSConfig, DPSSampler
+from score_qmri.sampling import DPSConfig, DPSSampler, MRIProblem
 
 # %% Configuration
 CHECKPOINT_PATH = Path("checkpoints/last.converted.ckpt")
@@ -41,7 +41,7 @@ k.data *= 3e3
 # Ground truth
 
 csm = CsmData.from_kdata_walsh(k)
-x_gt = mrpro.algorithms.reconstruction.DirectReconstruction(k, csm=csm)(k).data
+x_gt = mr2.algorithms.reconstruction.DirectReconstruction(k, csm=csm)(k).data
 # Retrospective undersampling
 k_us = k[..., ::4, :]
 k_us = k_us.cuda()
@@ -51,29 +51,28 @@ op = fourier_op @ csm.as_operator()
 
 # %%
 # Load the diffusion model (VE/EDM framework)
-# Use eager execution for repeated Jacobian products.
 model = DiffusionModel.from_checkpoint(CHECKPOINT_PATH, compile_model=False).cuda().eval()
 
 # %% DPS config and sampler
-# Set tau from the measured noise after applying the k-space scaling above.
-cfg = DPSConfig(tau=0.03, num_steps=1000)
+# noise_std below is illustrative; estimate it after scaling the k-space data.
+cfg = DPSConfig(num_steps=1000)
 sampler = DPSSampler(model, cfg)
 
 # Direct (zero-filled) reconstruction for reference.
 (x_zf,) = op.H(k_us.data)
 
 # CG reconstruction for reference.
-(x_cg,) = mrpro.algorithms.optimizers.cg(op.gram + 0.01, x_zf)
+(x_cg,) = mr2.algorithms.optimizers.cg(op.gram + 0.01, x_zf)
 
 
 # %%
 y = k_us.data.repeat_interleave(BATCH, dim=0)
 
 with torch.no_grad():
-    recon = sampler.sample(
-        op,
-        y,
-        DatasetKind.COMPLEX_T1W_COIL_COMBINED,
+    (recon,) = sampler.sample(
+        MRIProblem(op, y, noise_std=0.03),
+        template=x_zf.repeat_interleave(BATCH, dim=0),
+        kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED,
         noise=None,
     )
 

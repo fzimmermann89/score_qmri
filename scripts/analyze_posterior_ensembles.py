@@ -1,4 +1,4 @@
-"""Compare ensemble uncertainty with known reconstruction errors without smoothing."""
+"""Compare uncertainty and reconstruction errors in centered MR2 Fourier coordinates."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from typing import Any, cast
 
 import matplotlib
 import numpy as np
+import torch
 from jsonargparse import ArgumentParser
+from mr2.operators import FastFourierOp
 from scipy.stats import spearmanr
 
 matplotlib.use("Agg")
@@ -62,10 +64,11 @@ def diagnostic(error: np.ndarray, std: np.ndarray, roi: np.ndarray) -> dict[str,
 
 def main() -> None:
     parser = ArgumentParser(description=__doc__)
-    parser.add_argument("--runs", type=Path, nargs="+", required=True)
+    parser.add_argument("--runs", type=Path, nargs="+", required=True, help="Run directories with centered MR2 images and k-space")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
+    fft = FastFourierOp(dim=(-2, -1))
     entries = []
     reports = []
     truth = None
@@ -89,7 +92,7 @@ def main() -> None:
             raise ValueError(f"Incomplete ensemble: {run}")
         samples = np.stack([np.load(p)["sample"].squeeze() for p in paths])
         maps = posterior_maps(samples, truth)
-        spectral_maps = posterior_maps(np.fft.fft2(samples, norm="ortho"), np.fft.fft2(truth, norm="ortho"))
+        spectral_maps = posterior_maps(fft(torch.from_numpy(samples))[0].numpy(), fft(torch.from_numpy(truth))[0].numpy())
         roi = np.abs(truth) > 0.05 * np.abs(truth).max()
         method_label = report["arguments"]["sampler"].upper()
         label = f"{method_label} · n={len(samples)}"
@@ -126,7 +129,7 @@ def main() -> None:
             args.output / f"maps-{len(entries) - 1:02d}-{report['arguments']['sampler']}.npz", **cast(dict[str, Any], maps), roi=roi
         )
     assert truth is not None and measurement is not None and mask is not None
-    zero_filled = np.fft.ifft2(measurement * mask, norm="ortho")
+    zero_filled = fft.H(torch.from_numpy(measurement * mask))[0].numpy()
     plt.imsave(args.output / "reference.png", np.abs(truth), cmap="gray", vmin=0, vmax=float(np.abs(truth).max()))
     plt.imsave(args.output / "zero-filled.png", np.abs(zero_filled), cmap="gray", vmin=0, vmax=float(np.abs(truth).max()))
     display_limits = {}

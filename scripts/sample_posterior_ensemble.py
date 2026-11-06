@@ -1,4 +1,4 @@
-"""Save independent batched draws for explicit frozen MRI posterior experiments."""
+"""Save independent draws from centered Cartesian MRI measurements."""
 
 from __future__ import annotations
 
@@ -12,26 +12,15 @@ from typing import Any
 import numpy as np
 import torch
 from jsonargparse import ArgumentParser
+from mr2.operators import FastFourierOp, LinearOperator
 from pytorch_msssim import ssim
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler, MRIProblem
 
 
-class MaskedFourier:
-    def __init__(self, mask: torch.Tensor, adjoint: bool = False) -> None:
-        self.mask, self.adjoint = mask, adjoint
-
-    def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor]:
-        return (torch.fft.ifft2(x * self.mask.conj(), norm="ortho") if self.adjoint else torch.fft.fft2(x, norm="ortho") * self.mask,)
-
-    @property
-    def H(self) -> MaskedFourier:
-        return MaskedFourier(self.mask, not self.adjoint)
-
-
-def metrics(x: torch.Tensor, truth: torch.Tensor, op: MaskedFourier, y: torch.Tensor) -> dict[str, float]:
+def metrics(x: torch.Tensor, truth: torch.Tensor, op: LinearOperator, y: torch.Tensor, mask: torch.Tensor) -> dict[str, float]:
     reference, magnitude = truth.abs(), x.abs()
     return {
         "magnitude_psnr": float(10 * torch.log10(reference.max().square() / (magnitude - reference).square().mean().clamp_min(1e-20))),
@@ -39,14 +28,14 @@ def metrics(x: torch.Tensor, truth: torch.Tensor, op: MaskedFourier, y: torch.Te
             ssim(magnitude.flatten(0, 2).unsqueeze(1), reference.flatten(0, 2).unsqueeze(1), data_range=float(reference.max()))
         ),
         "complex_nmse": float((x - truth).abs().square().sum() / truth.abs().square().sum()),
-        "observed_residual_rms": float(((op(x)[0] - y).abs().square().sum() / op.mask.count_nonzero()).sqrt()),
+        "observed_residual_rms": float(((op(x)[0] - y).abs().square().sum() / mask.count_nonzero()).sqrt()),
     }
 
 
 def main() -> None:
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--cases", type=Path, required=True)
+    parser.add_argument("--cases", type=Path, required=True, help="NPZ with centered images, masks and k-space measurements")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--case-index", type=int, required=True)
     parser.add_argument("--kind", type=str, required=True)
@@ -55,11 +44,16 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--seed", type=int, default=20261020)
     parser.add_argument("--steps", type=int, default=None)
-    parser.add_argument("--tau", type=float, default=0.01)
+    parser.add_argument("--noise-std", type=float, default=0.01)
     parser.add_argument("--dps-guidance", choices=["covariance", "dps"], default="covariance")
     parser.add_argument("--guidance-scale", type=float, default=0.3)
     parser.add_argument("--prior-sigma", type=float, default=None, help="Prior smoothing for full-score DAPS only")
-    parser.add_argument("--langevin-step", type=float, default=None, help="Physical step for DAPS; dimensionless for full-score DAPS")
+    parser.add_argument(
+        "--langevin-step",
+        type=float,
+        default=None,
+        help="Step in squared normalized diffusion units for DAPS; dimensionless for full-score DAPS",
+    )
     parser.add_argument("--langevin-steps", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
@@ -78,15 +72,15 @@ def main() -> None:
     truth = torch.from_numpy(arrays["truth"][args.case_index : args.case_index + 1]).to(args.device)
     measurement = torch.from_numpy(arrays["measurement"][args.case_index : args.case_index + 1]).to(args.device)
     mask = torch.from_numpy(arrays["mask"]).to(args.device)
-    op = MaskedFourier(mask)
+    op = mask * FastFourierOp(dim=(-2, -1)).to(args.device)
     model = DiffusionModel.from_checkpoint(args.checkpoint, map_location="cpu", compile_model=False, weights="ema").to(args.device)
     cfg: DPSConfig | DAPSConfig | FullScoreDAPSConfig
     if args.sampler == "dps":
-        cfg = DPSConfig(tau=args.tau, guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
+        cfg = DPSConfig(guidance=args.dps_guidance, guidance_scale=args.guidance_scale)
     elif args.sampler == "daps":
-        cfg = DAPSConfig(tau=args.tau)
+        cfg = DAPSConfig()
     else:
-        cfg = FullScoreDAPSConfig(tau=args.tau, prior_sigma=args.prior_sigma)
+        cfg = FullScoreDAPSConfig(prior_sigma=args.prior_sigma)
     if args.steps is not None:
         cfg = replace(cfg, num_steps=args.steps)
     if isinstance(cfg, (DAPSConfig, FullScoreDAPSConfig)):
@@ -112,16 +106,23 @@ def main() -> None:
         "case_file_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
         "source_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(source.glob("*.py"))},
         "randomness": "independent pseudorandom draws within each batch; batch seed=seed+batch index; changing batch size changes draws",
-        "zero_filled": metrics(op.H(measurement)[0], truth, op, measurement),
+        "zero_filled": metrics(op.H(measurement)[0], truth, op, measurement, mask),
         "batches": [],
     }
     np.savez_compressed(args.output / "case.npz", truth=truth.cpu().numpy(), measurement=measurement.cpu().numpy(), mask=mask.cpu().numpy())
+    kind = DatasetKind[args.kind]
     for batch_index, first in enumerate(range(0, args.draws, args.batch_size)):
         count = min(args.batch_size, args.draws - first)
         y = measurement.expand(count, *measurement.shape[1:])
+        template = op.H(y)[0]
+        if not kind.is_complex:
+            template = template.real
         start = time.perf_counter()
-        draw = sampler.sample(
-            op, y, DatasetKind[args.kind], generator=torch.Generator(device=args.device).manual_seed(args.seed + batch_index)
+        (draw,) = sampler.sample(
+            MRIProblem(op, y, noise_std=args.noise_std),
+            template=template,
+            kind=kind,
+            generator=torch.Generator(device=args.device).manual_seed(args.seed + batch_index),
         )
         if args.device.startswith("cuda"):
             torch.cuda.synchronize()
@@ -130,7 +131,7 @@ def main() -> None:
         for j in range(count):
             sample = draw[j : j + 1]
             np.savez_compressed(args.output / f"draw-{first + j:03d}.npz", sample=sample.cpu().numpy())
-            values.append(metrics(sample, truth, op, measurement))
+            values.append(metrics(sample, truth, op, measurement, mask))
         batch_report = {"first_draw": first, "count": count, "seed": args.seed + batch_index, "seconds": seconds, "metrics": values}
         report["batches"].append(batch_report)
         (args.output / "report.json").write_text(json.dumps(report, indent=2, default=str))

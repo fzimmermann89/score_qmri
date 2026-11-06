@@ -1,0 +1,417 @@
+"""Joint T1/complex-M0 saturation recovery with separate learned priors.
+
+Input NPZ: t1 (H,W), m0 (H,W), times (T,), binary centered mask
+(T,H,W), RSS-normalized csm (C,H,W). All images and k-space use centered
+MR2 coordinates. T1 and times are in seconds. Measurements are simulated
+with Gaussian noise of noise_std per real coordinate.
+M0 is used as a reference, never as a known reconstruction parameter.
+
+Examples:
+    python examples/qmri_joint.py sample model.ckpt case.npz results 0.2383 --method dps
+    python examples/qmri_joint.py sample model.ckpt case.npz results 0.2383 --method daps
+    python examples/qmri_joint.py plot results overview --t1_colors lipari.txt
+
+The M0 scale is case-specific and must match training normalization.
+Both methods are approximate; sample spread is not calibrated.
+"""
+
+import json
+from dataclasses import asdict
+from math import isfinite
+from pathlib import Path
+from typing import Literal, cast
+
+import matplotlib
+import numpy as np
+import torch
+from jsonargparse import CLI
+from matplotlib.colors import ListedColormap, Normalize
+from mr2.operators import FastFourierOp, LinearOperator, RearrangeOp, SensitivityOp, models
+from scipy.ndimage import gaussian_filter
+from torch import Tensor
+
+from score_qmri.datasets.kind import DatasetKind
+from score_qmri.models.diffusion import DiffusionModel
+from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, MRIProblem
+from score_qmri.sampling._utils import conjugate_gradient, normal_like
+from score_qmri.sampling.edm_sampler import karras_sigmas
+from score_qmri.sampling.problem import SamplingProblem
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+
+class JointPrior:
+    """Separate T1 and complex-M0 priors in diffusion coordinates."""
+
+    def __init__(self, model: DiffusionModel, m0_prior_scale: float) -> None:
+        if not isfinite(m0_prior_scale) or m0_prior_scale <= 0:
+            raise ValueError("m0_prior_scale must be finite and positive")
+        self.model, self.scale = model, m0_prior_scale
+        self.t1_scale = model.normalize(
+            torch.ones(1, 1, 1, device=model.device), torch.tensor([DatasetKind.T1MAP], device=model.device)
+        ).item()
+        self.sigma_min = max(model.sigma_min, model.sigma_min / self.scale)
+        self.sigma_max = min(model.sigma_max, model.sigma_max / self.scale)
+        self.sigma_data = model.sigma_data
+
+    def denoise(self, x: Tensor, sigma: Tensor, kind: Tensor) -> Tensor:
+        batch = len(x)
+        kinds = torch.tensor([DatasetKind.T1MAP, DatasetKind.M0_COMPLEX], device=x.device).repeat_interleave(batch)
+        inputs = torch.cat([x[:, :2], self.scale * x[:, 2:]])
+        levels = torch.cat([sigma, self.scale * sigma])
+        result = self.model.denoise(inputs, levels, kinds)
+        return torch.cat([result[:batch], result[batch:] / self.scale], dim=1)
+
+
+class JointProblem:
+    """Joint likelihood adapter for the existing DPS and DAPS step routines."""
+
+    linear = False
+
+    def __init__(self, problem: MRIProblem, batch: int, t1_scale: float) -> None:
+        self.problem = problem
+        self.t1_scale = t1_scale
+        self.measurement = problem.measurement.moveaxis(problem.measurement_batch_dim, 0)
+        self.noise_std = problem.noise_std
+        self.shape = (batch, 4, *self.measurement.shape[-2:])
+        self.kind = torch.zeros(batch, dtype=torch.long, device=self.measurement.device)
+
+    def noise(self, generator: torch.Generator) -> Tensor:
+        noise = torch.randn(self.shape, device=self.measurement.device, generator=generator)
+        noise[:, 1] = 0
+        return noise
+
+    def decode(self, x: Tensor) -> tuple[Tensor, Tensor]:
+        return x[:, 0] / self.t1_scale, torch.complex(x[:, 2], x[:, 3])
+
+    def residual(self, x: Tensor) -> Tensor:
+        t1, m0 = self.decode(x)
+        # Extend the forward model below 50 ms; sampler outputs are not clipped.
+        return self.problem.residual(m0, t1.clamp_min(0.05)).moveaxis(1, 0)
+
+    def gradient(self, x: Tensor) -> Tensor:
+        t1, m0 = self.decode(x)
+        m0_gradient, t1_gradient = self.problem.gradient(m0, t1.clamp_min(0.05))
+        t1_gradient = t1_gradient * (t1 > 0.05) / self.t1_scale
+        return torch.stack([t1_gradient, torch.zeros_like(t1_gradient), m0_gradient.real, m0_gradient.imag], dim=1)
+
+
+@torch.no_grad()
+def cg_fit(operator: LinearOperator, measurement: Tensor, times: Tensor, regularization: float) -> tuple[Tensor, Tensor]:
+    """Tikhonov SENSE followed by grid T1 fitting with profiled complex M0."""
+    rhs = operator.H(measurement.to(torch.complex128))[0]
+    images = conjugate_gradient(lambda x: operator.H(operator(x)[0])[0] + regularization * x, rhs, 1000, 1e-6)
+    grid = torch.linspace(0.05, 5.5, 2181, dtype=images.real.dtype, device=images.device)
+    basis = models.SaturationRecovery(times)(torch.ones_like(grid), grid)[0]
+    norm = basis.square().sum(0)
+    t1 = torch.empty(images.shape[-2:], device=images.device)
+    m0 = torch.empty_like(t1, dtype=torch.complex64)
+    for start in range(0, t1.numel(), 2048):
+        chunk = images[:, 0].flatten(1)[:, start : start + 2048]
+        cross = basis.to(chunk).T @ chunk
+        index = (cross.abs().square() / norm[:, None]).argmax(0)
+        columns = torch.arange(len(index), device=index.device)
+        t1.flatten()[start : start + len(index)] = grid[index].float()
+        m0.flatten()[start : start + len(index)] = (cross[index, columns] / norm[index]).to(m0.dtype)
+    return t1, m0
+
+
+def sample(
+    checkpoint: Path,
+    case: Path,
+    output: Path,
+    m0_prior_scale: float,
+    method: Literal["dps", "daps"] = "dps",
+    draws: int = 30,
+    batch_size: int = 5,
+    noise_std: float = 0.01,
+    steps: int | None = None,
+    guidance_scale: float = 1.2,
+    langevin_steps: int = 600,
+    langevin_step: float = 3e-6,
+    sigma_min: float = 0.02,
+    regularization: float = 0.01,
+    seed: int = 42,
+    device: str = "cuda",
+) -> None:
+    """Save draws and a CG+fit baseline; scales must match checkpoint training.
+
+    m0_prior_scale maps physical M0 to its training coordinates, including
+    dataset scaling. It multiplies both denoiser input and noise level, with
+    inverse output scaling. It does not rescale measurements or their noise.
+    The reference maps define the simulation and evaluation only. Use the same
+    input, seed, noise_std and output folder for both methods.
+    """
+    if draws < 1 or batch_size < 1:
+        raise ValueError("draws and batch_size must be positive")
+    output.mkdir(parents=True, exist_ok=True)
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    with np.load(case) as arrays:
+        t1 = torch.as_tensor(arrays["t1"], dtype=torch.float32, device=device)
+        m0 = torch.as_tensor(arrays["m0"], dtype=torch.complex64, device=device)
+        times = torch.as_tensor(arrays["times"], dtype=torch.float32, device=device)
+        mask = torch.as_tensor(arrays["mask"], dtype=torch.float32, device=device)
+        csm = torch.as_tensor(arrays["csm"], dtype=torch.complex64, device=device)
+        encoding = (
+            mask[:, None, None, None]
+            * FastFourierOp(dim=(-2, -1))
+            @ SensitivityOp(csm[None, None, :, None])
+            @ RearrangeOp("... y x -> ... 1 1 y x")
+        ).to(device)
+        signal_model = models.SaturationRecovery(times).to(device)
+        signal = signal_model(m0[None], t1.clamp_min(0.05)[None])[0]
+        clean = encoding(signal)[0]
+        generator = torch.Generator(device=device).manual_seed(seed)
+        measurement = clean + noise_std * normal_like(clean, generator) * mask[:, None, None, None]
+        physical_problem = MRIProblem(encoding, measurement, noise_std, signal_model=signal_model, measurement_batch_dim=1)
+    fit_t1, fit_m0 = cg_fit(encoding, measurement, times, regularization)
+    shared: dict = {
+        "case.npz": {
+            "checkpoint": np.asarray(str(checkpoint.resolve())),
+            "m0_prior_scale": np.asarray(m0_prior_scale),
+            "t1": t1.cpu().numpy(),
+            "m0": m0.cpu().numpy(),
+            "times": times.cpu().numpy(),
+            "mask": mask.cpu().numpy(),
+            "csm": csm.cpu().numpy(),
+            "measurement": measurement.cpu().numpy(),
+        },
+        "cg-fit.npz": {"t1": fit_t1.cpu().numpy(), "m0": fit_m0.cpu().numpy()},
+    }
+    for name, values in shared.items():
+        path = output / name
+        if path.exists():
+            with np.load(path) as saved:
+                if any(not np.array_equal(saved[key], value) for key, value in values.items()):
+                    raise ValueError(f"{path} differs from this run; use a new output directory")
+    model = DiffusionModel.from_checkpoint(checkpoint, compile_model=False, weights="ema").to(device).eval().requires_grad_(False)
+    prior = JointPrior(model, m0_prior_scale)
+    cfg = (
+        DPSConfig(num_steps=1000 if steps is None else steps, guidance="dps", guidance_scale=guidance_scale)
+        if method == "dps"
+        else DAPSConfig(
+            num_steps=200 if steps is None else steps,
+            sigma_min=sigma_min,
+            reverse_sigma_min=prior.sigma_min,
+            reverse_steps=10,
+            langevin_steps=langevin_steps,
+            langevin_step=langevin_step,
+            langevin_step_min_ratio=1.0,
+        )
+    )
+    if method == "daps" and not prior.sigma_min < sigma_min < prior.sigma_max:
+        raise ValueError("Require prior noise floor < sigma_min < prior noise maximum")
+    for name, values in shared.items():
+        if not (output / name).exists():
+            np.savez_compressed(output / name, **values)
+    # The public API describes one map kind. These local adapters use the same
+    # step routines for a product prior without extending that library API.
+    sampler = DPSSampler(cast(DiffusionModel, prior), cfg) if isinstance(cfg, DPSConfig) else DAPSSampler(cast(DiffusionModel, prior), cfg)
+    samples_t1, samples_m0 = [], []
+    for batch in range(0, draws, batch_size):
+        problem = JointProblem(physical_problem, min(batch_size, draws - batch), prior.t1_scale)
+        generator = torch.Generator(device=device).manual_seed(seed + 1 + batch)
+        x = prior.sigma_max * problem.noise(generator)
+        grid = karras_sigmas(
+            cfg.num_steps,
+            sigma_min=prior.sigma_min if method == "dps" else sigma_min,
+            sigma_max=prior.sigma_max,
+            rho=cfg.rho,
+            device=torch.device(device),
+        )
+        if isinstance(sampler, DPSSampler):
+            grid = torch.cat([grid, grid.new_zeros(1)])
+            for current, following in zip(grid[:-1], grid[1:], strict=True):
+                x = sampler._step(x, cast(SamplingProblem, problem), float(current), float(following), problem.noise(generator))
+        else:
+            for i, sigma in enumerate(grid):
+                result = sampler._conditional(x, cast(SamplingProblem, problem), float(sigma), generator, ratio=i / cfg.num_steps)
+                x = result if i == len(grid) - 1 else result + float(grid[i + 1]) * problem.noise(generator)
+        t, m = problem.decode(x.detach())
+        samples_t1.append(t.cpu().numpy())
+        samples_m0.append(m.cpu().numpy())
+        print(f"{method.upper()}: {batch + len(t)}/{draws} draws", flush=True)
+    np.savez_compressed(output / f"{method}.npz", t1=np.concatenate(samples_t1), m0=np.concatenate(samples_m0))
+    (output / f"{method}.json").write_text(
+        json.dumps(
+            {
+                "checkpoint": str(checkpoint.resolve()),
+                "case": str(case.resolve()),
+                "signal_model": "mr2.operators.models.SaturationRecovery",
+                "m0_prior_scale": m0_prior_scale,
+                "noise_std": noise_std,
+                "seed": seed,
+                "draws": draws,
+                "batch_size": batch_size,
+                "config": asdict(cfg),
+                "scope": "Exploratory approximate sampling; not calibrated posterior uncertainty.",
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def scores(image: np.ndarray, reference: np.ndarray, mask: np.ndarray) -> dict[str, float]:
+    """Masked errors and local Gaussian SSIM, averaged at valid mask centers.
+
+    SSIM uses an 11-pixel window, sigma 1.5, population covariance and the
+    full reference range. Inputs are not zeroed outside the evaluation mask.
+    """
+    x, y = image.astype(float), reference.astype(float)
+    ux, uy = gaussian_filter(x, 1.5, truncate=3.5), gaussian_filter(y, 1.5, truncate=3.5)
+    vx = gaussian_filter(x * x, 1.5, truncate=3.5) - ux * ux
+    vy = gaussian_filter(y * y, 1.5, truncate=3.5) - uy * uy
+    covariance = gaussian_filter(x * y, 1.5, truncate=3.5) - ux * uy
+    c1, c2 = (0.01 * np.ptp(y)) ** 2, (0.03 * np.ptp(y)) ** 2
+    local = ((2 * ux * uy + c1) * (2 * covariance + c2)) / ((ux * ux + uy * uy + c1) * (vx + vy + c2))
+    valid = mask.copy()
+    valid[:5] = valid[-5:] = False
+    valid[:, :5] = valid[:, -5:] = False
+    error = x[mask] - y[mask]
+    return {"mae": float(np.abs(error).mean()), "rmse": float(np.sqrt(np.mean(error**2))), "ssim": float(local[valid].mean())}
+
+
+def plot(results: Path, output: Path, t1_colors: Path | None = None, mask_threshold: float = 0.2) -> None:
+    """Plot saved ensembles as PNG/PDF, with unclipped metrics in JSON.
+
+    M0 summaries use magnitudes. SD is sample SD, not the standard error
+    of the mean. Coverage is descriptive for the reference-selected mask.
+    t1_colors accepts a Lipari RGB table; otherwise use Matplotlib's magma.
+    """
+    with np.load(results / "case.npz") as case, np.load(results / "cg-fit.npz") as fit:
+        truth = {"t1": case["t1"].copy(), "m0": np.abs(case["m0"])}
+        baseline = {"t1": fit["t1"].copy(), "m0": np.abs(fit["m0"])}
+    data = {}
+    for method in ("dps", "daps"):
+        with np.load(results / f"{method}.npz") as samples:
+            if len(samples["t1"]) < 2:
+                raise ValueError("At least two draws per method are required for SD and coverage plots")
+            data[method] = {"t1": samples["t1"].astype(float), "m0": np.abs(samples["m0"]).astype(float)}
+    mask = truth["m0"] > mask_threshold
+    coords = np.argwhere(mask)
+    low, high = np.maximum(coords.min(0) - 4, 0), np.minimum(coords.max(0) + 5, mask.shape)
+    crop = np.s_[low[0] : high[0], low[1] : high[1]]
+    t1_cmap = ListedColormap(np.loadtxt(t1_colors)) if t1_colors else plt.get_cmap("magma")
+    error_cmap = plt.get_cmap("magma").with_extremes(bad="white")
+    metrics: dict = {"mask": f"reference |M0| > {mask_threshold}", "mask_pixels": int(mask.sum())}
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with plt.rc_context(
+        {
+            "font.family": "DejaVu Sans",
+            "font.size": 8,
+            "xtick.labelsize": 7,
+            "ytick.labelsize": 7,
+            "pdf.fonttype": 42,
+            "axes.linewidth": 0.6,
+        }
+    ):
+        fig = plt.figure(figsize=(10.2, 10.6))
+        grid = fig.add_gridspec(
+            7,
+            5,
+            height_ratios=[1, 1, 1, 0.16, 1, 1, 1],
+            width_ratios=[1, 1, 1, 1, 1.06],
+            left=0.035,
+            right=0.98,
+            top=0.975,
+            bottom=0.035,
+            hspace=0.31,
+            wspace=0.055,
+        )
+        for start, parameter, label, cmap, maximum, error_max, factor in [
+            (0, "t1", r"$T_1$", t1_cmap, 2.5, 300, 1000),
+            (4, "m0", r"$|M_0|$", plt.get_cmap("viridis"), 2, 0.15, 1),
+        ]:
+            cmap = cmap.with_extremes(bad="white")
+            reference = truth[parameter]
+            for column, limit, palette, units in [
+                (2, maximum, cmap, label + (" (s)" if parameter == "t1" else " (a.u.)")),
+                (3, error_max, error_cmap, "SD / error" + (" (ms)" if parameter == "t1" else " (a.u.)")),
+            ]:
+                host = fig.add_subplot(grid[start, column])
+                host.set_axis_off()
+                bar = fig.colorbar(
+                    plt.cm.ScalarMappable(norm=Normalize(0, limit), cmap=palette),
+                    cax=host.inset_axes((0.08, 0.47, 0.84, 0.065)),
+                    orientation="horizontal",
+                    extend="max",
+                )
+                bar.set_ticks([0, limit / 2, limit])
+                bar.set_label(units)
+            coverage_ax = fig.add_subplot(grid[start + 1 : start + 3, 4])
+            coverage_ax.plot([0, 1], [0, 1], "--", color="0.5", lw=0.8)
+            rows = [(start, "cg_fit", [reference, baseline[parameter]])]
+            for index, (method, color, style) in enumerate([("dps", "#0072B2", "-"), ("daps", "#D55E00", "--")]):
+                draws = data[method][parameter]
+                mean, sd = draws.mean(0), draws.std(0, ddof=1)
+                rows.append((start + index + 1, method, [draws[0], mean, factor * sd, factor * np.abs(mean - reference)]))
+                ordered = np.sort(draws[:, mask], axis=0)
+                count = len(draws)
+                trim = np.arange((count - 2) // 2, -1, -1)
+                expected = np.r_[(count - 1 - 2 * trim) / (count + 1), 1.0]
+                observed = np.r_[((ordered[trim] <= reference[mask]) & (reference[mask] <= ordered[count - 1 - trim])).mean(1), 1.0]
+                coverage_ax.plot(expected, observed, color=color, linestyle=style, lw=1, label=method.upper())
+                metrics[f"{parameter}_{method}"] = {
+                    "draws": count,
+                    "expected_coverage": expected.tolist(),
+                    "observed_coverage": observed.tolist(),
+                }
+            for row, method, fields in rows:
+                for column, field in enumerate(fields):
+                    ax = fig.add_subplot(grid[row, column])
+                    ax.imshow(
+                        np.where(mask, field, np.nan)[crop],
+                        vmin=0,
+                        vmax=error_max if column >= 2 else maximum,
+                        cmap=error_cmap if column >= 2 else cmap,
+                        interpolation="nearest",
+                    )
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    for spine in ax.spines.values():
+                        spine.set_visible(False)
+                    if row == start:
+                        ax.set_title(("Reference " if column == 0 else "CG+fit ") + label, pad=2)
+                    elif method == "dps":
+                        ax.set_title(["Sample", f"Mean (n={len(data[method][parameter])})", "SD", "|Mean − ref|"][column], pad=2)
+                    if row != start and column == 0:
+                        ax.set_ylabel(method.upper(), labelpad=7)
+                    if column == 1 or (row != start and column == 0):
+                        values = scores(field, reference, mask)
+                        mae = f"{factor * values['mae']:.0f} ms" if parameter == "t1" else f"{values['mae']:.3f}"
+                        ax.set_xlabel(f"MAE {mae}   SSIM {values['ssim']:.3f}", labelpad=2)
+                        if row == start:
+                            metrics[f"{parameter}_cg_fit"] = values
+                        else:
+                            metrics[f"{parameter}_{method}"]["sample" if column == 0 else "mean"] = values
+            coverage_ax.set(
+                xlim=(0, 1),
+                ylim=(0, 1),
+                aspect="equal",
+                xticks=[0, 0.5, 1],
+                yticks=[0, 0.5, 1],
+                ylabel="Observed",
+                title=label + " interval coverage",
+            )
+            if start == 0:
+                coverage_ax.legend(frameon=False, fontsize=7, loc="lower right")
+            else:
+                coverage_ax.set_xlabel("Expected")
+        for extension in ("png", "pdf"):
+            fig.savefig(output.with_suffix("." + extension), dpi=600)
+        plt.close(fig)
+    output.with_suffix(".json").write_text(json.dumps(metrics, indent=2) + "\n")
+    output.with_suffix(".txt").write_text(
+        "Reference |M0| defines the display and evaluation mask. First saved draw, ensemble mean, sample SD (ddof=1), "
+        "and absolute mean error. Color limits affect display only; metrics use unclipped values. "
+        "Central order-statistic intervals have nominal coverage (N-1-2k)/(N+1) under exchangeability. "
+        "The endpoint (1,1) represents the unbounded interval; connecting lines are visual guides. "
+        "Single-case coverage with a reference-derived mask does not establish population calibration.\n"
+    )
+
+
+if __name__ == "__main__":
+    CLI({"sample": sample, "plot": plot})

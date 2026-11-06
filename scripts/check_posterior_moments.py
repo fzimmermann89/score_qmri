@@ -9,10 +9,11 @@ from typing import cast
 
 import torch
 from jsonargparse import ArgumentParser
+from mr2.operators import IdentityOp
 
 from score_qmri.datasets.kind import DatasetKind
 from score_qmri.models.diffusion import DiffusionModel
-from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler
+from score_qmri.sampling import DAPSConfig, DAPSSampler, DPSConfig, DPSSampler, FullScoreDAPSConfig, FullScoreDAPSSampler, MRIProblem
 
 
 class GaussianOracle:
@@ -23,23 +24,15 @@ class GaussianOracle:
     sigma_max = 20.0
     sigma_data = 0.2
 
+    def normalize(self, x: torch.Tensor, kind: torch.Tensor) -> torch.Tensor:
+        return x
+
     def denoise(self, x: torch.Tensor, sigma: torch.Tensor, kind: torch.Tensor) -> torch.Tensor:
         sigma = sigma.expand(len(x))
         return x * 0.04 / (0.04 + sigma[:, None, None, None].square())
 
     def score(self, x: torch.Tensor, sigma: torch.Tensor, kind: torch.Tensor) -> torch.Tensor:
         return -x / (0.04 + sigma[:, None, None, None].square())
-
-
-class Mask:
-    """Observe one complex coordinate; leave the second in the null space."""
-
-    def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor]:
-        return (x * x.real.new_tensor([1.0, 0.0]),)
-
-    @property
-    def H(self) -> Mask:
-        return self
 
 
 def main() -> None:
@@ -58,19 +51,22 @@ def main() -> None:
     cfg: DPSConfig | DAPSConfig | FullScoreDAPSConfig
     sampler: DPSSampler | DAPSSampler | FullScoreDAPSSampler
     if args.sampler == "dps":
-        cfg = DPSConfig(tau=0.01)
+        cfg = DPSConfig()
         sampler = DPSSampler(model, cfg)
     elif args.sampler == "daps":
-        cfg = DAPSConfig(tau=0.01)
+        cfg = DAPSConfig()
         sampler = DAPSSampler(model, cfg)
     else:
-        cfg = FullScoreDAPSConfig(tau=0.01)
+        cfg = FullScoreDAPSConfig()
         sampler = FullScoreDAPSSampler(model, cfg)
     y = torch.zeros(args.draws, 1, 1, 1, 2, dtype=torch.complex128)
     y[..., 0] = y.new_tensor(0.15 + 0.05j)
-    sample = sampler.sample(Mask(), y, DatasetKind.COMPLEX_T1W_COIL_COMBINED, generator=torch.Generator().manual_seed(args.seed))[
-        :, 0, 0, 0
-    ]
+    sample = sampler.sample(
+        MRIProblem(y.real.new_tensor([1.0, 0.0]) * IdentityOp(), y, noise_std=0.01),
+        template=y,
+        kind=DatasetKind.COMPLEX_T1W_COIL_COMBINED,
+        generator=torch.Generator().manual_seed(args.seed),
+    )[0][:, 0, 0, 0]
     prior_variance = 0.04
     if isinstance(sampler, FullScoreDAPSSampler):
         prior_variance += sampler.prior_sigma**2
